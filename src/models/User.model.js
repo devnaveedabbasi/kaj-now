@@ -21,6 +21,13 @@ const userSchema = new mongoose.Schema({
   emailOTP: { type: String },
   otpExpiry: { type: Date },
   otpAttempts: { type: Number, default: 0 },
+
+  resetOTP: String,          // forgot password
+  resetOtpExpiry: Date,
+  resetOtpAttempts: { type: Number, default: 0 },
+  resetPasswordVerified: { type: Boolean, default: false },
+
+  
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
   fcmToken: {

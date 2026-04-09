@@ -1,24 +1,33 @@
 ﻿import bcrypt from 'bcryptjs';
-import mongoose from 'mongoose';
 import User from '../../models/User.model.js';
-import { Provider } from '../../models/Provider.model.js';
-import { ServiceCategory } from '../../models/ServiceCategory.model.js';
-import { ServiceSubcategory } from '../../models/ServiceSubcategory.model.js';
+import Provider  from '../../models/provider/Provider.model.js';
 import { sendOtpEmail } from '../../utils/emailService.js';
 import { signToken } from '../../utils/jwt.js';
 import { generateNumericOtp } from '../../utils/otp.js';
-import { absoluteUrlForWebPath, webPathFromMulterFile } from '../../utils/publicFileUrl.js';
-
+import Category from '../../models/admin/category.model.js';
+import SubCategory from '../../models/admin/subCategory.model.js';
+import path from 'path';
+import fs from 'fs';
 const SALT_ROUNDS = 10;
 const OTP_TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const phoneRegex = /^(\+92|0)?3[0-9]{9}$|^(\+880|0)?1[3-9][0-9]{8}$/;
 
 function badRequest(res, message) {
   return res.status(400).json({ success: false, message });
 }
+const deleteFile = (filePath) => {
+  try {
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (error) {
+    console.error('Error deleting file:', error);
+  }
+};
 
 function publicUserDoc(user) {
   const u = user.toObject ? user.toObject() : { ...user };
@@ -35,102 +44,27 @@ async function setEmailOtp(user, otpPlain) {
   await user.save();
 }
 
-function geoPointFromLatLng(lat, lng) {
-  const la = Number(lat);
-  const ln = Number(lng);
-  if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
-  if (la < -90 || la > 90 || ln < -180 || ln > 180) return null;
-  return {
-    type: 'Point',
-    coordinates: [ln, la],
-  };
-}
-
-function isNonEmptyString(v) {
-  return typeof v === 'string' && v.trim().length > 0;
-}
-
-function documentsPresent(p) {
-  return (
-    isNonEmptyString(p.facePhoto) &&
-    isNonEmptyString(p.idCardFront) &&
-    isNonEmptyString(p.idCardBack) &&
-    Array.isArray(p.certificates) &&
-    p.certificates.length > 0
-  );
-}
-
-/** Apply multipart files from multer (field names: facePhoto, idCardFront, idCardBack, certificates). */
-function applyProviderUploadedFiles(req, provider) {
-  const files = req.files;
-  if (!files) return;
-  if (files.facePhoto?.[0]) {
-    provider.facePhoto = absoluteUrlForWebPath(req, webPathFromMulterFile(files.facePhoto[0]));
-  }
-  if (files.idCardFront?.[0]) {
-    provider.idCardFront = absoluteUrlForWebPath(req, webPathFromMulterFile(files.idCardFront[0]));
-  }
-  if (files.idCardBack?.[0]) {
-    provider.idCardBack = absoluteUrlForWebPath(req, webPathFromMulterFile(files.idCardBack[0]));
-  }
-  if (files.certificates?.length) {
-    const urls = files.certificates.map((f) => absoluteUrlForWebPath(req, webPathFromMulterFile(f)));
-    provider.certificates = [...new Set([...provider.certificates.map(String), ...urls])].filter(Boolean);
-  }
-}
-
-function profileCompleteFields(p) {
-  const locOk = p.location?.coordinates?.length === 2;
-  const genderOk = p.gender && p.gender !== '';
-  const dobOk = p.dob instanceof Date && !Number.isNaN(p.dob.getTime());
-  // const catOk = !!p.serviceCategory;
-  // const subsOk = Array.isArray(p.serviceSubcategories) && p.serviceSubcategories.length > 0;
-  return (
-    isNonEmptyString(p.fullName) &&
-    isNonEmptyString(p.permanentAddress) &&
-    isNonEmptyString(p.city) &&
-    isNonEmptyString(p.state) &&
-    isNonEmptyString(p.country) &&
-    locOk &&
-    genderOk &&
-    dobOk 
-    // catOk &&
-    // subsOk
-  );
-}
-
-async function assertSubcategoriesBelongToCategory(categoryId, subIds) {
-  if (!subIds?.length) {
-    return 'At least one service subcategory is required when updating categories.';
-  }
-  const unique = [...new Set(subIds.map((id) => String(id)))];
-  const oids = unique.map((id) => new mongoose.Types.ObjectId(id));
-  const found = await ServiceSubcategory.find({
-    _id: { $in: oids },
-    serviceCategory: categoryId,
-    isActive: true,
-  }).select('_id');
-  if (found.length !== unique.length) {
-    return 'One or more subcategories are invalid, inactive, or do not belong to the selected category.';
-  }
-  return null;
-}
-
 export async function register(req, res) {
   try {
     const name = String(req.body.name || '').trim();
     const email = String(req.body.email || '').trim().toLowerCase();
     const phone = String(req.body.phone || '').trim();
     const password = String(req.body.password || '');
+    const permanentAddress = String(req.body.permanentAddress || '').trim();
 
     if (!name || !email || !phone || !password) {
       return badRequest(res, 'Name, email, phone, and password are required.');
     }
+
     if (!emailRegex.test(email)) {
       return badRequest(res, 'Invalid email address.');
     }
     if (password.length < 8) {
       return badRequest(res, 'Password must be at least 8 characters.');
+    }
+
+    if (!phoneRegex.test(phone)) {
+      return badRequest(res, 'Only Pakistan and Bangladesh phone numbers are allowed.');
     }
 
     const existing = await User.findOne({
@@ -176,6 +110,8 @@ export async function register(req, res) {
     });
 
     await Provider.create({ userId: user._id });
+    await Provider.updateOne({ userId: user._id }, { permanentAddress });
+
     await sendOtpEmail(email, otp);
 
     return res.status(201).json({
@@ -237,18 +173,12 @@ export async function verifyEmail(req, res) {
     user.emailOTP = undefined;
     user.otpExpiry = undefined;
     user.otpAttempts = 0;
-    // user.status = 'approved';
+    user.status = 'approved';
     await user.save();
 
     const token = signToken(user._id, user.role);
-    const fresh = await User.findById(user._id).populate({
-      path: 'providerProfile',
-      populate: [
-        { path: 'serviceCategory', select: 'name slug icon isActive' },
-        { path: 'serviceSubcategories', select: 'name icon isActive serviceCategory' },
-      ],
-    });
 
+    const fresh = await User.findById(user._id);
     return res.json({
       success: true,
       message: 'Email verified successfully.',
@@ -258,7 +188,7 @@ export async function verifyEmail(req, res) {
       },
     });
   } catch (err) {
-    console.error('provider verify email:', err);
+    console.error('verify email:', err);
     return res.status(500).json({ success: false, message: err.message || 'Verification failed.' });
   }
 }
@@ -300,7 +230,7 @@ export async function resendOtp(req, res) {
       data: { expiresInMinutes: OTP_TTL_MS / 60000 },
     });
   } catch (err) {
-    console.error('provider resend otp:', err);
+    console.error('resend otp:', err);
     return res.status(500).json({ success: false, message: err.message || 'Could not resend OTP.' });
   }
 }
@@ -314,13 +244,7 @@ export async function login(req, res) {
       return badRequest(res, 'Email and password are required.');
     }
 
-    const user = await User.findOne({ email, role: 'provider' }).select('+password').populate({
-      path: 'providerProfile',
-      populate: [
-        { path: 'serviceCategory', select: 'name slug icon isActive' },
-        { path: 'serviceSubcategories', select: 'name icon isActive serviceCategory' },
-      ],
-    });
+    const user = await User.findOne({ email, role: 'provider' }).select('+password');
 
     if (!user) {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
@@ -334,8 +258,12 @@ export async function login(req, res) {
       });
     }
 
-    if (['blocked', 'suspended'].includes(user.status)) {
-      return res.status(403).json({ success: false, message: 'Account is not active.' });
+    const allowedStatuses = ['approved'];
+    if (!allowedStatuses.includes(user.status)) {
+      return res.status(403).json({
+        success: false,
+        message: `Account not authorized. Current status: ${user.status}`
+      });
     }
 
     const match = await bcrypt.compare(password, user.password);
@@ -351,7 +279,13 @@ export async function login(req, res) {
       message: 'Login successful.',
       data: {
         token,
-        user: publicUserDoc(user),
+        user: {
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          phone: user.phone,
+          status: user.status
+        },
       },
     });
   } catch (err) {
@@ -360,180 +294,433 @@ export async function login(req, res) {
   }
 }
 
-export async function me(req, res) {
+
+
+export async function forgotPassword(req, res) {
   try {
-    const user = await User.findById(req.user._id).populate({
-      path: 'providerProfile',
-      populate: [
-        { path: 'serviceCategory', select: 'name slug icon isActive' },
-        { path: 'serviceSubcategories', select: 'name icon isActive serviceCategory' },
-      ],
-    });
+    const email = String(req.body.email || '').trim().toLowerCase();
+
+    if (!email) return badRequest(res, 'Email is required.');
+
+    const user = await User.findOne({ email });
+
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
-    return res.json({ success: true, data: { user: publicUserDoc(user) } });
+
+    const otp = generateNumericOtp(4);
+
+    user.resetOTP = otp;
+    user.resetOtpExpiry = new Date(Date.now() + OTP_TTL_MS);
+    user.resetOtpAttempts = 0;
+    user.lastOTPSent = new Date();
+
+    await user.save();
+    await sendOtpEmail(email, otp);
+
+    return res.json({
+      success: true,
+      message: 'Reset OTP sent to email.',
+    });
   } catch (err) {
-    console.error('provider me:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Request failed.' });
+    console.error('forgot password:', err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 }
 
-/**
- * Update provider profile (auth). Optional: name (User).
- * Body: fullName, permanentAddress, city, state, country, lat, lng, gender, dob,
- *       serviceCategory, serviceSubcategories (each sub must belong to the selected category),
- *       isDocumentCompleted,
- *       facePhoto, idCardFront, idCardBack, certificates (array of URLs), and/or the same names as multipart files (saved on server under /uploads/providers/<userId>/).
- */
-export async function updateProfile(req, res) {
+export async function verifyResetOtp(req, res) {
   try {
-    const provider = await Provider.findOne({ userId: req.user._id });
-    if (!provider) {
-      return res.status(404).json({ success: false, message: 'Provider profile not found.' });
-    }
-    console.log(provider,req.user._id)
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const otp = String(req.body.otp || '').trim();
 
+    if (!email || !otp) {
+      return badRequest(res, 'Email and OTP are required.');
+    }
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    if (user.resetOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      return res.status(429).json({
+        success: false,
+        message: 'Too many attempts. Request new OTP.',
+      });
+    }
+
+    if (!user.resetOTP || !user.resetOtpExpiry || user.resetOtpExpiry < new Date()) {
+      user.resetOtpAttempts += 1;
+      await user.save();
+      return badRequest(res, 'OTP expired or invalid.');
+    }
+
+    if (user.resetOTP !== otp) {
+      user.resetOtpAttempts += 1;
+      await user.save();
+      return badRequest(res, 'Invalid OTP.');
+    }
+
+    //  OTP verified
+    user.resetOTP = undefined;
+    user.resetOtpExpiry = undefined;
+    user.resetOtpAttempts = 0;
+
+    // temp flag
+    user.resetPasswordVerified = true;
+
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: 'OTP verified successfully.',
+    });
+  } catch (err) {
+    console.error('verify reset otp:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+
+
+export async function setNewPassword(req, res) {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const newPassword = String(req.body.newPassword || '');
+
+    if (!email || !newPassword) {
+      return badRequest(res, 'Email and new password are required.');
+    }
+
+    if (newPassword.length < 8) {
+      return badRequest(res, 'Password must be at least 8 characters.');
+    }
+
+    const user = await User.findOne({ email }).select('+password');
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    if (!user.resetPasswordVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'OTP verification required.',
+      });
+    }
+
+    // Check if new password is same as current password
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password cannot be the same as your current password.'
+      });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+    user.password = hashed;
+    user.resetPasswordVerified = false;
+
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: 'Password reset successfully.',
+    });
+  } catch (err) {
+    console.error('set new password:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+export async function changePassword(req, res) {
+  try {
+    const userId = req.user._id;
+
+    const currentPassword = String(req.body.currentPassword || '');
+    const newPassword = String(req.body.newPassword || '');
+
+    if (!currentPassword || !newPassword) {
+      return badRequest(res, 'Current and new password are required.');
+    }
+
+    if (newPassword.length < 8) {
+      return badRequest(res, 'New password must be at least 8 characters.');
+    }
+
+    const user = await User.findById(userId).select('+password');
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    // Verify current password
+    const match = await bcrypt.compare(currentPassword, user.password);
+    if (!match) {
+      return res.status(400).json({ success: false, message: 'Current password is incorrect.' });
+    }
+
+    // Check if new password is same as current password
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password cannot be the same as your current password.'
+      });
+    }
+
+    const hashed = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+    user.password = hashed;
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: 'Password changed successfully.',
+    });
+  } catch (err) {
+    console.error('change password:', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+
+export const completeProfile = async (req, res) => {
+  try {
+    const userId = req.user.id||req.user._id;
+    console.log('Complete profile request body:', req.body);
+    const { 
+      gender, 
+      dob, 
+      serviceCategoryId, 
+      serviceSubcategoryId,
+      latitude,
+      longitude,
+      locationName, 
+    } = req.body;
+
+    // Find existing provider
+    let provider = await Provider.findOne({ userId });
+    
+    if (!provider) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Provider not found. Please complete registration first.' 
+      });
+    }
+
+    
+   // Update location (coordinates and name)
+    if (latitude && longitude) {
+      provider.location = {
+        type: 'Point',
+        coordinates: [parseFloat(longitude), parseFloat(latitude)],
+        locationName: locationName || ''  // Fix: Save locationName inside location object
+      };
+    } else if (locationName && provider.location) {
+      // If only locationName is provided but coordinates exist
+      provider.location.locationName = locationName;
+    }
+
+    // Update gender
+    if (gender && ['male', 'female', 'other', 'prefer_not_say'].includes(gender)) {
+      provider.gender = gender;
+    }
+
+    // Update date of birth
+    if (dob) {
+      provider.dob = new Date(dob);
+    }
+
+    if (serviceCategoryId) {
+      const category = await Category.findById(serviceCategoryId);
+      if (!category) {
+        // Delete uploaded files if category not found
+        if (req.files) {
+          const allFiles = [
+            ...(req.files.facePhoto || []),
+            ...(req.files.idCardFront || []),
+            ...(req.files.idCardBack || []),
+            ...(req.files.certificates || [])
+          ];
+          allFiles.forEach(file => {
+            if (file && file.path) deleteFile(file.path);
+          });
+        }
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Service category not found' 
+        });
+      }
+      provider.serviceCategory = serviceCategoryId;
+    }
+
+    // Update service subcategories
+    if (serviceSubcategoryId) {
+      let subCategoryIds = [];
+      
+      // Handle both single ID and array of IDs
+      if (Array.isArray(serviceSubcategoryId)) {
+        subCategoryIds = serviceSubcategoryId;
+      } else if (typeof serviceSubcategoryId === 'string') {
+        subCategoryIds = [serviceSubcategoryId];
+      }
+
+      if (subCategoryIds.length > 0 && provider.serviceCategory) {
+        // Verify subcategories belong to the selected category
+        const subcategories = await SubCategory.find({
+          _id: { $in: subCategoryIds },
+          categoryId: provider.serviceCategory
+        });
+        
+        if (subcategories.length !== subCategoryIds.length) {
+          // Delete uploaded files if validation fails
+          if (req.files) {
+            const allFiles = [
+              ...(req.files.facePhoto || []),
+              ...(req.files.idCardFront || []),
+              ...(req.files.idCardBack || []),
+              ...(req.files.certificates || [])
+            ];
+            allFiles.forEach(file => {
+              if (file && file.path) deleteFile(file.path);
+            });
+          }
+          return res.status(400).json({ 
+            success: false, 
+            message: 'Some subcategories do not belong to the selected category' 
+          });
+        }
+        provider.serviceSubcategories = subCategoryIds;
+      }
+    }
+
+    // Handle file uploads
+    const files = req.files || {};
+    
+    // Upload face photo
+    if (files.facePhoto && files.facePhoto[0]) {
+      // Delete old file if exists
+      if (provider.facePhoto) {
+        const oldPath = path.join('public', provider.facePhoto);
+        deleteFile(oldPath);
+      }
+      provider.facePhoto = `/uploads/provider/${files.facePhoto[0].filename}`;
+    }
+    
+    // Upload ID card front
+    if (files.idCardFront && files.idCardFront[0]) {
+      if (provider.idCardFront) {
+        const oldPath = path.join('public', provider.idCardFront);
+        deleteFile(oldPath);
+      }
+      provider.idCardFront = `/uploads/provider/${files.idCardFront[0].filename}`;
+    }
+    
+    // Upload ID card back
+    if (files.idCardBack && files.idCardBack[0]) {
+      if (provider.idCardBack) {
+        const oldPath = path.join('public', provider.idCardBack);
+        deleteFile(oldPath);
+      }
+      provider.idCardBack = `/uploads/provider/${files.idCardBack[0].filename}`;
+    }
+    
+    // Upload certificates (multiple files)
+    if (files.certificates && files.certificates.length > 0) {
+      // Delete old certificates if they exist
+      if (provider.certificates && provider.certificates.length > 0) {
+        provider.certificates.forEach(cert => {
+          const oldPath = path.join('public', cert);
+          deleteFile(oldPath);
+        });
+      }
+      provider.certificates = files.certificates.map(f => `/uploads/provider/${f.filename}`);
+    }
+
+    // Save all changes
+    await provider.save();
+
+    // Get updated provider with populated data
+    const updatedProvider = await Provider.findOne({ userId })
+      .populate('Category', 'name icon')
+      .populate('SubCategory', 'name icon');
+
+    // Get user info
+    const user = await User.findById(userId).select('name email phone');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile completed successfully',
+      data: {
+        user: {
+          name: user.name,
+          email: user.email,
+          phone: user.phone
+        },
+        location: updatedProvider.location,
+        gender: updatedProvider.gender,
+        dateOfBirth: updatedProvider.dob,
+        serviceCategory: updatedProvider.serviceCategory,
+        serviceSubcategories: updatedProvider.serviceSubcategories,
+        documents: {
+          facePhoto: updatedProvider.facePhoto ? `${updatedProvider.facePhoto}` : null,
+          idCardFront: updatedProvider.idCardFront ? `${updatedProvider.idCardFront}` : null,
+          idCardBack: updatedProvider.idCardBack ? `${updatedProvider.idCardBack}` : null,
+          certificates: updatedProvider.certificates?.map(c => `${c}`) || []
+        },
+        kycStatus: updatedProvider.kycStatus,
+        isKycCompleted: updatedProvider.isKycStatus
+      }
+    });
+  } catch (error) {
+    if (req.files) {
+      const allFiles = [
+        ...(req.files.facePhoto || []),
+        ...(req.files.idCardFront || []),
+        ...(req.files.idCardBack || []),
+        ...(req.files.certificates || [])
+      ];
+      allFiles.forEach(file => {
+        if (file && file.path) deleteFile(file.path);
+      });
+    }
+    console.error('Complete profile error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: error.message 
+    });
+  }
+};
+
+
+
+
+
+export async function me(req, res) {
+  try {
     const user = await User.findById(req.user._id);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
 
-    if (req.body.name != null) {
-      const n = String(req.body.name).trim();
-      if (n) user.name = n;
-    }
-
-    if (req.body.fullName != null) provider.fullName = String(req.body.fullName).trim();
-    if (req.body.permanentAddress != null) {
-      provider.permanentAddress = String(req.body.permanentAddress).trim();
-    }
-    if (req.body.city != null) provider.city = String(req.body.city).trim();
-    if (req.body.state != null) provider.state = String(req.body.state).trim();
-    if (req.body.country != null) provider.country = String(req.body.country).trim();
-
-    if (req.body.lat !== undefined || req.body.lng !== undefined) {
-      const pt = geoPointFromLatLng(req.body.lat, req.body.lng);
-      if (!pt) {
-        return badRequest(res, 'Valid lat and lng are required for location (lat: -90..90, lng: -180..180).');
-      }
-      provider.location = pt;
-    }
-
-    if (req.body.gender !== undefined) {
-      const g = String(req.body.gender).trim();
-      const allowed = ['male', 'female', 'other', 'prefer_not_say'];
-      if (g && !allowed.includes(g)) {
-        return badRequest(res, `gender must be one of: ${allowed.join(', ')}`);
-      }
-      provider.gender = g || '';
-    }
-
-    if (req.body.dob !== undefined) {
-      const d = new Date(req.body.dob);
-      if (Number.isNaN(d.getTime())) {
-        return badRequest(res, 'Invalid dob.');
-      }
-      provider.dob = d;
-    }
-
-    if (req.body.facePhoto !== undefined) {
-      provider.facePhoto = String(req.body.facePhoto || '').trim();
-    }
-    if (req.body.idCardFront !== undefined) {
-      provider.idCardFront = String(req.body.idCardFront || '').trim();
-    }
-    if (req.body.idCardBack !== undefined) {
-      provider.idCardBack = String(req.body.idCardBack || '').trim();
-    }
-    if (req.body.certificates !== undefined) {
-      const raw = Array.isArray(req.body.certificates) ? req.body.certificates : [];
-      provider.certificates = raw.map((x) => String(x || '').trim()).filter(Boolean);
-    }
-
-    applyProviderUploadedFiles(req, provider);
-
-    const f = req.files;
-    const docTouched =
-      req.body.facePhoto !== undefined ||
-      req.body.idCardFront !== undefined ||
-      req.body.idCardBack !== undefined ||
-      req.body.certificates !== undefined ||
-      Boolean(f?.facePhoto?.length) ||
-      Boolean(f?.idCardFront?.length) ||
-      Boolean(f?.idCardBack?.length) ||
-      Boolean(f?.certificates?.length);
-
-    if (req.body.isDocumentCompleted !== undefined) {
-      if (req.body.isDocumentCompleted === true && !documentsPresent(provider)) {
-        return badRequest(
-          res,
-          'Provide facePhoto, idCardFront, idCardBack, and at least one certificate (URL or uploaded file) before marking documents complete.',
-        );
-      }
-      provider.isDocumentCompleted = Boolean(req.body.isDocumentCompleted);
-    } else if (documentsPresent(provider)) {
-      provider.isDocumentCompleted = true;
-    } else if (docTouched) {
-      provider.isDocumentCompleted = false;
-    }
-
-    const catInput =
-      req.body.serviceCategory ?? req.body.serviceCategoryId ?? req.body.categoryId;
-    const subsInput =
-      req.body.serviceSubcategories ?? req.body.serviceSubcategoryIds ?? req.body.subcategoryIds;
-
-    if (catInput !== undefined || subsInput !== undefined) {
-      let categoryId = provider.serviceCategory ? String(provider.serviceCategory) : null;
-
-      if (catInput !== undefined) {
-        categoryId = String(catInput);
-        if (!mongoose.Types.ObjectId.isValid(categoryId)) {
-          return badRequest(res, 'Invalid serviceCategory id.');
-        }
-        const cat = await ServiceCategory.findOne({ _id: categoryId, isActive: true });
-        if (!cat) {
-          return badRequest(res, 'Service category not found or inactive.');
-        }
-        provider.serviceCategory = categoryId;
-        if (subsInput === undefined) {
-          provider.serviceSubcategories = [];
-        }
-      }
-
-      if (subsInput !== undefined) {
-        if (!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) {
-          return badRequest(res, 'Set serviceCategory before serviceSubcategories.');
-        }
-        const subIds = Array.isArray(subsInput) ? subsInput : [];
-        const errSub = await assertSubcategoriesBelongToCategory(categoryId, subIds);
-        if (errSub) return badRequest(res, errSub);
-        provider.serviceSubcategories = subIds.map((id) => new mongoose.Types.ObjectId(String(id)));
-      }
-    }
-
-    user.profileLastUpdated = new Date();
-    provider.isProfileComplete = profileCompleteFields(provider);
-
-    await user.save();
-    await provider.save();
-
-    const populatedUser = await User.findById(req.user._id).populate({
-      path: 'providerProfile',
-      populate: [
-        { path: 'serviceCategory', select: 'name slug icon isActive' },
-        { path: 'serviceSubcategories', select: 'name icon isActive serviceCategory' },
-      ],
-    });
 
     return res.json({
-      success: true,
-      message: 'Profile updated.',
-      data: { user: publicUserDoc(populatedUser) },
+      success: true, data: {
+        user: {
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          phone: user.phone,
+          status: user.status
+        }
+      }
     });
   } catch (err) {
-    console.error('provider updateProfile:', err);
-    return res.status(500).json({ success: false, message: err.message || 'Update failed.' });
+    console.error('provider me:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Request failed.' });
   }
 }
-
