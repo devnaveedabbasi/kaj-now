@@ -123,7 +123,7 @@ export async function verifyEmail(req, res) {
   if (!user.emailOTP || !user.otpExpiry || user.otpExpiry < new Date()) {
     user.otpAttempts += 1;
     await user.save();
-    throw new ApiError(400, 'OTP expired or invalid. Request a new OTP.');
+    throw new ApiError(410, 'OTP expired or invalid. Request a new OTP.');
   }
 
   if (user.emailOTP !== otp) {
@@ -292,7 +292,7 @@ export async function verifyResetOtp(req, res) {
   if (!user.resetOTP || !user.resetOtpExpiry || user.resetOtpExpiry < new Date()) {
     user.resetOtpAttempts += 1;
     await user.save();
-    throw new ApiError(400, 'OTP expired or invalid.');
+    throw new ApiError(410, 'OTP expired or invalid.');
   }
 
   if (user.resetOTP !== otp) {

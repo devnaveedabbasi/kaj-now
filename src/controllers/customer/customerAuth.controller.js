@@ -63,9 +63,9 @@ export async function register(req, res) {
           'This email is already registered but not verified. Use resend OTP or verify your email.'
         );
       }
-      throw new ApiError(409, 'Email already registered.');
+      throw new ApiError(408, 'Email already registered.');
     }
-    throw new ApiError(409, 'Phone number already registered.');
+    throw new ApiError(408, 'Phone number already registered.');
   }
 
   const hashed = await bcrypt.hash(password, SALT_ROUNDS);
