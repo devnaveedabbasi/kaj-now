@@ -11,7 +11,7 @@ class ApiError extends Error {
     stack = ""
   ) {
     super(message);
-    this.statusCode = statusCode;
+    this.statusCode = statusCode; // internal use ke liye
     this.data = null;
     this.message = message;
     this.errors = Array.isArray(errors) ? errors : [errors];
@@ -27,7 +27,7 @@ class ApiError extends Error {
 
   toJSON() {
     return {
-      statusCode: this.statusCode,
+      code: this.statusCode, // ✅ code naam se jayega
       message: this.message,
       success: this.success,
       data: this.data,
@@ -37,4 +37,4 @@ class ApiError extends Error {
   }
 }
 
-export  { ApiError };
+export  {ApiError};

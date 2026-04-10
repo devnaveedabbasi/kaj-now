@@ -61,16 +61,15 @@ app.use((err, req, res, next) => {
   }
 
   // Log error for debugging (but don't expose in production)
-  const errorResponse = {
-    statusCode: error.statusCode,
+const errorResponse = {
+    code: error.statusCode, // ✅ statusCode ki jagah code
     message: error.message,
     success: error.success,
-    ...(process.env.NODE_ENV === 'development' && { 
-      stack: error.stack,
-      errors: error.errors 
+    ...(process.env.NODE_ENV === 'development' && {
+        stack: error.stack,
+        errors: error.errors
     }),
-  };
-
+};
   if (process.env.NODE_ENV !== 'production') {
     console.error('Error:', {
       statusCode: error.statusCode,

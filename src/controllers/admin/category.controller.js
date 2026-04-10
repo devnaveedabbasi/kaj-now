@@ -7,191 +7,337 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 
 // Helper function to delete old image
 const deleteOldImage = (imagePath) => {
-  try {
-    if (imagePath && fs.existsSync(imagePath)) {
-      fs.unlinkSync(imagePath);
+    try {
+        if (imagePath && fs.existsSync(imagePath)) {
+            fs.unlinkSync(imagePath);
+        }
+    } catch (error) {
+        console.error('Error deleting old image:', error);
     }
-  } catch (error) {
-    console.error('Error deleting old image:', error);
-  }
 };
+
 
 // Create Category
 export const createCategory = async (req, res) => {
-  const { name } = req.body;
-  const userId = req.user._id;
+    const { name } = req.body;
+    const userId = req.user._id;
 
-  if (!name) {
-    if (req.file) {
-      fs.unlinkSync(req.file.path);
+    if (!name) {
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
+        throw new ApiError(400, 'Category name is required');
     }
-    throw new ApiError(400, 'Category name is required');
-  }
 
-  // Check if category already exists for this user
-  const existingCategory = await Category.findOne({
-    userId,
-    name: { $regex: new RegExp(`^${name}$`, 'i') },
-  });
-  if (existingCategory) {
-    // Delete uploaded image if category exists
-    if (req.file) {
-      fs.unlinkSync(req.file.path);
-    }
-    throw new ApiError(409, 'Category already exists');
-  }
-
-  const categoryData = {
-    userId,
-    name,
-    icon: req.file ? `/uploads/categories/${req.file.filename}` : null,
-  };
-
-  const category = await Category.create(categoryData);
-
-  res.status(201).json(
-    new ApiResponse(201, category, 'Category created successfully')
-  );
-};
-
-// Get All Categories (with optional subcategories count)
-export const getAllCategories = async (req, res) => {
-  const userId = req.user._id;
-
-  const categories = await Category.find({ userId }).sort({ createdAt: -1 });
-
-  // Get subcategory count for each category
-  const categoriesWithCount = await Promise.all(
-    categories.map(async (category) => {
-      const subCategoryCount = await SubCategory.countDocuments({
+    const existingCategory = await Category.findOne({
         userId,
-        categoryId: category._id,
-      });
-      return {
-        ...category.toObject(),
-        subCategoryCount,
-      };
-    })
-  );
+        name: { $regex: new RegExp(`^${name}$`, 'i') }
+    });
+    
+    if (existingCategory) {
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
+        throw new ApiError(409, 'Category already exists');
+    }
 
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      categoriesWithCount,
-      'Categories retrieved successfully'
-    )
-  );
+    const categoryData = {
+        userId,
+        name,
+        icon: req.file ? `/uploads/categories/${req.file.filename}` : null,
+    };
+
+    const category = await Category.create(categoryData);
+
+    res.status(201).json(
+        new ApiResponse(201, category, 'Category created successfully')
+    );
 };
 
-// Get Single Category
+// Get All Categories  with Pagination, Search, Filters
+export const getAllCategories = async (req, res) => {
+    const userId = req.user._id;
+    
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    
+    const search = req.query.search || '';
+    
+    const { isActive, isDeleted } = req.query;
+    
+    // Build query
+    let query = { userId };
+    
+    // Add search condition
+    if (search) {
+        query.name = { $regex: search, $options: 'i' };
+    }
+    
+    // Add filters
+    if (isActive !== undefined && isActive !== '') {
+        query.isActive = isActive === 'true';
+    }
+    
+    if (isDeleted !== undefined && isDeleted !== '') {
+        query.isDeleted = isDeleted === 'true';
+    }
+    
+    // Sorting
+    const sortField = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    const sort = { [sortField]: sortOrder };
+    
+    // Execute queries
+    const [categories, totalCount] = await Promise.all([
+        Category.find(query)
+            .sort(sort)
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+        Category.countDocuments(query)
+    ]);
+    
+    // Get subcategory count for each category
+    const categoriesWithCount = await Promise.all(
+        categories.map(async (category) => {
+            const subCategoryCount = await SubCategory.countDocuments({
+                userId,
+                categoryId: category._id
+            });
+            
+            const activeSubCategoryCount = await SubCategory.countDocuments({
+                userId,
+                categoryId: category._id,
+                isActive: true,
+                isDeleted: false
+            });
+            
+            return {
+                ...category,
+                subCategoryCount,
+                activeSubCategoryCount
+            };
+        })
+    );
+    
+    // Pagination metadata
+    const totalPages = Math.ceil(totalCount / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+    
+    res.status(200).json(
+        new ApiResponse(200, {
+            categories: categoriesWithCount,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalItems: totalCount,
+                itemsPerPage: limit,
+                hasNextPage,
+                hasPrevPage
+            },
+            filters: {
+                search: search || null,
+                isActive: isActive || null,
+                isDeleted: isDeleted || null,
+                sortBy: sortField,
+                sortOrder: req.query.sortOrder || 'desc'
+            }
+        }, 'Categories retrieved successfully')
+    );
+};
+
 export const getCategoryById = async (req, res) => {
-  const { id } = req.params;
-  const userId = req.user._id;
+    const { id } = req.params;
+    const userId = req.user._id;
 
-  const category = await Category.findOne({ _id: id, userId });
+    const category = await Category.findOne({ _id: id, userId });
 
-  if (!category) {
-    throw new ApiError(404, 'Category not found');
-  }
+    if (!category) {
+        throw new ApiError(404, 'Category not found');
+    }
 
-  // Get subcategories for this category
-  const subCategories = await SubCategory.find({ userId, categoryId: id });
+    // Get all subcategories for this category (including deleted/inactive)
+    const subCategories = await SubCategory.find({ 
+        userId, 
+        categoryId: category._id 
+    }).sort({ createdAt: -1 });
 
-  res.status(200).json(
-    new ApiResponse(
-      200,
-      {
-        category,
-        subCategories,
-      },
-      'Category retrieved successfully'
-    )
-  );
+    const subCategoriesStats = {
+        total: subCategories.length,
+        active: subCategories.filter(sc => sc.isActive && !sc.isDeleted).length,
+        inactive: subCategories.filter(sc => !sc.isActive && !sc.isDeleted).length,
+        deleted: subCategories.filter(sc => sc.isDeleted).length
+    };
+
+    res.status(200).json(
+        new ApiResponse(200, {
+            category,
+            subCategories,
+            subCategoriesStats
+        }, 'Category retrieved successfully')
+    );
 };
 
 // Update Category
 export const updateCategory = async (req, res) => {
-  const { id } = req.params;
-  const { name } = req.body;
-  const userId = req.user._id;
+    const { id } = req.params;
+    const { name } = req.body;
+    const userId = req.user._id;
 
-  const category = await Category.findOne({ _id: id, userId });
+    const category = await Category.findOne({ _id: id, userId });
 
-  if (!category) {
-    // Delete uploaded image if category not found
+    if (!category) {
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
+        throw new ApiError(404, 'Category not found');
+    }
+
+    // Check if new name conflicts
+    if (name && name !== category.name) {
+        const existingCategory = await Category.findOne({
+            userId,
+            name: { $regex: new RegExp(`^${name}$`, 'i') },
+            _id: { $ne: id }
+        });
+        if (existingCategory) {
+            if (req.file) {
+                fs.unlinkSync(req.file.path);
+            }
+            throw new ApiError(409, 'Category name already exists');
+        }
+        category.name = name;
+    }
+
+    // Update image if new file uploaded
     if (req.file) {
-      fs.unlinkSync(req.file.path);
+        if (category.icon) {
+            const oldImagePath = path.join('public', category.icon);
+            deleteOldImage(oldImagePath);
+        }
+        category.icon = `/uploads/categories/${req.file.filename}`;
     }
-    throw new ApiError(404, 'Category not found');
-  }
 
-  // Check if new name conflicts with existing category
-  if (name && name !== category.name) {
-    const existingCategory = await Category.findOne({
-      userId,
-      name: { $regex: new RegExp(`^${name}$`, 'i') },
-      _id: { $ne: id },
-    });
-    if (existingCategory) {
-      if (req.file) {
-        fs.unlinkSync(req.file.path);
-      }
-      throw new ApiError(409, 'Category name already exists');
-    }
-  }
+    await category.save();
 
-  // Update fields
-  if (name) category.name = name;
-
-  // Update image if new file uploaded
-  if (req.file) {
-    // Delete old image if exists
-    if (category.icon) {
-      const oldImagePath = path.join('public', category.icon);
-      deleteOldImage(oldImagePath);
-    }
-    category.icon = `/uploads/categories/${req.file.filename}`;
-  }
-
-  await category.save();
-
-  res.status(200).json(
-    new ApiResponse(200, category, 'Category updated successfully')
-  );
+    res.status(200).json(
+        new ApiResponse(200, category, 'Category updated successfully')
+    );
 };
 
-// Delete Category
-export const deleteCategory = async (req, res) => {
-  const { id } = req.params;
-  const userId = req.user._id;
+// Toggle Category Active Status
+export const toggleCategoryActive = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user._id;
 
-  const category = await Category.findOne({ _id: id, userId });
+    const category = await Category.findOne({ _id: id, userId });
 
-  if (!category) {
-    throw new ApiError(404, 'Category not found');
-  }
+    if (!category) {
+        throw new ApiError(404, 'Category not found');
+    }
 
-  // Check if category has subcategories
-  const subCategoriesCount = await SubCategory.countDocuments({
-    userId,
-    categoryId: id,
-  });
-  if (subCategoriesCount > 0) {
-    throw new ApiError(
-      400,
-      `Cannot delete category. It has ${subCategoriesCount} subcategory(s). Delete subcategories first.`
+    category.isActive = !category.isActive;
+    await category.save();
+
+    res.status(200).json(
+        new ApiResponse(200, { 
+            _id: category._id, 
+            isActive: category.isActive 
+        }, `Category ${category.isActive ? 'activated' : 'deactivated'} successfully`)
     );
-  }
+};
 
-  // Delete category image
-  if (category.icon) {
-    const imagePath = path.join('public', category.icon);
-    deleteOldImage(imagePath);
-  }
+// Soft Delete Category
+export const softDeleteCategory = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user._id;
 
-  await Category.deleteOne({ _id: id });
+    const category = await Category.findOne({ _id: id, userId });
 
-  res.status(200).json(
-    new ApiResponse(200, {}, 'Category deleted successfully')
-  );
+    if (!category) {
+        throw new ApiError(404, 'Category not found');
+    }
+
+    if (category.isDeleted) {
+        throw new ApiError(400, 'Category is already deleted');
+    }
+
+    // Soft delete the category
+    category.isDeleted = true;
+    category.isActive = false;
+    await category.save();
+
+    // Also soft delete all subcategories under this category
+    await SubCategory.updateMany(
+        { userId, categoryId: category._id },
+        { isDeleted: true, isActive: false }
+    );
+
+    res.status(200).json(
+        new ApiResponse(200, {}, 'Category deleted successfully')
+    );
+};
+
+// Restore Category (from soft delete)
+export const restoreCategory = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const category = await Category.findOne({ _id: id, userId, isDeleted: true });
+
+    if (!category) {
+        throw new ApiError(404, 'Deleted category not found');
+    }
+
+    category.isDeleted = false;
+    category.isActive = true;
+    await category.save();
+
+    // Restore all subcategories under this category
+    await SubCategory.updateMany(
+        { userId, categoryId: category._id, isDeleted: true },
+        { isDeleted: false, isActive: true }
+    );
+
+    res.status(200).json(
+        new ApiResponse(200, category, 'Category restored successfully')
+    );
+};
+
+// Permanently Delete Category (Hard Delete)
+export const hardDeleteCategory = async (req, res) => {
+    const { id } = req.params;
+    const userId = req.user._id;
+
+    const category = await Category.findOne({ _id: id, userId });
+
+    if (!category) {
+        throw new ApiError(404, 'Category not found');
+    }
+
+    // Delete category image
+    if (category.icon) {
+        const imagePath = path.join('public', category.icon);
+        deleteOldImage(imagePath);
+    }
+
+    // Hard delete all subcategories under this category
+    const subCategories = await SubCategory.find({ userId, categoryId: category._id });
+    for (const subCategory of subCategories) {
+        if (subCategory.icon) {
+            const imagePath = path.join('public', subCategory.icon);
+            deleteOldImage(imagePath);
+        }
+    }
+    await SubCategory.deleteMany({ userId, categoryId: category._id });
+
+    // Hard delete category
+    await Category.deleteOne({ _id: category._id });
+
+    res.status(200).json(
+        new ApiResponse(200, {}, 'Category permanently deleted successfully')
+    );
 };

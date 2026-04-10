@@ -4,7 +4,9 @@ import {
   getAllSubCategories, 
   getSubCategoryById, 
   updateSubCategory, 
-  deleteSubCategory,
+  toggleSubCategoryActive,
+  softDeleteSubCategory,
+  hardDeleteSubCategory,
   getSubCategoriesByCategory
 } from '../../controllers/admin/subCategory.controller.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
@@ -17,6 +19,10 @@ router.get('/', asyncHandler(getAllSubCategories));
 router.get('/by-category/:categoryId', asyncHandler(getSubCategoriesByCategory));
 router.get('/:id', asyncHandler(getSubCategoryById));
 router.put('/:id', uploadSubCategoryImage.single('icon'), asyncHandler(updateSubCategory));
-router.delete('/:id', asyncHandler(deleteSubCategory));
+
+// New routes for toggle and delete
+router.patch('/:id/toggle', asyncHandler(toggleSubCategoryActive));
+router.delete('/:id/soft', asyncHandler(softDeleteSubCategory));
+router.delete('/:id/hard', asyncHandler(hardDeleteSubCategory));
 
 export default router;

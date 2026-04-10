@@ -7,8 +7,9 @@ const categorySchema = new mongoose.Schema({
         type: String,
         required: true,
     },
-
+    isActive: { type: Boolean, default: true },
+    isDeleted: { type: Boolean, default: false },
 }, { timestamps: true });
 
 const Category = mongoose.model('Category', categorySchema);
-export default Category;
+export default Category
