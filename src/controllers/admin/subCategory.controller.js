@@ -68,35 +68,27 @@ export const createSubCategory = async (req, res) => {
     );
 };
 
-// Get All SubCategories (Admin) - with Pagination, Search, Filters
 export const getAllSubCategories = async (req, res) => {
     const userId = req.user._id;
     
-    // Pagination parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
     
-    // Search parameter
     const search = req.query.search || '';
     
-    // Filter parameters
     const { categoryId, isActive, isDeleted } = req.query;
     
-    // Build query
     let query = { userId };
     
-    // Add category filter
     if (categoryId) {
         query.categoryId = categoryId;
     }
     
-    // Add search condition
     if (search) {
         query.name = { $regex: search, $options: 'i' };
     }
     
-    // Add filters
     if (isActive !== undefined && isActive !== '') {
         query.isActive = isActive === 'true';
     }
@@ -149,7 +141,6 @@ export const getAllSubCategories = async (req, res) => {
     );
 };
 
-// Get Single SubCategory (Admin)
 export const getSubCategoryById = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id;
@@ -166,7 +157,6 @@ export const getSubCategoryById = async (req, res) => {
     );
 };
 
-// Update SubCategory
 export const updateSubCategory = async (req, res) => {
     const { id } = req.params;
     const { name, categoryId } = req.body;
@@ -260,38 +250,16 @@ export const softDeleteSubCategory = async (req, res) => {
         throw new ApiError(404, 'SubCategory not found');
     }
 
-    if (subCategory.isDeleted) {
-        throw new ApiError(400, 'SubCategory is already deleted');
-    }
+       subCategory.isDeleted = !subCategory.isDeleted;
 
-    subCategory.isDeleted = true;
-    subCategory.isActive = false;
+    subCategory.isActive = subCategory.isDeleted ? false : subCategory.isActive; // Deactivate if deleted, keep status if restoring
     await subCategory.save();
 
     res.status(200).json(
-        new ApiResponse(200, {}, 'SubCategory deleted successfully')
+        new ApiResponse(200, {subCategory}, 'SubCategory deleted successfully')
     );
 };
 
-// Restore SubCategory (from soft delete)
-export const restoreSubCategory = async (req, res) => {
-    const { id } = req.params;
-    const userId = req.user._id;
-
-    const subCategory = await SubCategory.findOne({ _id: id, userId, isDeleted: true });
-
-    if (!subCategory) {
-        throw new ApiError(404, 'Deleted subcategory not found');
-    }
-
-    subCategory.isDeleted = false;
-    subCategory.isActive = true;
-    await subCategory.save();
-
-    res.status(200).json(
-        new ApiResponse(200, subCategory, 'SubCategory restored successfully')
-    );
-};
 
 // Permanently Delete SubCategory (Hard Delete)
 export const hardDeleteSubCategory = async (req, res) => {

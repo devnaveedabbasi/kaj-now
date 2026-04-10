@@ -264,13 +264,11 @@ export const softDeleteCategory = async (req, res) => {
     if (category.isDeleted) {
         throw new ApiError(400, 'Category is already deleted');
     }
+ category.isDeleted = !category.isDeleted;
 
-    // Soft delete the category
-    category.isDeleted = true;
-    category.isActive = false;
+    category.isActive = category.isDeleted ? false : category.isActive;
     await category.save();
 
-    // Also soft delete all subcategories under this category
     await SubCategory.updateMany(
         { userId, categoryId: category._id },
         { isDeleted: true, isActive: false }
@@ -281,31 +279,6 @@ export const softDeleteCategory = async (req, res) => {
     );
 };
 
-// Restore Category (from soft delete)
-export const restoreCategory = async (req, res) => {
-    const { id } = req.params;
-    const userId = req.user._id;
-
-    const category = await Category.findOne({ _id: id, userId, isDeleted: true });
-
-    if (!category) {
-        throw new ApiError(404, 'Deleted category not found');
-    }
-
-    category.isDeleted = false;
-    category.isActive = true;
-    await category.save();
-
-    // Restore all subcategories under this category
-    await SubCategory.updateMany(
-        { userId, categoryId: category._id, isDeleted: true },
-        { isDeleted: false, isActive: true }
-    );
-
-    res.status(200).json(
-        new ApiResponse(200, category, 'Category restored successfully')
-    );
-};
 
 // Permanently Delete Category (Hard Delete)
 export const hardDeleteCategory = async (req, res) => {

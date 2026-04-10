@@ -78,9 +78,9 @@ export async function register(req, res) {
           'This email is already registered but not verified. Use resend OTP or verify your email.'
         );
       }
-      throw new ApiError(409, 'Email already registered.');
+      throw new ApiError(408, 'Email already registered.');
     }
-    throw new ApiError(409, 'Phone number already registered.');
+    throw new ApiError(408, 'Phone number already registered.');
   }
 
   const hashed = await bcrypt.hash(password, SALT_ROUNDS);
@@ -237,6 +237,12 @@ export async function login(req, res) {
     throw new ApiError(401, 'Invalid email or password.');
   }
 
+  const provider = await Provider.findOne({ userId: user._id });
+  if (!provider) {
+    throw new ApiError(404, 'Provider profile not found. Please complete registration.');
+  }
+
+
   const token = signToken(user._id, user.role);
 
   res.status(200).json(
@@ -251,6 +257,8 @@ export async function login(req, res) {
           role: user.role,
           phone: user.phone,
           status: user.status,
+          isKycCompleted: provider.isKycCompleted,
+          kycStatus: provider.kycStatus,
         },
       },
       'Login successful.'
@@ -560,7 +568,7 @@ export const completeProfile = async (req, res) => {
     provider.certificates = files.certificates.map(f => `/uploads/provider/${f.filename}`);
   }
 
-  provider.isKycStatus = true;
+  provider.isKycCompleted = true;
   provider.kycStatus = 'pending';
 
   // Save all changes
@@ -595,7 +603,7 @@ export const completeProfile = async (req, res) => {
           certificates: updatedProvider.certificates?.map(c => c) || [],
         },
         kycStatus: updatedProvider.kycStatus,
-        isKycCompleted: updatedProvider.isKycStatus,
+        isKycCompleted: updatedProvider.isKycCompleted,
       },
       'Profile completed successfully'
     )
@@ -607,6 +615,11 @@ export async function me(req, res) {
   if (!user) {
     throw new ApiError(404, 'User not found.');
   }
+  const provider = await Provider.findOne({ userId: user._id });
+  if (!provider) {
+    throw new ApiError(404, 'Provider profile not found.');
+  }
+
 
   res.status(200).json(
     new ApiResponse(
@@ -618,6 +631,8 @@ export async function me(req, res) {
         role: user.role,
         phone: user.phone,
         status: user.status,
+        isKycCompleted: provider.isKycCompleted,
+        kycStatus: provider.kycStatus,
       },
       'User profile retrieved successfully.'
     )

@@ -41,7 +41,7 @@ const providerSchema = new mongoose.Schema(
     certificates: { type: [String], default: [] },
 
    
-    isKycStatus: {
+    isKycCompleted: {
       type: Boolean,
       default: false
     },

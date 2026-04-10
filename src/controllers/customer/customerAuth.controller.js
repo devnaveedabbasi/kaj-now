@@ -116,7 +116,7 @@ export async function verifyEmail(req, res) {
     throw new ApiError(404, 'User not found.');
   }
   if (user.isEmailVerified) {
-    throw new ApiError(400, 'Email is already verified.');
+    throw new ApiError(407, 'Email is already verified.');
   }
 
   if (user.otpAttempts >= MAX_OTP_ATTEMPTS) {
@@ -170,7 +170,7 @@ export async function resendOtp(req, res) {
     throw new ApiError(404, 'User not found.');
   }
   if (user.isEmailVerified) {
-    throw new ApiError(400, 'Email is already verified.');
+    throw new ApiError(407, 'Email is already verified.');
   }
 
   if (user.lastOTPSent && Date.now() - user.lastOTPSent.getTime() < RESEND_COOLDOWN_MS) {
