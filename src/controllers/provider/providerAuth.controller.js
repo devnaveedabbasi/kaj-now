@@ -421,6 +421,7 @@ export async function changePassword(req, res) {
 
 export const completeProfile = async (req, res) => {
   const userId = req.user.id || req.user._id;
+
   const {
     gender,
     dob,
@@ -431,179 +432,116 @@ export const completeProfile = async (req, res) => {
     locationName,
   } = req.body;
 
-  // Find existing provider
-  let provider = await Provider.findOne({ userId });
-
-  if (!provider) {
-    if (req.files) {
-      const allFiles = [
-        ...(req.files.facePhoto || []),
-        ...(req.files.idCardFront || []),
-        ...(req.files.idCardBack || []),
-        ...(req.files.certificates || []),
-      ];
-      allFiles.forEach(file => {
-        if (file && file.path) deleteFile(file.path);
-      });
-    }
-    throw new ApiError(404, 'Provider not found. Please complete registration first.');
-  }
-
-  // Update location (coordinates and name)
-  if (latitude && longitude) {
-    provider.location = {
-      type: 'Point',
-      coordinates: [parseFloat(longitude), parseFloat(latitude)],
-      locationName: locationName || '',
-    };
-  } else if (locationName && provider.location) {
-    provider.location.locationName = locationName;
-  }
-
-  // Update gender
-  if (gender && ['male', 'female', 'other', 'prefer_not_say'].includes(gender)) {
-    provider.gender = gender;
-  }
-
-  // Update date of birth
-  if (dob) {
-    provider.dob = new Date(dob);
-  }
-
-  if (serviceCategoryId) {
-    const category = await Category.findById(serviceCategoryId);
-    if (!category) {
-      if (req.files) {
-        const allFiles = [
-          ...(req.files.facePhoto || []),
-          ...(req.files.idCardFront || []),
-          ...(req.files.idCardBack || []),
-          ...(req.files.certificates || []),
-        ];
-        allFiles.forEach(file => {
-          if (file && file.path) deleteFile(file.path);
-        });
-      }
-      throw new ApiError(404, 'Service category not found');
-    }
-    provider.serviceCategory = serviceCategoryId;
-  }
-
-  // Update service subcategories
-  if (serviceSubcategoryId) {
-    let subCategoryIds = [];
-
-    // Handle both single ID and array of IDs
-    if (Array.isArray(serviceSubcategoryId)) {
-      subCategoryIds = serviceSubcategoryId;
-    } else if (typeof serviceSubcategoryId === 'string') {
-      subCategoryIds = [serviceSubcategoryId];
-    }
-
-    if (subCategoryIds.length > 0 && provider.serviceCategory) {
-      // Verify subcategories belong to the selected category
-      const subcategories = await SubCategory.find({
-        _id: { $in: subCategoryIds },
-        categoryId: provider.serviceCategory,
-      });
-
-      if (subcategories.length !== subCategoryIds.length) {
-        if (req.files) {
-          const allFiles = [
-            ...(req.files.facePhoto || []),
-            ...(req.files.idCardFront || []),
-            ...(req.files.idCardBack || []),
-            ...(req.files.certificates || []),
-          ];
-          allFiles.forEach(file => {
-            if (file && file.path) deleteFile(file.path);
-          });
-        }
-        throw new ApiError(400, 'Some subcategories do not belong to the selected category');
-      }
-      provider.serviceSubcategories = subCategoryIds;
-    }
-  }
-
-  // Handle file uploads
   const files = req.files || {};
 
-  // Upload face photo
-  if (files.facePhoto && files.facePhoto[0]) {
-    // Delete old file if exists
-    if (provider.facePhoto) {
-      const oldPath = path.join('public', provider.facePhoto);
-      deleteFile(oldPath);
-    }
-    provider.facePhoto = `/uploads/provider/${files.facePhoto[0].filename}`;
+  //  REQUIRED VALIDATION
+  if (!gender) throw new ApiError(400, 'Gender is required');
+  if (!dob) throw new ApiError(400, 'Date of birth is required');
+  if (!serviceCategoryId) throw new ApiError(400, 'Service category is required');
+  if (!serviceSubcategoryId) throw new ApiError(400, 'Service subcategory is required');
+  if (!latitude || !longitude) throw new ApiError(400, 'Location coordinates are required');
+
+  //  GENDER VALIDATION
+  const allowedGenders = ['male', 'female', 'other', 'prefer_not_say'];
+  if (!allowedGenders.includes(gender)) {
+    throw new ApiError(400, 'Invalid gender value');
   }
 
-  // Upload ID card front
-  if (files.idCardFront && files.idCardFront[0]) {
-    if (provider.idCardFront) {
-      const oldPath = path.join('public', provider.idCardFront);
-      deleteFile(oldPath);
-    }
-    provider.idCardFront = `/uploads/provider/${files.idCardFront[0].filename}`;
+  //  DATE VALIDATION (18+)
+  const parsedDob = new Date(dob);
+  if (isNaN(parsedDob.getTime())) {
+    throw new ApiError(400, 'Invalid date of birth');
   }
 
-  // Upload ID card back
-  if (files.idCardBack && files.idCardBack[0]) {
-    if (provider.idCardBack) {
-      const oldPath = path.join('public', provider.idCardBack);
-      deleteFile(oldPath);
-    }
-    provider.idCardBack = `/uploads/provider/${files.idCardBack[0].filename}`;
+  const age = new Date().getFullYear() - parsedDob.getFullYear();
+  if (age < 18) {
+    throw new ApiError(400, 'You must be at least 18 years old');
   }
 
-  // Upload certificates (multiple files)
-  if (files.certificates && files.certificates.length > 0) {
-    // Delete old certificates if they exist
-    if (provider.certificates && provider.certificates.length > 0) {
-      provider.certificates.forEach(cert => {
-        const oldPath = path.join('public', cert);
-        deleteFile(oldPath);
-      });
-    }
-    provider.certificates = files.certificates.map(f => `/uploads/provider/${f.filename}`);
+  //  LOCATION VALIDATION
+  const lat = parseFloat(latitude);
+  const lng = parseFloat(longitude);
+
+  if (isNaN(lat) || lat < -90 || lat > 90) {
+    throw new ApiError(400, 'Invalid latitude');
   }
 
+  if (isNaN(lng) || lng < -180 || lng > 180) {
+    throw new ApiError(400, 'Invalid longitude');
+  }
+
+  //  FILE VALIDATION
+  const requiredFiles = ['facePhoto', 'idCardFront', 'idCardBack'];
+
+  for (let field of requiredFiles) {
+    if (!files[field] || !files[field][0]) {
+      throw new ApiError(400, `${field} is required`);
+    }
+  }
+
+  //  FIND PROVIDER
+  const provider = await Provider.findOne({ userId });
+  if (!provider) {
+    throw new ApiError(404, 'Provider not found');
+  }
+
+  //  CATEGORY VALIDATION
+  const category = await Category.findById(serviceCategoryId);
+  if (!category) {
+    throw new ApiError(404, 'Invalid category');
+  }
+
+  //  SUBCATEGORY VALIDATION
+  let subCategoryIds = Array.isArray(serviceSubcategoryId)
+    ? serviceSubcategoryId
+    : [serviceSubcategoryId];
+
+  const subcategories = await SubCategory.find({
+    _id: { $in: subCategoryIds },
+    categoryId: serviceCategoryId,
+  });
+
+  if (subcategories.length !== subCategoryIds.length) {
+    throw new ApiError(400, 'Invalid subcategories for selected category');
+  }
+
+  //  UPDATE DATA
+  provider.gender = gender;
+  provider.dob = parsedDob;
+  provider.serviceCategory = serviceCategoryId;
+  provider.serviceSubcategories = subCategoryIds;
+
+  provider.location = {
+    type: 'Point',
+    coordinates: [lng, lat],
+    locationName: locationName || '',
+  };
+
+  //  FILE HANDLING
+  const uploadPath = '/uploads/provider/';
+
+  provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
+  provider.idCardFront = `${uploadPath}${files.idCardFront[0].filename}`;
+  provider.idCardBack = `${uploadPath}${files.idCardBack[0].filename}`;
+
+  if (files.certificates?.length > 0) {
+    provider.certificates = files.certificates.map(
+      f => `${uploadPath}${f.filename}`
+    );
+  }
+
+  //  KYC STATUS
   provider.isKycCompleted = true;
   provider.kycStatus = 'pending';
 
-  // Save all changes
   await provider.save();
 
-  // Get updated provider with populated data
-  const updatedProvider = await Provider.findOne({ userId })
-    .populate('Category', 'name icon')
-    .populate('SubCategory', 'name icon');
-
-  // Get user info
-  const user = await User.findById(userId).select('name email phone');
-
+  //  RESPONSE
   res.status(200).json(
     new ApiResponse(
       200,
       {
-        user: {
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-        },
-        location: updatedProvider.location,
-        gender: updatedProvider.gender,
-        dateOfBirth: updatedProvider.dob,
-        serviceCategory: updatedProvider.serviceCategory,
-        serviceSubcategories: updatedProvider.serviceSubcategories,
-        documents: {
-          facePhoto: updatedProvider.facePhoto ? updatedProvider.facePhoto : null,
-          idCardFront: updatedProvider.idCardFront ? updatedProvider.idCardFront : null,
-          idCardBack: updatedProvider.idCardBack ? updatedProvider.idCardBack : null,
-          certificates: updatedProvider.certificates?.map(c => c) || [],
-        },
-        kycStatus: updatedProvider.kycStatus,
-        isKycCompleted: updatedProvider.isKycCompleted,
+        provider,
       },
       'Profile completed successfully'
     )

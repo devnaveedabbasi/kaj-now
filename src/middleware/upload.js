@@ -97,5 +97,5 @@ export const uploadProviderDocuments = multer({
   { name: 'facePhoto', maxCount: 1 },
   { name: 'idCardFront', maxCount: 1 },
   { name: 'idCardBack', maxCount: 1 },
-  { name: 'certificates', maxCount: 10 }
+  { name: 'certificates', maxCount: 1 }
 ]);

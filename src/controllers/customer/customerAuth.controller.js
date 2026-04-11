@@ -9,6 +9,8 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 
 const SALT_ROUNDS = 10;
 const OTP_TTL_MS = 10 * 60 * 1000;
+// const OTP_TTL_MS = 1 * 60 * 1000; // 1 minute
+
 const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 
