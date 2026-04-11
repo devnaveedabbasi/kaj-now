@@ -5,7 +5,7 @@ import { sendOtpEmail } from '../../utils/emailService.js';
 import { signToken } from '../../utils/jwt.js';
 import { generateNumericOtp } from '../../utils/otp.js';
 import Category from '../../models/admin/category.model.js';
-import SubCategory from '../../models/admin/subCategory.model.js';
+import Service from '../../models/admin/service.model.js';
 import path from 'path';
 import fs from 'fs';
 import { ApiError } from '../../utils/errorHandler.js';
@@ -426,7 +426,7 @@ export const completeProfile = async (req, res) => {
     gender,
     dob,
     serviceCategoryId,
-    serviceSubcategoryId,
+    serviceIds,
     latitude,
     longitude,
     locationName,
@@ -438,7 +438,7 @@ export const completeProfile = async (req, res) => {
   if (!gender) throw new ApiError(400, 'Gender is required');
   if (!dob) throw new ApiError(400, 'Date of birth is required');
   if (!serviceCategoryId) throw new ApiError(400, 'Service category is required');
-  if (!serviceSubcategoryId) throw new ApiError(400, 'Service subcategory is required');
+  if (!serviceIds) throw new ApiError(400, 'Services are required');
   if (!latitude || !longitude) throw new ApiError(400, 'Location coordinates are required');
 
   //  GENDER VALIDATION
@@ -491,25 +491,25 @@ export const completeProfile = async (req, res) => {
     throw new ApiError(404, 'Invalid category');
   }
 
-  //  SUBCATEGORY VALIDATION
-  let subCategoryIds = Array.isArray(serviceSubcategoryId)
-    ? serviceSubcategoryId
-    : [serviceSubcategoryId];
+  //  SERVICES VALIDATION
+  let serviceIdArray = Array.isArray(serviceIds)
+    ? serviceIds
+    : [serviceIds];
 
-  const subcategories = await SubCategory.find({
-    _id: { $in: subCategoryIds },
+  const services = await Service.find({
+    _id: { $in: serviceIdArray },
     categoryId: serviceCategoryId,
   });
 
-  if (subcategories.length !== subCategoryIds.length) {
-    throw new ApiError(400, 'Invalid subcategories for selected category');
+  if (services.length !== serviceIdArray.length) {
+    throw new ApiError(400, 'Invalid services for selected category');
   }
 
   //  UPDATE DATA
   provider.gender = gender;
   provider.dob = parsedDob;
-  provider.serviceCategory = serviceCategoryId;
-  provider.serviceSubcategories = subCategoryIds;
+  provider.Category = serviceCategoryId;
+  provider.services = serviceIdArray;
 
   provider.location = {
     type: 'Point',

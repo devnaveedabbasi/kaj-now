@@ -1,5 +1,5 @@
 import Category from '../../models/admin/category.model.js';
-import SubCategory from '../../models/admin/subCategory.model.js';
+import service from '../../models/admin/service.model.js';
 import fs from 'fs';
 import path from 'path';
 import { ApiError } from '../../utils/errorHandler.js';
@@ -99,15 +99,15 @@ export const getAllCategories = async (req, res) => {
         Category.countDocuments(query)
     ]);
     
-    // Get subcategory count for each category
+    // Get service count for each category
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
-            const subCategoryCount = await SubCategory.countDocuments({
+            const serviceCount = await service.countDocuments({
                 userId,
                 categoryId: category._id
             });
             
-            const activeSubCategoryCount = await SubCategory.countDocuments({
+            const activeserviceCount = await service.countDocuments({
                 userId,
                 categoryId: category._id,
                 isActive: true,
@@ -116,8 +116,8 @@ export const getAllCategories = async (req, res) => {
             
             return {
                 ...category,
-                subCategoryCount,
-                activeSubCategoryCount
+                serviceCount,
+                activeserviceCount
             };
         })
     );
@@ -160,7 +160,7 @@ export const getCategoryById = async (req, res) => {
     }
 
     // Get all subcategories for this category (including deleted/inactive)
-    const subCategories = await SubCategory.find({ 
+    const subCategories = await service.find({ 
         userId, 
         categoryId: category._id 
     }).sort({ createdAt: -1 });
@@ -269,7 +269,7 @@ export const softDeleteCategory = async (req, res) => {
     category.isActive = category.isDeleted ? false : category.isActive;
     await category.save();
 
-    await SubCategory.updateMany(
+    await service.updateMany(
         { userId, categoryId: category._id },
         { isDeleted: true, isActive: false }
     );
@@ -298,14 +298,14 @@ export const hardDeleteCategory = async (req, res) => {
     }
 
     // Hard delete all subcategories under this category
-    const subCategories = await SubCategory.find({ userId, categoryId: category._id });
-    for (const subCategory of subCategories) {
-        if (subCategory.icon) {
-            const imagePath = path.join('public', subCategory.icon);
+    const subCategories = await service.find({ userId, categoryId: category._id });
+    for (const service of subCategories) {
+        if (service.icon) {
+            const imagePath = path.join('public', service.icon);
             deleteOldImage(imagePath);
         }
     }
-    await SubCategory.deleteMany({ userId, categoryId: category._id });
+    await service.deleteMany({ userId, categoryId: category._id });
 
     // Hard delete category
     await Category.deleteOne({ _id: category._id });

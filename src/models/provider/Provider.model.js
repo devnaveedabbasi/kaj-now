@@ -27,10 +27,10 @@ const providerSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Category',
     },
-    SubCategory: [
+    services: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'SubCategory',
+        ref: 'Service',
       },
     ],
 

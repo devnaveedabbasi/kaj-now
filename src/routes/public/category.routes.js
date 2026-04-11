@@ -4,7 +4,7 @@ import * as provider from '../../controllers/provider/provider.controller.js'
 
 const router = Router();
 
-router.get('/all-categories', asyncHandler(provider.getAllCategories));
-router.get('/services-by-category/:categoryId', asyncHandler(provider.getServicesByCategory));
+router.get('/all', asyncHandler(provider.getAllCategories));
+router.get('/services/:categoryId', asyncHandler(provider.getServicesByCategory));
 
 export default router;

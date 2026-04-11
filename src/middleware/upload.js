@@ -23,17 +23,17 @@ const categoryStorage = multer.diskStorage({
   }
 });
 
-// Configure storage for subcategories
-const subCategoryStorage = multer.diskStorage({
+// Configure storage for subcategories (Renamed to services)
+const serviceStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = 'public/uploads/subcategories';
+    const dir = 'public/uploads/services';
     ensureDirectoryExists(dir);
     cb(null, dir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     const ext = path.extname(file.originalname);
-    cb(null, `subcategory-${uniqueSuffix}${ext}`);
+    cb(null, `service-${uniqueSuffix}${ext}`);
   }
 });
 
@@ -74,8 +74,14 @@ export const uploadCategoryImage = multer({
   fileFilter: fileFilter
 });
 
+export const uploadServiceImage = multer({
+  storage: serviceStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: fileFilter
+});
+
 export const uploadSubCategoryImage = multer({
-  storage: subCategoryStorage,
+  storage: serviceStorage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
   fileFilter: fileFilter
 });

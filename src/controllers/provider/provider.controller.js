@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import Category from '../../models/admin/category.model.js';
-import SubCategory from '../../models/admin/subCategory.model.js';
+import Service from '../../models/admin/service.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 
@@ -35,7 +35,7 @@ export const getAllCategories = async (req, res) => {
     
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
-            const activeSubCategoryCount = await SubCategory.countDocuments({
+            const activeServicesCount = await Service.countDocuments({
                 categoryId: category._id,
                 isActive: true,
                 isDeleted: false
@@ -43,7 +43,7 @@ export const getAllCategories = async (req, res) => {
             
             return {
                 ...category,
-                activeSubCategoryCount
+                activeServicesCount
             };
         })
     );
@@ -65,7 +65,7 @@ export const getAllCategories = async (req, res) => {
     );
 };
 
-export const getSubCategoriesByCategory = async (req, res) => {
+export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
     
     // Validate ObjectId
@@ -104,13 +104,13 @@ export const getSubCategoriesByCategory = async (req, res) => {
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortField]: sortOrder };
     
-    const [subCategories, totalCount] = await Promise.all([
-        SubCategory.find(query)
+    const [services, totalCount] = await Promise.all([
+        Service.find(query)
             .sort(sort)
             .skip(skip)
             .limit(limit)
             .lean(),
-        SubCategory.countDocuments(query)
+        Service.countDocuments(query)
     ]);
     
     const totalPages = Math.ceil(totalCount / limit);
@@ -118,7 +118,7 @@ export const getSubCategoriesByCategory = async (req, res) => {
     res.status(200).json(
         new ApiResponse(200, {
             category,
-            subCategories,
+            services,
             pagination: {
                 currentPage: page,
                 totalPages,
@@ -127,6 +127,6 @@ export const getSubCategoriesByCategory = async (req, res) => {
                 hasNextPage: page < totalPages,
                 hasPrevPage: page > 1
             }
-        }, 'SubCategories retrieved successfully')
+        }, 'Services retrieved successfully')
     );
 };

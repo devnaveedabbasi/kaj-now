@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 import Category from '../../models/admin/category.model.js';
-import SubCategory from '../../models/admin/subCategory.model.js';
+import Service from '../../models/admin/service.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 
@@ -35,7 +35,7 @@ export const getAllCategories = async (req, res) => {
     
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
-            const activeSubCategoryCount = await SubCategory.countDocuments({
+            const activeserviceCount = await Service.countDocuments({
                 categoryId: category._id,
                 isActive: true,
                 isDeleted: false
@@ -43,7 +43,7 @@ export const getAllCategories = async (req, res) => {
             
             return {
                 ...category,
-                activeSubCategoryCount
+                activeserviceCount
             };
         })
     );
@@ -105,12 +105,12 @@ export const getSubCategoriesByCategory = async (req, res) => {
     const sort = { [sortField]: sortOrder };
     
     const [subCategories, totalCount] = await Promise.all([
-        SubCategory.find(query)
+        service.find(query)
             .sort(sort)
             .skip(skip)
             .limit(limit)
             .lean(),
-        SubCategory.countDocuments(query)
+        service.countDocuments(query)
     ]);
     
     const totalPages = Math.ceil(totalCount / limit);
