@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
-import Category from '../../models/admin/category.model.js';
 import Service from '../../models/admin/service.model.js';
+import ServiceRequest from '../../models/admin/serviceRequest.model.js';
+import ServiceAssignment from '../../models/admin/serviceAssignment.model.js';
+import Category from '../../models/admin/category.model.js';
+import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 
@@ -67,12 +70,12 @@ export const getAllCategories = async (req, res) => {
 
 export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
-    
+    console.log('Fetching services for category ID:', categoryId);
     // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
         throw new ApiError(400, 'Invalid category ID format');
     }
-    
+     
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
@@ -128,5 +131,149 @@ export const getServicesByCategory = async (req, res) => {
                 hasPrevPage: page > 1
             }
         }, 'Services retrieved successfully')
+    );
+};
+
+
+export const requestService = async (req, res) => {
+    const userId = req.user._id;
+    const { serviceId } = req.body;
+     console.log('Requesting service with ID:', serviceId, 'by user:', userId);
+    if (!serviceId) {
+        throw new ApiError(400, 'Service ID is required');
+    }
+    
+    // Get provider
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+        throw new ApiError(404, 'Provider profile not found');
+    }
+    
+    // Verify service exists
+    const service = await Service.findById(serviceId);
+    if (!service) {
+        throw new ApiError(404, 'Service not found');
+    }
+    
+    // Check if already requested
+    const existingRequest = await ServiceRequest.findOne({
+        providerId: provider._id,
+        serviceId,
+        status: { $in: ['pending', 'approved'] }
+    });
+    
+    if (existingRequest) {
+        throw new ApiError(409, `Already have a ${existingRequest.status} request for this service`);
+    }
+    
+    // Check if already assigned
+    const existingAssignment = await ServiceAssignment.findOne({
+        providerId: provider._id,
+        serviceId,
+        isActive: true
+    });
+    
+    if (existingAssignment) {
+        throw new ApiError(409, 'You already have this service assigned');
+    }
+    
+    // Create request
+    const request = await ServiceRequest.create({
+        providerId: provider._id,
+        serviceId,
+        categoryId: service.categoryId
+    });
+    
+    await request.populate('serviceId', 'name price');
+    await request.populate('categoryId', 'name');
+    
+    res.status(201).json(
+        new ApiResponse(201, request, 'Service request submitted successfully')
+    );
+};
+
+
+export const getMyServiceRequests = async (req, res) => {
+    const userId = req.user._id;
+    const { status } = req.query;
+    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+        throw new ApiError(404, 'Provider profile not found');
+    }
+    
+    let query = { providerId: provider._id };
+    if (status) query.status = status;
+    
+    const [requests, totalCount] = await Promise.all([
+        ServiceRequest.find(query)
+            .populate('serviceId', 'name icon price')
+            .populate('categoryId', 'name icon')
+            .populate('reviewedByAdmin', 'name')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+        ServiceRequest.countDocuments(query)
+    ]);
+    
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json(
+        new ApiResponse(200, {
+            requests,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalItems: totalCount,
+                itemsPerPage: limit
+            }
+        }, 'Your service requests retrieved successfully')
+    );
+};
+
+
+
+
+
+export const getMyAssignedServices = async (req, res) => {
+    const userId = req.user._id;
+    
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+        throw new ApiError(404, 'Provider profile not found');
+    }
+    
+    const [assignments, totalCount] = await Promise.all([
+        ServiceAssignment.find({ providerId: provider._id, isActive: true })
+            .populate('serviceId', 'name icon price description')
+            .populate('categoryId', 'name icon')
+            .sort({ assignedAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+        ServiceAssignment.countDocuments({ providerId: provider._id, isActive: true })
+    ]);
+    
+    const totalPages = Math.ceil(totalCount / limit);
+    
+    res.status(200).json(
+        new ApiResponse(200, {
+            assignedServices: assignments,
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalItems: totalCount,
+                itemsPerPage: limit
+            }
+        }, 'Your assigned services retrieved successfully')
     );
 };

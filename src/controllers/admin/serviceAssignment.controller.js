@@ -23,16 +23,22 @@ export const getAllServiceRequests = async (req, res) => {
     if (categoryId) query.categoryId = categoryId;
     
     const [requests, totalCount] = await Promise.all([
-        ServiceRequest.find(query)
-            .populate('providerId', 'name email')
-            .populate('serviceId', 'name icon price')
-            .populate('categoryId', 'name')
-            .populate('reviewedByAdmin', 'name email')
-            .sort({ createdAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean(),
-        ServiceRequest.countDocuments(query)
+      ServiceRequest.find(query)
+  .populate({
+    path: 'providerId',
+    select: 'userId',
+    populate: {
+      path: 'userId',
+      select: 'name email' 
+    }
+  })
+  .populate('serviceId', 'name icon price')
+  .populate('categoryId', 'name')
+  .populate('reviewedByAdmin', 'name email')
+  .sort({ createdAt: -1 })
+  .skip(skip)
+  .limit(limit)
+  .lean()
     ]);
     
     const totalPages = Math.ceil(totalCount / limit);
@@ -57,8 +63,14 @@ export const getServiceRequestById = async (req, res) => {
     const { id } = req.params;
     
     const request = await ServiceRequest.findById(id)
-        .populate('providerId', 'name email')
-        .populate('serviceId', 'name icon price description')
+ .populate({
+    path: 'providerId',
+    select: 'userId',
+    populate: {
+      path: 'userId',
+      select: 'name email' 
+    }
+  })        .populate('serviceId', 'name icon price description')
         .populate('categoryId', 'name icon')
         .populate('reviewedByAdmin', 'name email');
     
@@ -75,7 +87,6 @@ export const getServiceRequestById = async (req, res) => {
 export const approveServiceRequest = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id;
-    const { notes } = req.body;
     
     const request = await ServiceRequest.findById(id);
     if (!request) {
@@ -108,7 +119,6 @@ export const approveServiceRequest = async (req, res) => {
     request.status = 'approved';
     request.reviewedAt = new Date();
     request.reviewedByAdmin = userId;
-    request.notes = notes || request.notes;
     await request.save();
     
     // Update provider's services array if not already there
@@ -153,9 +163,7 @@ export const rejectServiceRequest = async (req, res) => {
     );
 };
 
-// ===================== SERVICE ASSIGNMENTS =====================
 
-// Get all service assignments
 export const getAllServiceAssignments = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -174,8 +182,14 @@ export const getAllServiceAssignments = async (req, res) => {
     
     const [assignments, totalCount] = await Promise.all([
         ServiceAssignment.find(query)
-            .populate('providerId', 'name email')
-            .populate('serviceId', 'name icon price')
+ .populate({
+    path: 'providerId',
+    select: 'userId',
+    populate: {
+      path: 'userId',
+      select: 'name email' 
+    }
+  })            .populate('serviceId', 'name icon price')
             .populate('categoryId', 'name')
             .populate('assignedByAdmin', 'name email')
             .sort({ assignedAt: -1 })
@@ -202,116 +216,3 @@ export const getAllServiceAssignments = async (req, res) => {
     );
 };
 
-// Deactivate service assignment
-export const deactivateServiceAssignment = async (req, res) => {
-    const { id } = req.params;
-    const { deactivationReason } = req.body;
-    
-    const assignment = await ServiceAssignment.findById(id);
-    if (!assignment) {
-        throw new ApiError(404, 'Service assignment not found');
-    }
-    
-    if (!assignment.isActive) {
-        throw new ApiError(400, 'Service assignment is already deactivated');
-    }
-    
-    assignment.isActive = false;
-    assignment.deactivatedAt = new Date();
-    assignment.deactivationReason = deactivationReason || '';
-    await assignment.save();
-    
-    // Optionally remove from provider's services array
-    await Provider.findByIdAndUpdate(
-        assignment.providerId,
-        { $pull: { services: assignment.serviceId } }
-    );
-    
-    res.status(200).json(
-        new ApiResponse(200, assignment, 'Service assignment deactivated successfully')
-    );
-};
-
-// Get assignments by category
-export const getAssignmentsByCategory = async (req, res) => {
-    const { categoryId } = req.params;
-    
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-    
-    // Verify category exists
-    const category = await Category.findById(categoryId);
-    if (!category) {
-        throw new ApiError(404, 'Category not found');
-    }
-    
-    const [assignments, totalCount] = await Promise.all([
-        ServiceAssignment.find({ categoryId, isActive: true })
-            .populate('providerId', 'name email')
-            .populate('serviceId', 'name icon price')
-            .populate('assignedByAdmin', 'name')
-            .sort({ assignedAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean(),
-        ServiceAssignment.countDocuments({ categoryId, isActive: true })
-    ]);
-    
-    const totalPages = Math.ceil(totalCount / limit);
-    
-    res.status(200).json(
-        new ApiResponse(200, {
-            category,
-            assignments,
-            pagination: {
-                currentPage: page,
-                totalPages,
-                totalItems: totalCount,
-                itemsPerPage: limit
-            }
-        }, 'Category assignments retrieved successfully')
-    );
-};
-
-// Get assignments by provider
-export const getAssignmentsByProvider = async (req, res) => {
-    const { providerId } = req.params;
-    
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-    
-    // Verify provider exists
-    const provider = await Provider.findById(providerId);
-    if (!provider) {
-        throw new ApiError(404, 'Provider not found');
-    }
-    
-    const [assignments, totalCount] = await Promise.all([
-        ServiceAssignment.find({ providerId, isActive: true })
-            .populate('serviceId', 'name icon price description')
-            .populate('categoryId', 'name icon')
-            .populate('assignedByAdmin', 'name')
-            .sort({ assignedAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean(),
-        ServiceAssignment.countDocuments({ providerId, isActive: true })
-    ]);
-    
-    const totalPages = Math.ceil(totalCount / limit);
-    
-    res.status(200).json(
-        new ApiResponse(200, {
-            provider: { _id: provider._id, name: provider.userId },
-            assignments,
-            pagination: {
-                currentPage: page,
-                totalPages,
-                totalItems: totalCount,
-                itemsPerPage: limit
-            }
-        }, 'Provider assignments retrieved successfully')
-    );
-};

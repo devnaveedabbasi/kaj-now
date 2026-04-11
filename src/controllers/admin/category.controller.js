@@ -44,7 +44,7 @@ export const createCategory = async (req, res) => {
     const categoryData = {
         userId,
         name,
-        icon: req.file ? `/uploads/categories/${req.file.filename}` : null,
+        icon: req.file ? `${process.env.BACKEND_URL}/uploads/categories/${req.file.filename}` : null,
     };
 
     const category = await Category.create(categoryData);

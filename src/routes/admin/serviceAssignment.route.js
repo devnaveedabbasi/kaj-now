@@ -12,8 +12,5 @@ router.patch('/requests/:id/reject', asyncHandler(assignments.rejectServiceReque
 
 // Service Assignments
 router.get('/assignments', asyncHandler(assignments.getAllServiceAssignments));
-router.get('/assignments/category/:categoryId', asyncHandler(assignments.getAssignmentsByCategory));
-router.get('/assignments/provider/:providerId', asyncHandler(assignments.getAssignmentsByProvider));
-router.patch('/assignments/:id/deactivate', asyncHandler(assignments.deactivateServiceAssignment));
 
 export default router;
