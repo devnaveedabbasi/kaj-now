@@ -430,24 +430,25 @@ export const completeProfile = async (req, res) => {
     latitude,
     longitude,
     locationName,
+    permanentAddress,
   } = req.body;
 
   const files = req.files || {};
 
-  //  REQUIRED VALIDATION
+  // REQUIRED VALIDATION
   if (!gender) throw new ApiError(400, 'Gender is required');
   if (!dob) throw new ApiError(400, 'Date of birth is required');
   if (!serviceCategoryId) throw new ApiError(400, 'Service category is required');
   if (!serviceIds) throw new ApiError(400, 'Services are required');
   if (!latitude || !longitude) throw new ApiError(400, 'Location coordinates are required');
 
-  //  GENDER VALIDATION
+  // GENDER VALIDATION
   const allowedGenders = ['male', 'female', 'other', 'prefer_not_say'];
   if (!allowedGenders.includes(gender)) {
     throw new ApiError(400, 'Invalid gender value');
   }
 
-  //  DATE VALIDATION (18+)
+  // DATE VALIDATION (18+)
   const parsedDob = new Date(dob);
   if (isNaN(parsedDob.getTime())) {
     throw new ApiError(400, 'Invalid date of birth');
@@ -458,7 +459,7 @@ export const completeProfile = async (req, res) => {
     throw new ApiError(400, 'You must be at least 18 years old');
   }
 
-  //  LOCATION VALIDATION
+  // LOCATION VALIDATION
   const lat = parseFloat(latitude);
   const lng = parseFloat(longitude);
 
@@ -470,7 +471,7 @@ export const completeProfile = async (req, res) => {
     throw new ApiError(400, 'Invalid longitude');
   }
 
-  //  FILE VALIDATION
+  // FILE VALIDATION
   const requiredFiles = ['facePhoto', 'idCardFront', 'idCardBack'];
 
   for (let field of requiredFiles) {
@@ -479,19 +480,25 @@ export const completeProfile = async (req, res) => {
     }
   }
 
-  //  FIND PROVIDER
+  // FIND PROVIDER
   const provider = await Provider.findOne({ userId });
   if (!provider) {
     throw new ApiError(404, 'Provider not found');
   }
 
-  //  CATEGORY VALIDATION
+  // FIND USER
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new ApiError(404, 'User not found');
+  }
+
+  // CATEGORY VALIDATION
   const category = await Category.findById(serviceCategoryId);
   if (!category) {
     throw new ApiError(404, 'Invalid category');
   }
 
-  //  SERVICES VALIDATION
+  // SERVICES VALIDATION
   let serviceIdArray = Array.isArray(serviceIds)
     ? serviceIds
     : [serviceIds];
@@ -505,11 +512,15 @@ export const completeProfile = async (req, res) => {
     throw new ApiError(400, 'Invalid services for selected category');
   }
 
-  //  UPDATE DATA
+
   provider.gender = gender;
   provider.dob = parsedDob;
   provider.Category = serviceCategoryId;
   provider.services = serviceIdArray;
+  
+  if (permanentAddress) {
+    provider.permanentAddress = permanentAddress;
+  }
 
   provider.location = {
     type: 'Point',
@@ -517,7 +528,7 @@ export const completeProfile = async (req, res) => {
     locationName: locationName || '',
   };
 
-  //  FILE HANDLING
+  // FILE HANDLING FOR PROVIDER
   const uploadPath = '/uploads/provider/';
 
   provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
@@ -530,18 +541,45 @@ export const completeProfile = async (req, res) => {
     );
   }
 
-  //  KYC STATUS
+  // KYC STATUS
   provider.isKycCompleted = true;
   provider.kycStatus = 'pending';
 
   await provider.save();
 
-  //  RESPONSE
+
+  user.location = {
+    type: 'Point',
+    coordinates: [lng, lat],
+    locationName: locationName || '',
+  };
+  
+  user.profileLastUpdated = new Date();
+  
+  await user.save();
+
+  
+  // Populate provider with references
+  await provider.populate('Category', 'name icon');
+  await provider.populate('services', 'name icon price');
+
   res.status(200).json(
     new ApiResponse(
       200,
       {
-        provider,
+        provider: {
+          ...provider.toObject(),
+          location: provider.location // Already transformed by schema
+        },
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          role: user.role,
+          location: user.location,
+          profileLastUpdated: user.profileLastUpdated
+        }
       },
       'Profile completed successfully'
     )

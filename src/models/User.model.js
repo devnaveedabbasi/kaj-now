@@ -26,7 +26,16 @@ const userSchema = new mongoose.Schema({
   resetOtpExpiry: Date,
   resetOtpAttempts: { type: Number, default: 0 },
   resetPasswordVerified: { type: Boolean, default: false },
-
+ location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+      },
+      coordinates: {
+        type: [Number],
+      },
+      locationName: { type: String, trim: true, default: '' },
+    },
   
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
@@ -35,25 +44,27 @@ const userSchema = new mongoose.Schema({
     default: null
   },
 
+  
 }, {
   timestamps: true,
   toJSON: { virtuals: true }
 });
 
+userSchema.index({ location: '2dsphere' }, { sparse: true });
 
-userSchema.virtual('customerProfile', {
-  ref: 'Customer',
-  localField: '_id',
-  foreignField: 'userId',
-  justOne: true
-});
+function attachLatLng(ret) {
+  if (ret.location?.coordinates?.length === 2) {
+    const [lng, lat] = ret.location.coordinates;
+    ret.location = {
+      type: 'Point',
+      lat,
+      lng,
+      coordinates: [lng, lat],
+    };
+  }
+  return ret;
+}
 
-userSchema.virtual('providerProfile', {
-  ref: 'Provider',
-  localField: '_id',
-  foreignField: 'userId',
-  justOne: true
-});
 
 userSchema.set('toJSON', { virtuals: true });
 userSchema.set('toObject', { virtuals: true });

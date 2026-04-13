@@ -65,14 +65,15 @@ export const getAllCategories = async (req, res) => {
     );
 };
 
-export const getSubCategoriesByCategory = async (req, res) => {
+export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
+    console.log('Fetching services for category ID:', categoryId);
     
     // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
         throw new ApiError(400, 'Invalid category ID format');
     }
-    
+     
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
@@ -104,13 +105,13 @@ export const getSubCategoriesByCategory = async (req, res) => {
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortField]: sortOrder };
     
-    const [subCategories, totalCount] = await Promise.all([
-        service.find(query)
+    const [services, totalCount] = await Promise.all([
+        Service.find(query)
             .sort(sort)
             .skip(skip)
             .limit(limit)
             .lean(),
-        service.countDocuments(query)
+        Service.countDocuments(query)
     ]);
     
     const totalPages = Math.ceil(totalCount / limit);
@@ -118,7 +119,7 @@ export const getSubCategoriesByCategory = async (req, res) => {
     res.status(200).json(
         new ApiResponse(200, {
             category,
-            subCategories,
+            services,
             pagination: {
                 currentPage: page,
                 totalPages,
@@ -127,6 +128,6 @@ export const getSubCategoriesByCategory = async (req, res) => {
                 hasNextPage: page < totalPages,
                 hasPrevPage: page > 1
             }
-        }, 'SubCategories retrieved successfully')
+        }, 'Services retrieved successfully')
     );
 };

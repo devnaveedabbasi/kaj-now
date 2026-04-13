@@ -1,7 +1,6 @@
 import mongoose from 'mongoose';
 import Service from '../../models/admin/service.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
-import ServiceAssignment from '../../models/admin/serviceAssignment.model.js';
 import Category from '../../models/admin/category.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
@@ -71,6 +70,7 @@ export const getAllCategories = async (req, res) => {
 export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
     console.log('Fetching services for category ID:', categoryId);
+    
     // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
         throw new ApiError(400, 'Invalid category ID format');
@@ -134,11 +134,11 @@ export const getServicesByCategory = async (req, res) => {
     );
 };
 
-
 export const requestService = async (req, res) => {
     const userId = req.user._id;
     const { serviceId } = req.body;
-     console.log('Requesting service with ID:', serviceId, 'by user:', userId);
+    console.log('Requesting service with ID:', serviceId, 'by user:', userId);
+    
     if (!serviceId) {
         throw new ApiError(400, 'Service ID is required');
     }
@@ -166,16 +166,7 @@ export const requestService = async (req, res) => {
         throw new ApiError(409, `Already have a ${existingRequest.status} request for this service`);
     }
     
-    // Check if already assigned
-    const existingAssignment = await ServiceAssignment.findOne({
-        providerId: provider._id,
-        serviceId,
-        isActive: true
-    });
-    
-    if (existingAssignment) {
-        throw new ApiError(409, 'You already have this service assigned');
-    }
+    //  REMOVED: ServiceAssignment check
     
     // Create request
     const request = await ServiceRequest.create({
@@ -191,7 +182,6 @@ export const requestService = async (req, res) => {
         new ApiResponse(201, request, 'Service request submitted successfully')
     );
 };
-
 
 export const getMyServiceRequests = async (req, res) => {
     const userId = req.user._id;
@@ -236,11 +226,9 @@ export const getMyServiceRequests = async (req, res) => {
     );
 };
 
+//  REMOVED: getMyAssignedServices function completely
 
-
-
-
-export const getMyAssignedServices = async (req, res) => {
+export const getMyApprovedServices = async (req, res) => {
     const userId = req.user._id;
     
     const page = parseInt(req.query.page) || 1;
@@ -252,28 +240,30 @@ export const getMyAssignedServices = async (req, res) => {
         throw new ApiError(404, 'Provider profile not found');
     }
     
-    const [assignments, totalCount] = await Promise.all([
-        ServiceAssignment.find({ providerId: provider._id, isActive: true })
+    //  Using ServiceRequest with status 'approved' instead of ServiceAssignment
+    const [approvedServices, totalCount] = await Promise.all([
+        ServiceRequest.find({ providerId: provider._id, status: 'approved' })
             .populate('serviceId', 'name icon price description')
             .populate('categoryId', 'name icon')
-            .sort({ assignedAt: -1 })
+            .populate('reviewedByAdmin', 'name email')
+            .sort({ reviewedAt: -1, createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .lean(),
-        ServiceAssignment.countDocuments({ providerId: provider._id, isActive: true })
+        ServiceRequest.countDocuments({ providerId: provider._id, status: 'approved' })
     ]);
     
     const totalPages = Math.ceil(totalCount / limit);
     
     res.status(200).json(
         new ApiResponse(200, {
-            assignedServices: assignments,
+            approvedServices,
             pagination: {
                 currentPage: page,
                 totalPages,
                 totalItems: totalCount,
                 itemsPerPage: limit
             }
-        }, 'Your assigned services retrieved successfully')
+        }, 'Your approved services retrieved successfully')
     );
 };
