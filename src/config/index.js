@@ -27,6 +27,13 @@ export default {
         password: process.env.EMAIL_PASSWORD
     },
 
+    /** SSLCommerz Payment Gateway Configuration */
+    sslcommerz: {
+        storeId: process.env.SSLCOMMERZ_STORE_ID,
+        storePassword: process.env.SSLCOMMERZ_STORE_PASSWORD,
+        sandbox: process.env.SSLCOMMERZ_SANDBOX === 'true',
+    },
+
     /** Required for POST /api/auth/admin/register (header X-Admin-Registration-Secret or body registrationSecret) */
     adminRegistrationSecret: process.env.ADMIN_REGISTRATION_SECRET || ''
 };

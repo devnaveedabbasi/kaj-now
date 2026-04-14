@@ -226,8 +226,6 @@ export const getMyServiceRequests = async (req, res) => {
     );
 };
 
-//  REMOVED: getMyAssignedServices function completely
-
 export const getMyApprovedServices = async (req, res) => {
     const userId = req.user._id;
     
