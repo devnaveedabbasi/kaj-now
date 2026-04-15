@@ -15,5 +15,6 @@ router.post('/set-new-password', asyncHandler(customerAuth.setNewPassword));
 router.post('/change-password', authenticateToken, requireRole('customer'), asyncHandler(customerAuth.changePassword));
 
 router.get('/me', authenticateToken, requireRole('customer'), asyncHandler(customerAuth.me));
+router.put('/location', authenticateToken, requireRole('customer'), asyncHandler(customerAuth.updateMyLocation));
 
 export default router;

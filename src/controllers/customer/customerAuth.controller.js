@@ -6,6 +6,7 @@ import { signToken } from '../../utils/jwt.js';
 import { generateNumericOtp } from '../../utils/otp.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { updateUserLocation } from '../../utils/updateUserLocation.js';
 
 const SALT_ROUNDS = 10;
 const OTP_TTL_MS = 10 * 60 * 1000;
@@ -294,7 +295,7 @@ export async function verifyResetOtp(req, res) {
     throw new ApiError(429, 'Too many attempts. Request new OTP.');
   }
 
-   if (!user.resetOTP || !user.resetOtpExpiry || user.resetOtpExpiry < new Date()) {
+  if (!user.resetOTP || !user.resetOtpExpiry || user.resetOtpExpiry < new Date()) {
     user.resetOtpAttempts += 1;
     await user.save();
     throw new ApiError(410, 'OTP expired or invalid.');
@@ -417,3 +418,20 @@ export async function me(req, res) {
     )
   );
 }
+export const updateMyLocation = async (req, res) => {
+  const userId = req.user.id || req.user._id;
+  console.log('Updating location for user ID:', userId);
+  const { latitude, longitude, locationName } = req.body;
+
+  if (!latitude || !longitude) {
+    throw new ApiError(400, 'Latitude and longitude are required');
+  }
+
+  const user = await updateUserLocation(userId, latitude, longitude, locationName);
+
+  res.status(200).json(
+    new ApiResponse(200, {
+      location: user.location
+    }, 'Location updated successfully')
+  );
+};

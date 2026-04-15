@@ -30,7 +30,7 @@ const providerSchema = new mongoose.Schema(
     services: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Service',
+        ref: 'ServiceRequest',
       },
     ],
 
@@ -47,7 +47,7 @@ const providerSchema = new mongoose.Schema(
     },
     kycStatus: {
       type: String,
-      enum: ["pending", "approved", "suspended"],
+      enum: ["pending", "approved", "suspended","rejected"],
       default: "pending"
     },
   },

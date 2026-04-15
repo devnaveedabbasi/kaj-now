@@ -16,7 +16,7 @@ const userSchema = new mongoose.Schema({
     enum: ["pending", "approved", "blocked", "suspended"],
     default: "pending"
   },
-
+  profilePicture: { type: String, default: null },
   isEmailVerified: { type: Boolean, default: false },
   emailOTP: { type: String },
   otpExpiry: { type: Date },

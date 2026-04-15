@@ -35,11 +35,10 @@ const cleanupFiles = (files) => {
 // Create service
 export const createService = async (req, res) => {
     try {
-        const { name, price, categoryId } = req.body;
+        const { name, price, categoryId,description } = req.body;
         const userId = req.user._id;
 
         const iconFile = req.files?.icon?.[0];
-        const imageFiles = req.files?.images || [];
 
         // Validation
         if (!name || !categoryId || !price) {
@@ -80,16 +79,14 @@ export const createService = async (req, res) => {
 
         const iconPath = `/uploads/services/icons/${iconFile.filename}`;
         
-        // Handle additional images
-        const imagePaths = imageFiles.map(file => `/uploads/services/images/${file.filename}`);
 
         const newServiceData = {
             userId,
             categoryId,
             name,
             icon: iconPath,
-            images: imagePaths,
             price: Number(price),
+            description: description || ''
         };
 
         const newService = await Service.create(newServiceData);
@@ -316,12 +313,7 @@ export const updateService = async (req, res) => {
             iconPath = `/uploads/services/icons/${iconFile.filename}`;
         }
 
-        // Handle new images
-        let imagePaths = existingService.images || [];
-        if (newImageFiles.length > 0) {
-            const newPaths = newImageFiles.map(file => `/uploads/services/images/${file.filename}`);
-            imagePaths = [...imagePaths, ...newPaths];
-        }
+       
 
         // Prepare update data
         const updateData = {
@@ -329,7 +321,6 @@ export const updateService = async (req, res) => {
             ...(categoryId && { categoryId }),
             ...(iconFile && { icon: iconPath }),
             ...(price !== undefined && { price: Number(price) }),
-            ...(newImageFiles.length > 0 && { images: imagePaths })
         };
 
         // Update the service
@@ -621,3 +612,5 @@ export const getServicesByCategory = async (req, res) => {
         }
     }
 };
+
+
