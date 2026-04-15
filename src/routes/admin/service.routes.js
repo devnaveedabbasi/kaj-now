@@ -10,15 +10,24 @@ import {
   getServicesByCategory
 } from '../../controllers/admin/service.controller.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
-import { uploadServiceImage } from '../../middleware/upload.js';
+import { uploadServiceFiles } from '../../middleware/upload.js';
 
 const router = express.Router();
 
-router.post('/', uploadServiceImage.single('icon'), asyncHandler(createService));
+router.post('/', 
+  uploadServiceFiles.fields([
+    { name: 'icon', maxCount: 1 },
+    { name: 'image', maxCount: 1 }
+  ]), 
+  asyncHandler(createService)
+);
 router.get('/', asyncHandler(getAllServices));
 router.get('/by-category/:categoryId', asyncHandler(getServicesByCategory));
 router.get('/:id', asyncHandler(getServiceById));
-router.put('/:id', uploadServiceImage.single('icon'), asyncHandler(updateService));
+router.put('/:id', uploadServiceFiles.fields([
+    { name: 'icon', maxCount: 1 },
+    { name: 'image', maxCount: 1 }
+]), asyncHandler(updateService));
 
 // New routes for toggle and delete
 router.patch('/:id/toggle', asyncHandler(toggleServiceActive));

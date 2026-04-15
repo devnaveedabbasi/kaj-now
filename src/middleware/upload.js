@@ -23,20 +23,35 @@ const categoryStorage = multer.diskStorage({
   }
 });
 
-// Configure storage for subcategories (Renamed to services)
-const serviceStorage = multer.diskStorage({
+// Configure storage for SERVICE ICONS only
+const serviceIconStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const dir = 'public/uploads/services';
+    const dir = 'public/uploads/services/icons';
     ensureDirectoryExists(dir);
     cb(null, dir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     const ext = path.extname(file.originalname);
-    cb(null, `service-${uniqueSuffix}${ext}`);
+    cb(null, `icon-${uniqueSuffix}${ext}`);
   }
 });
 
+// Configure storage for SERVICE IMAGES only
+const serviceImageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'public/uploads/services/images';
+    ensureDirectoryExists(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, `image-${uniqueSuffix}${ext}`);
+  }
+});
+
+// Provider storage
 const providerStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = 'public/uploads/provider';
@@ -51,9 +66,6 @@ const providerStorage = multer.diskStorage({
   }
 });
 
-
-
-
 // File filter for images
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|webp/;
@@ -63,41 +75,70 @@ const fileFilter = (req, file, cb) => {
   if (mimetype && extname) {
     return cb(null, true);
   } else {
-    cb(new Error('Only image files (jpeg, jpg, png, gif, webp) are allowed'));
+    cb(new Error('Only image files (jpeg, jpg, png, webp) are allowed'));
   }
 };
 
 // Create multer instances
 export const uploadCategoryImage = multer({
   storage: categoryStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 });
 
+// For service ICON only
+export const uploadServiceIcon = multer({
+  storage: serviceIconStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: fileFilter
+});
+
+// For service IMAGE only
 export const uploadServiceImage = multer({
-  storage: serviceStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  storage: serviceImageStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 });
 
-export const uploadSubCategoryImage = multer({
-  storage: serviceStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+// For both icon and image together
+export const uploadServiceFiles = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      if (file.fieldname === 'icon') {
+        const dir = 'public/uploads/services/icons';
+        ensureDirectoryExists(dir);
+        cb(null, dir);
+      } else if (file.fieldname === 'image') {
+        const dir = 'public/uploads/services/images';
+        ensureDirectoryExists(dir);
+        cb(null, dir);
+      } else {
+        const dir = 'public/uploads/services';
+        ensureDirectoryExists(dir);
+        cb(null, dir);
+      }
+    },
+    filename: (req, file, cb) => {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(file.originalname);
+      const prefix = file.fieldname === 'icon' ? 'icon' : 'image';
+      cb(null, `${prefix}-${uniqueSuffix}${ext}`);
+    }
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 });
 
 export const uploadProviderImage = multer({
   storage: providerStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 });
-
-
 
 // Create multer instance for provider documents
 export const uploadProviderDocuments = multer({
   storage: providerStorage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 }).fields([
   { name: 'facePhoto', maxCount: 1 },

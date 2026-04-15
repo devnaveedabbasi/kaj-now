@@ -18,67 +18,114 @@ const deleteOldImage = (imagePath) => {
 
 // Create service
 export const createService = async (req, res) => {
-    const { name, categoryId, price, description } = req.body;
-    const userId = req.user._id;
+    try {
+        const { name, categoryId, service } = req.body;
+        const userId = req.user._id;
 
-    // Validation
-    if (!name || !categoryId || !price) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
+        // Get both files from req.files (since you're using .fields())
+        const iconFile = req.files?.icon?.[0];
+        const imageFile = req.files?.image?.[0];
+
+        // Parse service data if it's a string (from form-data)
+        let serviceData = service;
+        if (typeof service === 'string') {
+            try {
+                serviceData = JSON.parse(service);
+            } catch (error) {
+                // Clean up uploaded files if parsing fails
+                if (iconFile) fs.unlinkSync(iconFile.path);
+                if (imageFile) fs.unlinkSync(imageFile.path);
+                throw new ApiError(400, 'Invalid service data format');
+            }
         }
-        throw new ApiError(400, 'Name, categoryId and price are required');
-    }
 
-    if (price < 0) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
+        const { price, description, title } = serviceData || {};
+
+        // Validation
+        if (!name || !categoryId || !price || !title) {
+            if (iconFile) fs.unlinkSync(iconFile.path);
+            if (imageFile) fs.unlinkSync(imageFile.path);
+            throw new ApiError(400, 'Name, categoryId, title and price are required');
         }
-        throw new ApiError(400, 'Price cannot be negative');
-    }
 
-    // Check if category exists and belongs to user
-    const category = await Category.findOne({ _id: categoryId, userId, isDeleted: false });
-    if (!category) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
+        if (price < 0) {
+            if (iconFile) fs.unlinkSync(iconFile.path);
+            if (imageFile) fs.unlinkSync(imageFile.path);
+            throw new ApiError(400, 'Price cannot be negative');
         }
-        throw new ApiError(404, 'Category not found');
-    }
 
-    // Check if service already exists in same category
-    const existingService = await Service.findOne({
-        userId,
-        categoryId,
-        name: { $regex: new RegExp(`^${name}$`, 'i') },
-        isDeleted: false
-    });
-
-    if (existingService) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
+        // Check if category exists and belongs to user
+        const category = await Category.findOne({ _id: categoryId, userId, isDeleted: false });
+        if (!category) {
+            if (iconFile) fs.unlinkSync(iconFile.path);
+            if (imageFile) fs.unlinkSync(imageFile.path);
+            throw new ApiError(404, 'Category not found');
         }
-        throw new ApiError(409, 'Service already exists in this category');
+
+        // Check if service already exists in same category
+        const existingService = await Service.findOne({
+            userId,
+            categoryId,
+            name: { $regex: new RegExp(`^${name}$`, 'i') },
+            isDeleted: false
+        });
+
+        if (existingService) {
+            if (iconFile) fs.unlinkSync(iconFile.path);
+            if (imageFile) fs.unlinkSync(imageFile.path);
+            throw new ApiError(409, 'Service already exists in this category');
+        }
+
+        // Handle image uploads - icon is required, image is optional
+        const iconPath = iconFile ? `/uploads/services/icons/${iconFile.filename}` : null;
+        const serviceImagePath = imageFile ? `/uploads/services/images/${imageFile.filename}` : null;
+
+        if (!iconPath) {
+            if (imageFile) fs.unlinkSync(imageFile.path);
+            throw new ApiError(400, 'Service icon is required');
+        }
+
+        const newServiceData = {
+            userId,
+            categoryId,
+            name,
+            icon: iconPath,
+            service: {
+                title: title,
+                image: serviceImagePath, // Can be null if no image uploaded
+                price: Number(price),
+                description: description || '',
+            }
+        };
+
+        const newService = await Service.create(newServiceData);
+        
+        // Populate category details
+        await newService.populate('categoryId', 'name icon');
+
+        res.status(201).json(
+            new ApiResponse(201, newService, 'Service created successfully')
+        );
+    } catch (error) {
+        // Clean up uploaded files if there's an error
+        if (req.files) {
+            if (req.files.icon) req.files.icon.forEach(file => {
+                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            });
+            if (req.files.image) req.files.image.forEach(file => {
+                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            });
+        }
+        
+        // Handle the error appropriately
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        } else {
+            console.error('Error creating service:', error);
+            res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
+        }
     }
-
-    const serviceData = {
-        userId,
-        categoryId,
-        name,
-        price: Number(price),
-        description: description || '',
-        icon: req.file ? `/uploads/services/${req.file.filename}` : null,
-    };
-
-    const newService = await Service.create(serviceData);
-    
-    // Populate category details
-    await newService.populate('categoryId', 'name icon');
-
-    res.status(201).json(
-        new ApiResponse(201, newService, 'Service created successfully')
-    );
 };
-
 // Get all services with filters and pagination
 export const getAllServices = async (req, res) => {
     const userId = req.user._id;
