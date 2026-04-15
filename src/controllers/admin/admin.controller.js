@@ -7,7 +7,7 @@ import Review from "../../models/reviews.model.js";
 import Notification from "../../models/notification.model.js";
 import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
-import { createNotification } from "../../helpers/notification.helper.js";
+import { createNotification } from "../../utils/createNotification.js";
 import mongoose from "mongoose";
 
 // ==================== USER MANAGEMENT ====================
@@ -103,15 +103,19 @@ export const updateUserStatus = async (req, res) => {
             throw new ApiError(400, 'Invalid user ID format');
         }
         
-        const user = await User.findByIdAndUpdate(
-            userId,
-            { isActive },
-            { new: true }
-        ).select('-password');
+        const user = await User.findById(userId);
         
         if (!user) {
             throw new ApiError(404, 'User not found');
         }
+        
+        // Check if already in same status
+        if (user.isActive === isActive) {
+            throw new ApiError(400, `User is already ${isActive ? 'activated' : 'deactivated'}`);
+        }
+        
+        user.isActive = isActive;
+        await user.save();
         
         // Send notification to user
         await createNotification({
@@ -182,7 +186,6 @@ export const getAllProviders = async (req, res) => {
         
         const providers = await Provider.find(query)
             .populate('userId', '-password')
-            .populate('Category', 'name icon')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -309,6 +312,11 @@ export const approveProviderKyc = async (req, res) => {
             throw new ApiError(404, 'Provider not found');
         }
         
+        // Check if already approved
+        if (provider.kycStatus === 'approved') {
+            throw new ApiError(400, 'KYC is already approved');
+        }
+        
         // Check if documents are uploaded
         if (!provider.facePhoto || !provider.idCardFront || !provider.idCardBack) {
             throw new ApiError(400, 'Cannot approve KYC. Required documents are missing');
@@ -358,6 +366,11 @@ export const suspendProviderKyc = async (req, res) => {
         
         if (!provider) {
             throw new ApiError(404, 'Provider not found');
+        }
+        
+        // Check if already suspended
+        if (provider.kycStatus === 'suspended') {
+            throw new ApiError(400, 'KYC is already suspended');
         }
         
         provider.kycStatus = 'suspended';
@@ -414,6 +427,11 @@ export const rejectProviderKyc = async (req, res) => {
             throw new ApiError(404, 'Provider not found');
         }
         
+        // Check if already pending or rejected
+        if (provider.kycStatus === 'pending') {
+            throw new ApiError(400, 'KYC is already pending');
+        }
+        
         provider.kycStatus = 'pending';
         provider.isKycCompleted = false;
         await provider.save();
@@ -445,7 +463,7 @@ export const rejectProviderKyc = async (req, res) => {
     }
 };
 
-
+// Get admin dashboard stats
 export const getAdminDashboardStats = async (req, res) => {
     try {
         const [
