@@ -8,16 +8,28 @@ const serviceSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
-    service:{
-        title: { type: String, required: true, trim: true },
-        image: { type: String, required: true },
-        price: { type: Number, required: true },
-        description: { type: String, trim: true, default: '' },
-    },
+    price: { type: Number, required: true },
     isActive: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },
-    reviews: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }],
+    reviews: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }], 
+    averageRating: { type: Number, default: 0 },
 }, { timestamps: true });
+
+// Method to update average rating
+serviceSchema.methods.updateAverageRating = async function() {
+    const result = await mongoose.model('Review').aggregate([
+        { $match: { service: this._id } },
+        { $group: {
+            _id: null,
+            average: { $avg: '$rating' },
+            count: { $sum: 1 }
+        }}
+    ]);
+    
+    this.averageRating = result.length > 0 ? Math.round(result[0].average * 10) / 10 : 0;
+    await this.save();
+    return this.averageRating;
+};
 
 const Service = mongoose.model('Service', serviceSchema);
 export default Service;

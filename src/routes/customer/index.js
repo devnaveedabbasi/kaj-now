@@ -4,11 +4,13 @@ import  { authMiddleware as authenticateToken, authorize as requireRole } from '
 import customerAuthRoute from './auth.routes.js';
 import customerRoute from './customer.routes.js';
 import jobRoutes from './job.routes.js';
+import reviewsRoutes from './review.routes.js';
 const router = Router();
 
 router.use('/auth', customerAuthRoute);
 router.use(authenticateToken,requireRole('customer')); 
 router.use('/', customerRoute);
 router.use('/job', jobRoutes);
+router.use('/job/review', reviewsRoutes);
 
 export default router;

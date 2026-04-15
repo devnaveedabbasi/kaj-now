@@ -17,7 +17,6 @@ const router = express.Router();
 router.post('/', 
   uploadServiceFiles.fields([
     { name: 'icon', maxCount: 1 },
-    { name: 'image', maxCount: 1 }
   ]), 
   asyncHandler(createService)
 );
@@ -26,7 +25,6 @@ router.get('/by-category/:categoryId', asyncHandler(getServicesByCategory));
 router.get('/:id', asyncHandler(getServiceById));
 router.put('/:id', uploadServiceFiles.fields([
     { name: 'icon', maxCount: 1 },
-    { name: 'image', maxCount: 1 }
 ]), asyncHandler(updateService));
 
 // New routes for toggle and delete

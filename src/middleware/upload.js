@@ -108,10 +108,6 @@ export const uploadServiceFiles = multer({
         const dir = 'public/uploads/services/icons';
         ensureDirectoryExists(dir);
         cb(null, dir);
-      } else if (file.fieldname === 'image') {
-        const dir = 'public/uploads/services/images';
-        ensureDirectoryExists(dir);
-        cb(null, dir);
       } else {
         const dir = 'public/uploads/services';
         ensureDirectoryExists(dir);
