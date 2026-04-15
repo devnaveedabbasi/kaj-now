@@ -531,13 +531,13 @@ export const completeProfile = async (req, res) => {
   // FILE HANDLING FOR PROVIDER
   const uploadPath = '/uploads/provider/';
 
-  provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
-  provider.idCardFront = `${uploadPath}${files.idCardFront[0].filename}`;
-  provider.idCardBack = `${uploadPath}${files.idCardBack[0].filename}`;
+  provider.facePhoto = `${process.env.BASE_URL}${uploadPath}${files.facePhoto[0].filename}`;
+  provider.idCardFront = `${process.env.BASE_URL}${uploadPath}${files.idCardFront[0].filename}`;
+  provider.idCardBack = `${process.env.BASE_URL}${uploadPath}${files.idCardBack[0].filename}`;
 
   if (files.certificates?.length > 0) {
     provider.certificates = files.certificates.map(
-      f => `${uploadPath}${f.filename}`
+      f => `${process.env.BASE_URL}${uploadPath}${f.filename}`
     );
   }
 
@@ -569,7 +569,7 @@ export const completeProfile = async (req, res) => {
       {
         provider: {
           ...provider.toObject(),
-          location: provider.location // Already transformed by schema
+          location: provider.location 
         },
         user: {
           _id: user._id,

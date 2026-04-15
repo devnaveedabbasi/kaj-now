@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import * as jobController from '../controllers/job.controller.js';
-import { asyncHandler } from '../utils/asyncHandler.js';
-import { authMiddleware as authenticateToken, authorize as requireRole } from '../middleware/auth.js';
+import * as jobController from '../../controllers/job.controller.js';
+import { asyncHandler } from '../../utils/asyncHandler.js';
+import { authMiddleware as authenticateToken, authorize as requireRole } from '../../middleware/auth.js';
 
 const router = Router();
 
