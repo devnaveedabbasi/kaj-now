@@ -606,8 +606,11 @@ export async function me(req, res) {
         email: user.email,
         role: user.role,
         phone: user.phone,
+        profilePicture:user.profilePicture,
         status: user.status,
         providerId: provider._id,
+        dob: provider.dob,
+        gender: provider.gender,
         isKycCompleted: provider.isKycCompleted,
         kycStatus: provider.kycStatus,
         location: provider.location,
@@ -616,3 +619,169 @@ export async function me(req, res) {
     )
   );
 }
+
+
+export const updateProfile = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { name, email, phone, permanentAddress, dob, gender, location } = req.body;
+    const files = req.files || {};
+
+    // Find user and provider
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+      throw new ApiError(404, 'Provider not found');
+    }
+
+    // Update User fields (jo bhi aayega update karo)
+    if (name) user.name = name.trim();
+    
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email, _id: { $ne: userId } });
+      if (existingUser) {
+        throw new ApiError(409, 'Email already registered');
+      }
+      user.email = email.toLowerCase();
+    }
+
+    if (phone) {
+      if (!phoneRegex.test(phone)) {
+        throw new ApiError(400, 'Invalid phone number');
+      }
+      const existingUser = await User.findOne({ phone, _id: { $ne: userId } });
+      if (existingUser) {
+        throw new ApiError(409, 'Phone number already registered');
+      }
+      user.phone = phone;
+    }
+
+    // Update profile picture
+    if (files.profilePicture && files.profilePicture[0]) {
+      if (user.profilePicture) {
+        const oldPath = path.join(process.cwd(), 'public', user.profilePicture.replace(process.env.BASE_URL, ''));
+        deleteFile(oldPath);
+      }
+      user.profilePicture = `/uploads/provider/${files.profilePicture[0].filename}`;
+    }
+
+    // Update Provider fields
+    if (gender) {
+      const allowedGenders = ['male', 'female', 'other', 'prefer_not_say'];
+      if (!allowedGenders.includes(gender)) {
+        throw new ApiError(400, 'Invalid gender');
+      }
+      provider.gender = gender;
+    }
+
+    if (dob) {
+      const parsedDob = new Date(dob);
+      if (isNaN(parsedDob.getTime())) {
+        throw new ApiError(400, 'Invalid date');
+      }
+      provider.dob = parsedDob;
+    }
+
+    if (permanentAddress) {
+      provider.permanentAddress = permanentAddress;
+    }
+
+    if (location) {
+      // location should be JSON string
+      const parsedLocation = typeof location === 'string' ? JSON.parse(location) : location;
+      provider.location = parsedLocation;
+      user.location = parsedLocation;
+    }
+
+    await user.save();
+    await provider.save();
+
+    res.status(200).json(
+      new ApiResponse(200, {
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          profilePicture: user.profilePicture
+        },
+        provider: {
+          gender: provider.gender,
+          dob: provider.dob,
+          permanentAddress: provider.permanentAddress,
+          location: provider.location
+        }
+      }, 'Profile updated successfully')
+    );
+  } catch (error) {
+    // Clean up uploaded file on error
+    if (req.files?.profilePicture) {
+      deleteFile(req.files.profilePicture[0].path);
+    }
+    
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500).json(new ApiResponse(500, null, error.message));
+  }
+};
+
+export const verifyEmailUpdate = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { otp } = req.body;
+
+    if (!otp) {
+      throw new ApiError(400, 'OTP is required');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    if (!user.pendingNewEmail) {
+      throw new ApiError(400, 'No pending email update');
+    }
+
+    if (user.emailUpdateOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      throw new ApiError(429, 'Too many failed attempts');
+    }
+
+    if (!user.emailUpdateOTP || !user.emailUpdateOtpExpiry || user.emailUpdateOtpExpiry < new Date()) {
+      user.emailUpdateOtpAttempts += 1;
+      await user.save();
+      throw new ApiError(410, 'OTP expired');
+    }
+
+    if (user.emailUpdateOTP !== otp) {
+      user.emailUpdateOtpAttempts += 1;
+      await user.save();
+      throw new ApiError(400, 'Invalid OTP');
+    }
+
+    // Update email
+    user.email = user.pendingNewEmail;
+    user.pendingNewEmail = null;
+    user.emailUpdateOTP = null;
+    user.emailUpdateOtpExpiry = null;
+    user.emailUpdateOtpAttempts = 0;
+    user.isEmailVerified = true;
+    await user.save();
+
+    res.status(200).json(
+      new ApiResponse(200, {
+        email: user.email
+      }, 'Email updated successfully')
+    );
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500).json(new ApiResponse(500, null, error.message));
+  }
+};

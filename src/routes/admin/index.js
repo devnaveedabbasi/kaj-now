@@ -6,6 +6,8 @@ import categoryRoutes from './category.route.js';
 import servicesRoutes from './service.routes.js';
 import serviceRequestRoutes from './serviceRequest.route.js';
 import adminRoutes from './admin.routes.js'
+import walletRoutes from './wallet.routes.js';
+import withdrawalsRoutes from './withdrawal.routes.js';
 const router = Router();
 
 router.use('/auth', adminAuthRoutes);
@@ -14,4 +16,6 @@ router.use('/', adminRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/services', servicesRoutes);
 router.use('/service-requests', serviceRequestRoutes);
+router.use('/wallet', walletRoutes);
+router.use('/withdrawals', withdrawalsRoutes);
 export default router;

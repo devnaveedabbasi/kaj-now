@@ -436,7 +436,8 @@ export const getApprovedServiceById = async (req, res) => {
                 name: serviceRequest.providerId?.userId?.name,
                 email: serviceRequest.providerId?.userId?.email,
                 phone: serviceRequest.providerId?.userId?.phone || '',
-                profilePicture: serviceRequest.providerId?.userId?.profilePicture || ''
+                profilePicture: serviceRequest.providerId?.userId?.profilePicture || '',
+                location: serviceRequest.providerId?.location || null
             },
             reviews: formattedReviews,
             similarServices: formattedSimilarServices,

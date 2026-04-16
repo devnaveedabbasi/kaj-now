@@ -9,6 +9,19 @@ const ensureDirectoryExists = (dir) => {
   }
 };
 
+// File filter
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|webp|pdf/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+  
+  if (mimetype && extname) {
+    return cb(null, true);
+  } else {
+    cb(new Error('Only images (jpeg, jpg, png, webp) and PDF files are allowed'));
+  }
+};
+
 // Configure storage for categories
 const categoryStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -66,19 +79,6 @@ const providerStorage = multer.diskStorage({
   }
 });
 
-// File filter for images
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|webp/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = allowedTypes.test(file.mimetype);
-
-  if (mimetype && extname) {
-    return cb(null, true);
-  } else {
-    cb(new Error('Only image files (jpeg, jpg, png, webp) are allowed'));
-  }
-};
-
 // Create multer instances
 export const uploadCategoryImage = multer({
   storage: categoryStorage,
@@ -131,6 +131,7 @@ export const uploadProviderImage = multer({
   fileFilter: fileFilter
 });
 
+
 // Create multer instance for provider documents
 export const uploadProviderDocuments = multer({
   storage: providerStorage,
@@ -141,4 +142,39 @@ export const uploadProviderDocuments = multer({
   { name: 'idCardFront', maxCount: 1 },
   { name: 'idCardBack', maxCount: 1 },
   { name: 'certificates', maxCount: 1 }
+]);
+
+
+
+const withdrawalReceiptStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'public/uploads/withdrawals/receipts';
+    ensureDirectoryExists(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    const withdrawalId = req.params.withdrawalId || 'unknown';
+    cb(null, `receipt-${withdrawalId}-${uniqueSuffix}${ext}`);
+  }
+});
+
+
+
+export const uploadWithdrawalReceipt = multer({
+  storage: withdrawalReceiptStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: fileFilter
+}).single('receipt'); 
+
+
+
+// Add this to your upload.js
+export const uploadProviderProfilePicture = multer({
+  storage: providerStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: fileFilter
+}).fields([
+  { name: 'profilePicture', maxCount: 1 }
 ]);

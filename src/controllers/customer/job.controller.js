@@ -7,7 +7,7 @@ import User from '../../models/User.model.js';
 import Service from '../../models/admin/service.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
-import { ApiResponse } from '../../utils/ApiResponse.js';
+import { ApiResponse } from '../../utils/apiResponse.js';
 import { processSSLCommerzPayment } from '../../utils/sslcommerz.js';
 import { createNotification } from '../../utils/createNotification.js';
 
@@ -165,13 +165,22 @@ export async function bookJob(req, res) {
 
     if (!adminWallet) {
       [adminWallet] = await Wallet.create(
-        [{ userId: adminUser._id, role: 'admin', balance: 0, totalEarnings: 0, totalPlatformFees: 0, isActive: true }],
+        [{ 
+          userId: adminUser._id, 
+          role: 'admin', 
+          balance: 0, 
+          totalEarnings: 0, 
+          totalPlatformFees: 0, 
+          totalHeld: 0,  // NEW: Track held amount
+          isActive: true 
+        }],
         { session }
       );
     }
 
-    adminWallet.balance += servicePrice;
-    adminWallet.totalEarnings += servicePrice;
+    // ONLY HOLD the amount, NOT add to earnings
+    adminWallet.balance += servicePrice;  // Held in escrow
+    adminWallet.totalHeld = (adminWallet.totalHeld || 0) + servicePrice;  // Track held amount
     adminWallet.transactionHistory.push(payment[0]._id);
     await adminWallet.save({ session });
 

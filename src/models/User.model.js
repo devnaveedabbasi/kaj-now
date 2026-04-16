@@ -69,7 +69,12 @@ function attachLatLng(ret) {
 userSchema.set('toJSON', { virtuals: true });
 userSchema.set('toObject', { virtuals: true });
 
-
+userSchema.add({
+  pendingNewEmail: { type: String, default: null },
+  emailUpdateOTP: { type: String, default: null },
+  emailUpdateOtpExpiry: { type: Date, default: null },
+  emailUpdateOtpAttempts: { type: Number, default: 0 },
+});
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 export default User;

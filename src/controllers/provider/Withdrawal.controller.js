@@ -7,6 +7,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/createNotification.js';
 
+const MIN_WITHDRAWAL_AMOUNT=100
 // Request withdrawal
 export const requestWithdrawal = async (req, res) => {
     const session = await mongoose.startSession();
@@ -18,10 +19,6 @@ export const requestWithdrawal = async (req, res) => {
 
         if (!amount || amount <= 0) {
             throw new ApiError(400, 'Invalid withdrawal amount');
-        }
-
-        if (amount <= 100) {
-            throw new ApiError(400, 'Minimum withdrawal amount is BDT 100');
         }
 
         // Get provider
@@ -51,7 +48,7 @@ export const requestWithdrawal = async (req, res) => {
         }
 
         // Check minimum withdrawal amount
-        const minWithdrawal = parseFloat(process.env.MIN_WITHDRAWAL_AMOUNT || '500');
+        const minWithdrawal = parseFloat(MIN_WITHDRAWAL_AMOUNT || '500');
         if (amount < minWithdrawal) {
             throw new ApiError(400, `Minimum withdrawal amount is BDT ${minWithdrawal}`);
         }
@@ -232,6 +229,48 @@ export const getWithdrawalById = async (req, res) => {
         return res.status(200).json(
             new ApiResponse(200, withdrawal, 'Withdrawal details retrieved successfully')
         );
+    } catch (error) {
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        }
+        return res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+};
+
+export const getWithdrawalReceipt = async (req, res) => {
+    try {
+        const { withdrawalId } = req.params;
+        const userId = req.user._id;
+
+        if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
+            throw new ApiError(400, 'Invalid withdrawal ID');
+        }
+
+        const provider = await Provider.findOne({ userId });
+        if (!provider) {
+            throw new ApiError(404, 'Provider profile not found');
+        }
+
+        const withdrawal = await Withdrawal.findOne({ 
+            _id: withdrawalId, 
+            providerId: provider._id 
+        });
+
+        if (!withdrawal) {
+            throw new ApiError(404, 'Withdrawal not found');
+        }
+
+        if (!withdrawal.receiptImage) {
+            throw new ApiError(404, 'Receipt not found');
+        }
+
+        const receiptPath = path.join(process.cwd(), 'public', withdrawal.receiptImage);
+        
+        if (!fs.existsSync(receiptPath)) {
+            throw new ApiError(404, 'Receipt file not found');
+        }
+
+        return res.sendFile(receiptPath);
     } catch (error) {
         if (error instanceof ApiError) {
             return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));

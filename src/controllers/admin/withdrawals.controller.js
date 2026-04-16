@@ -6,6 +6,8 @@ import Withdrawal from '../../models/withdrawal.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/createNotification.js';
+import fs from 'fs';
+import path from 'path';
 
 // Get all withdrawals (Admin)
 export const getAllWithdrawals = async (req, res) => {
@@ -20,7 +22,14 @@ export const getAllWithdrawals = async (req, res) => {
         const skip = (page - 1) * limit;
         const [withdrawals, total] = await Promise.all([
             Withdrawal.find(query)
-                .populate('providerId', 'name email phone bankDetails')
+                .populate('providerId', 'userId bankDetails')
+                .populate({
+                    path: 'providerId',
+                    populate: {
+                        path: 'userId',
+                        select: 'name email phone'
+                    }
+                })
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit)),
@@ -63,9 +72,15 @@ export const getAllWithdrawals = async (req, res) => {
 
         const totalPages = Math.ceil(total / limit);
 
+        // Format withdrawals with receipt URLs
+        const formattedWithdrawals = withdrawals.map(w => ({
+            ...w.toObject(),
+            receiptUrl: w.receiptImage ? `${process.env.BASE_URL}/${w.receiptImage}` : null
+        }));
+
         return res.status(200).json(
             new ApiResponse(200, {
-                withdrawals,
+                withdrawals: formattedWithdrawals,
                 stats: withdrawalStats,
                 pagination: {
                     currentPage: parseInt(page),
@@ -76,11 +91,12 @@ export const getAllWithdrawals = async (req, res) => {
             }, 'Withdrawals retrieved successfully')
         );
     } catch (error) {
+        console.error('Error getting withdrawals:', error);
         return res.status(500).json(new ApiResponse(500, null, error.message));
     }
 };
 
-// Approve withdrawal (Admin)
+// Approve withdrawal with receipt upload
 export const approveWithdrawal = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -88,25 +104,47 @@ export const approveWithdrawal = async (req, res) => {
     try {
         const { withdrawalId } = req.params;
         const { transactionId, notes } = req.body;
+        const receiptFile = req.file; // Multer file object
 
         if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
+            // Clean up uploaded file if exists
+            if (receiptFile && fs.existsSync(receiptFile.path)) {
+                fs.unlinkSync(receiptFile.path);
+            }
             throw new ApiError(400, 'Invalid withdrawal ID');
+        }
+
+        if (!receiptFile) {
+            throw new ApiError(400, 'Payment receipt is required');
         }
 
         const withdrawal = await Withdrawal.findById(withdrawalId).session(session);
         if (!withdrawal) {
+            // Clean up uploaded file
+            if (receiptFile && fs.existsSync(receiptFile.path)) {
+                fs.unlinkSync(receiptFile.path);
+            }
             throw new ApiError(404, 'Withdrawal not found');
         }
 
         if (withdrawal.status !== 'pending') {
+            // Clean up uploaded file
+            if (receiptFile && fs.existsSync(receiptFile.path)) {
+                fs.unlinkSync(receiptFile.path);
+            }
             throw new ApiError(400, `Withdrawal already ${withdrawal.status}`);
         }
+
+        // Save receipt path
+        const receiptPath = `/uploads/withdrawals/receipts/${receiptFile.filename}`;
 
         // Update withdrawal status
         withdrawal.status = 'completed';
         withdrawal.processedAt = new Date();
         withdrawal.transactionId = transactionId || null;
         withdrawal.adminNotes = notes || null;
+        withdrawal.receiptImage = receiptPath;
+        withdrawal.receiptFileName = receiptFile.originalname;
         await withdrawal.save({ session });
 
         // Update provider wallet totals
@@ -130,23 +168,38 @@ export const approveWithdrawal = async (req, res) => {
         await session.commitTransaction();
 
         // Notify provider
-        const provider = await Provider.findById(withdrawal.providerId);
+        const provider = await Provider.findById(withdrawal.providerId).populate('userId');
         if (provider) {
             await createNotification({
-                userId: provider.userId,
+                userId: provider.userId._id,
                 title: 'Withdrawal Approved',
-                message: `Your withdrawal of BDT ${withdrawal.payableAmount} has been approved and processed. Amount will be credited to your bank account.`,
+                message: `Your withdrawal of BDT ${withdrawal.payableAmount} has been approved and processed. Transaction ID: ${transactionId || 'N/A'}`,
                 type: 'withdrawal',
                 referenceId: withdrawal._id,
-                metadata: { withdrawalId: withdrawal._id, amount: withdrawal.payableAmount }
+                metadata: { 
+                    withdrawalId: withdrawal._id, 
+                    amount: withdrawal.payableAmount,
+                    receiptUrl: receiptPath
+                }
             });
         }
 
         return res.status(200).json(
-            new ApiResponse(200, withdrawal, 'Withdrawal approved successfully')
+            new ApiResponse(200, {
+                withdrawal: {
+                    ...withdrawal.toObject(),
+                    receiptUrl: `${process.env.BASE_URL}${receiptPath}`
+                }
+            }, 'Withdrawal approved successfully')
         );
     } catch (error) {
         await session.abortTransaction();
+        
+        // Clean up uploaded file on error
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+        
         if (error instanceof ApiError) {
             return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
         }
@@ -156,7 +209,7 @@ export const approveWithdrawal = async (req, res) => {
     }
 };
 
-// Reject withdrawal (Admin)
+// Reject withdrawal
 export const rejectWithdrawal = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -198,10 +251,10 @@ export const rejectWithdrawal = async (req, res) => {
         await session.commitTransaction();
 
         // Notify provider
-        const provider = await Provider.findById(withdrawal.providerId);
+        const provider = await Provider.findById(withdrawal.providerId).populate('userId');
         if (provider) {
             await createNotification({
-                userId: provider.userId,
+                userId: provider.userId._id,
                 title: 'Withdrawal Rejected',
                 message: `Your withdrawal request of BDT ${withdrawal.requestedAmount} was rejected. Reason: ${reason}. Amount has been returned to your wallet.`,
                 type: 'withdrawal',
@@ -221,5 +274,38 @@ export const rejectWithdrawal = async (req, res) => {
         return res.status(500).json(new ApiResponse(500, null, error.message));
     } finally {
         session.endSession();
+    }
+};
+
+// Get withdrawal receipt
+export const getWithdrawalReceipt = async (req, res) => {
+    try {
+        const { withdrawalId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
+            throw new ApiError(400, 'Invalid withdrawal ID');
+        }
+
+        const withdrawal = await Withdrawal.findById(withdrawalId);
+        if (!withdrawal) {
+            throw new ApiError(404, 'Withdrawal not found');
+        }
+
+        if (!withdrawal.receiptImage) {
+            throw new ApiError(404, 'Receipt not found');
+        }
+
+        const receiptPath = path.join(process.cwd(), 'public', withdrawal.receiptImage);
+        
+        if (!fs.existsSync(receiptPath)) {
+            throw new ApiError(404, 'Receipt file not found');
+        }
+
+        return res.sendFile(receiptPath);
+    } catch (error) {
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        }
+        return res.status(500).json(new ApiResponse(500, null, error.message));
     }
 };

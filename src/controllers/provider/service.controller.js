@@ -394,7 +394,8 @@ export const getServiceById = async (req, res) => {
                 name: serviceRequest.providerId?.userId?.name,
                 email: serviceRequest.providerId?.userId?.email,
                 phone: serviceRequest.providerId?.userId?.phoneNumber,
-                profilePicture: serviceRequest.providerId?.userId?.profilePicture
+                profilePicture: serviceRequest.providerId?.userId?.profilePicture,
+                location: serviceRequest.providerId?.location || null
             },
             
             // Category Info

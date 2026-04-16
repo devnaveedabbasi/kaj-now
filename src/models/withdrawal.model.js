@@ -42,7 +42,17 @@ const withdrawalSchema = new mongoose.Schema(
       default: 'pending',
       index: true,
     },
-
+  receiptImage: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    receiptFileName: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    
     transactionId: {
       type: String,
       trim: true,
