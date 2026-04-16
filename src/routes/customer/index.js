@@ -9,7 +9,7 @@ const router = Router();
 
 router.use('/auth', customerAuthRoute);
 router.use(authenticateToken,requireRole('customer')); 
-router.use('/', serviceRoute);
+router.use('/services', serviceRoute);
 router.use('/job', jobRoutes);
 router.use('/job/review', reviewsRoutes);
 

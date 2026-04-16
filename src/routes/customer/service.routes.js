@@ -6,15 +6,8 @@ import { authMiddleware as authenticateToken, authorize as requireRole } from '.
 const router = Router();
 
 // Browse services (public)
+router.get('/', asyncHandler(Customer.getAllApprovedServices));
 router.get('/all-categories', asyncHandler(Customer.getAllCategories));
 router.get('/services-by-cat/:categoryId', asyncHandler(Customer.getServicesByCategory));
-
-// Update location (private)
-
-router.post('/book-service', authenticateToken, requireRole('customer'), asyncHandler(Customer.bookService));
-router.get('/my-bookings', authenticateToken, requireRole('customer'), asyncHandler(Customer.getMyBookings));
-router.get('/bookings/:bookingId', authenticateToken, requireRole('customer'), asyncHandler(Customer.getBookingDetails));
-router.get('/bookings/:bookingId/track', authenticateToken, requireRole('customer'), asyncHandler(Customer.trackBooking));
-router.delete('/bookings/:bookingId', authenticateToken, requireRole('customer'), asyncHandler(Customer.cancelBooking));
 
 export default router;

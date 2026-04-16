@@ -3,6 +3,13 @@ import mongoose from 'mongoose';
 
 const jobSchema = new mongoose.Schema(
   {
+    orderId: {
+      type: String,
+      unique: true,
+      index: true,
+      description: '6-digit readable order ID like ORD-000001',
+    },
+
     provider: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Provider',
@@ -20,82 +27,61 @@ const jobSchema = new mongoose.Schema(
       ref: 'Service',
       required: true,
     },
-    // ====== JOB STATUS FLOW ======
-    // pending → accepted → in_progress → completed_by_provider → confirmed_by_user → closed
-    // Alternative: → rejected_by_provider (triggers refund)
-    // Alternative: → disputed → resolved
-    status: {
-      type: String,
-      enum: [
-        'pending',                    // Booking created, payment held in admin wallet
-        'accepted',                   // Provider accepted the booking
-        'in_progress',                // Provider started the work
-        'completed_by_provider',      // Provider marked as completed
-        'confirmed_by_user',          // User confirmed completion, payment released with fee deduction
-        'rejected_by_provider',       // Provider rejected - full refund to user
-        'disputed',                   // User disputed the completion
-        'resolved',                   // Admin resolved the dispute
-        'closed'                      // Job is closed
-      ],
-      default: 'pending',
-      index: true,
-    },
-    // ====== TIMESTAMPS ======
-    acceptedAt: Date,
-    startedAt: Date,
-    completedByProviderAt: Date,
-    confirmedByUserAt: Date,
-    rejectedByProviderAt: Date,
-    disputedAt: Date,
-    resolvedAt: Date,
-    closedAt: Date,
-    
-    // ====== AMOUNT & CURRENCY ======
+
     amount: {
       type: Number,
       required: true,
       min: 0,
-      default: 0,
     },
-    currency: {
+
+    status: {
       type: String,
-      default: 'BDT',
-      trim: true,
+      enum: [
+        'pending',
+        'accepted',
+        'rejected_by_provider',
+        'in_progress',
+        'completed_by_provider',
+        'confirmed_by_user',
+        'disputed',
+        'cancelled',
+      ],
+      default: 'pending',
+      index: true,
     },
-    
-    // ====== PAYMENT STATUS (escrow-based) ======
-    // pending → held_in_escrow → released_to_provider OR refunded_to_customer
+
+    // ── Payment Status ────────────────────────────────────────────────────────
     paymentStatus: {
       type: String,
-      enum: ['pending', 'held_in_escrow', 'released_to_provider', 'refunded_to_customer'],
+      enum: [
+        'pending',
+        'held_in_escrow',
+        'released_to_provider',
+        'refunded_to_customer',
+        'refunded',
+      ],
       default: 'pending',
     },
-    
-    // ====== REJECTION/DISPUTE REASON ======
-    rejectionReason: String,
-    rejectionRejectedAt: Date,
-    disputeReason: String,
-    
-    // ====== LOCATION INFO ======
-    serviceLocation: {
-      name: String,
-      phoneNumber: String,
-      coordinates: {
-        latitude: Number,
-        longitude: Number,
-      },
-    },
-    scheduledAt: Date,
+
+    // ── Timestamps for each status change ────────────────────────────────────
+    acceptedAt: { type: Date, default: null },
+    rejectedAt: { type: Date, default: null },
+    startedAt: { type: Date, default: null },
+    completedByProviderAt: { type: Date, default: null },
+    confirmedByUserAt: { type: Date, default: null },
+    disputedAt: { type: Date, default: null },
+    cancelledAt: { type: Date, default: null },
+
+    // ── Rejection & Dispute ───────────────────────────────────────────────────
+    rejectionReason: { type: String, trim: true, default: null },
+    disputeReason: { type: String, trim: true, default: null },
   },
   { timestamps: true }
 );
 
-// Define all indexes here to avoid duplicates
-jobSchema.index({ provider: 1, status: 1 });
 jobSchema.index({ customer: 1, status: 1 });
-jobSchema.index({ provider: 1, completedByProviderAt: 1 });
-jobSchema.index({ paymentStatus: 1 });
+jobSchema.index({ provider: 1, status: 1 });
 jobSchema.index({ createdAt: -1 });
 
- const Job = mongoose.models.Job || mongoose.model('Job', jobSchema);
- export default Job;
+const Job = mongoose.models.Job || mongoose.model('Job', jobSchema);
+export default Job;

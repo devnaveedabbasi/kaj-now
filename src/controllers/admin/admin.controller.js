@@ -138,7 +138,7 @@ export const updateUserStatus = async (req, res) => {
     }
 };
 
-// Delete user (soft delete)
+// Delete user
 export const deleteUser = async (req, res) => {
     try {
         const { userId } = req.params;
@@ -171,7 +171,6 @@ export const deleteUser = async (req, res) => {
     }
 };
 
-// ==================== PROVIDER MANAGEMENT ====================
 
 // Get all providers with KYC status
 export const getAllProviders = async (req, res) => {

@@ -607,8 +607,10 @@ export async function me(req, res) {
         role: user.role,
         phone: user.phone,
         status: user.status,
+        providerId: provider._id,
         isKycCompleted: provider.isKycCompleted,
         kycStatus: provider.kycStatus,
+        location: provider.location,
       },
       'User profile retrieved successfully.'
     )

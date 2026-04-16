@@ -1,6 +1,5 @@
 ﻿import bcrypt from 'bcryptjs';
 import User from '../../models/User.model.js';
-import { Customer } from '../../models/customer/Customer.model.js';
 import { sendOtpEmail } from '../../utils/emailService.js';
 import { signToken } from '../../utils/jwt.js';
 import { generateNumericOtp } from '../../utils/otp.js';
@@ -88,7 +87,6 @@ export async function register(req, res) {
     lastOTPSent: new Date(),
   });
 
-  await Customer.create({ userId: user._id });
 
   await sendOtpEmail(email, otp);
 
@@ -413,6 +411,7 @@ export async function me(req, res) {
         role: user.role,
         phone: user.phone,
         status: user.status,
+        location: user.location,
       },
       'User profile retrieved successfully.'
     )
