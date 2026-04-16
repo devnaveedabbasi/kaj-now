@@ -1,4 +1,3 @@
-// models/job.model.js
 import mongoose from 'mongoose';
 
 const jobSchema = new mongoose.Schema(
@@ -7,7 +6,6 @@ const jobSchema = new mongoose.Schema(
       type: String,
       unique: true,
       index: true,
-      description: '6-digit readable order ID like ORD-000001',
     },
 
     provider: {
@@ -24,8 +22,12 @@ const jobSchema = new mongoose.Schema(
     },
     service: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Service',
+      ref: 'Service', 
       required: true,
+    },
+    serviceRequestId: {  
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ServiceRequest',
     },
 
     amount: {
@@ -50,7 +52,6 @@ const jobSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ── Payment Status ────────────────────────────────────────────────────────
     paymentStatus: {
       type: String,
       enum: [
@@ -63,7 +64,6 @@ const jobSchema = new mongoose.Schema(
       default: 'pending',
     },
 
-    // ── Timestamps for each status change ────────────────────────────────────
     acceptedAt: { type: Date, default: null },
     rejectedAt: { type: Date, default: null },
     startedAt: { type: Date, default: null },
@@ -72,7 +72,6 @@ const jobSchema = new mongoose.Schema(
     disputedAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
 
-    // ── Rejection & Dispute ───────────────────────────────────────────────────
     rejectionReason: { type: String, trim: true, default: null },
     disputeReason: { type: String, trim: true, default: null },
   },

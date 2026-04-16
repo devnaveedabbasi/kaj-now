@@ -1,15 +1,14 @@
 import { Router } from 'express';
-import * as walletController from '../../controllers/wallet.controller.js';
+import * as walletController from '../../controllers/provider/wallet.controller.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 
 const router = Router();
 
-router.get('/me', asyncHandler(walletController.getMyWallet));
+router.get('/', asyncHandler(walletController.getProviderWallet));
+router.get('/transactions', asyncHandler(walletController.getWalletTransactions));
 
-router.get('/transactions', asyncHandler(walletController.getWalletTransactionHistory));
 
-// Get earnings summary (Provider)
-router.get('/earnings-summary',  asyncHandler(walletController.getEarningsSummary));
-
+router.get('/bank-details', asyncHandler(walletController.getBankDetails));
+router.put('/bank-details', asyncHandler(walletController.updateBankDetails));
 
 export default router;

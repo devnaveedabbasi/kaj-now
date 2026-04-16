@@ -322,7 +322,7 @@ export const getServiceById = async (req, res) => {
                 path: 'providerId',
                 populate: {
                     path: 'userId',
-                    select: 'name email profileImage phoneNumber'
+                    select: 'name email profilePicture phoneNumber'
                 }
             })
             .populate('categoryId', 'name icon')
@@ -337,7 +337,7 @@ export const getServiceById = async (req, res) => {
         const reviews = await mongoose.model('Review').find({ 
             service: serviceRequest.serviceId._id 
         })
-        .populate('userId', 'name email profileImage')
+        .populate('userId', 'name email profilePicture')
         .lean();
         
         // Calculate rating distribution
@@ -360,7 +360,7 @@ export const getServiceById = async (req, res) => {
             comment: review.comment,
             userName: review.userId?.name || 'Anonymous',
             userEmail: review.userId?.email,
-            userImage: review.userId?.profileImage || null,
+            userImage: review.userId?.profilePicture || null,
             createdAt: review.createdAt,
             updatedAt: review.updatedAt
         })) || [];
@@ -394,7 +394,7 @@ export const getServiceById = async (req, res) => {
                 name: serviceRequest.providerId?.userId?.name,
                 email: serviceRequest.providerId?.userId?.email,
                 phone: serviceRequest.providerId?.userId?.phoneNumber,
-                profileImage: serviceRequest.providerId?.userId?.profileImage
+                profilePicture: serviceRequest.providerId?.userId?.profilePicture
             },
             
             // Category Info

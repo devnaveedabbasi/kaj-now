@@ -7,15 +7,15 @@ import User from '../../models/User.model.js';
 import Service from '../../models/admin/service.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
+import { ApiResponse } from '../../utils/ApiResponse.js';
 import { processSSLCommerzPayment } from '../../utils/sslcommerz.js';
 import { createNotification } from '../../utils/createNotification.js';
 
 
 async function generateOrderId() {
-  // Count existing jobs and pad to 6 digits (e.g. ORD-000001)
   const count = await Job.countDocuments();
-  const padded = String(count + 1).padStart(6, '0');
-  return `ORD-${padded}`;
+  const padded = String(count + 1).padStart(3, '0');
+  return `OR-${padded}`;
 }
 
 export async function bookJob(req, res) {
@@ -267,84 +267,6 @@ export async function acceptJob(req, res) {
 }
 
 
-export async function rejectJob(req, res) {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const { jobId } = req.params;
-    const { reason } = req.body;
-    const providerId = req.body.providerId || req.user?._id;
-
-    if (!mongoose.Types.ObjectId.isValid(jobId)) throw new ApiError(400, 'Invalid job ID');
-
-    const job = await Job.findById(jobId).populate('service', 'name').session(session);
-    if (!job) throw new ApiError(404, 'Job not found');
-
-    if (job.provider.toString() !== providerId.toString()) {
-      throw new ApiError(403, 'Not authorized to reject this job');
-    }
-
-    if (!['pending', 'accepted'].includes(job.status)) {
-      throw new ApiError(400, `Cannot reject job with status: ${job.status}`);
-    }
-
-    const payment = await Payment.findOne({ jobId }).session(session);
-    if (!payment) throw new ApiError(404, 'Payment record not found');
-
-    if (payment.escrowStatus !== 'held_in_admin_wallet') {
-      throw new ApiError(400, 'Payment is not in escrow');
-    }
-
-    // ── Refund payment record ───────────────────────────────────────────────
-    payment.paymentStatus = 'refunded';
-    payment.escrowStatus = 'refunded_to_customer';
-    payment.refundReason = 'provider_rejected';
-    payment.refundedAt = new Date();
-    await payment.save({ session });
-
-    // ── Deduct from admin wallet ────────────────────────────────────────────
-    const adminUser = await User.findOne({ role: 'admin' }).session(session);
-    const adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
-
-    if (adminWallet) {
-      adminWallet.balance -= payment.totalAmount;
-      adminWallet.totalEarnings -= payment.totalAmount;
-      await adminWallet.save({ session });
-    }
-
-    // ── Update job ──────────────────────────────────────────────────────────
-    job.status = 'rejected_by_provider';
-    job.rejectionReason = reason || 'Provider rejected booking';
-    job.rejectedAt = new Date();
-    job.paymentStatus = 'refunded_to_customer';
-    await job.save({ session });
-
-    await session.commitTransaction();
-
-    // ── Notifications ────────────────────────────────────────────────────────
-    await createNotification({
-      userId: job.customer,
-      title: 'Booking Rejected',
-      message: `Unfortunately, your booking for "${job.service?.name || 'the service'}" (Order #${job.orderId}) was rejected by the provider. A full refund will be processed.`,
-      type: 'job',
-      referenceId: job._id,
-      metadata: { orderId: job.orderId, jobId: job._id, refundAmount: payment.totalAmount },
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: 'Job rejected. Full refund will be processed to customer.',
-      data: { job, payment, refundAmount: payment.totalAmount },
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
-  } finally {
-    session.endSession();
-  }
-}
-
 export async function confirmCompletionByCustomer(req, res) {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -398,7 +320,7 @@ export async function confirmCompletionByCustomer(req, res) {
     adminWallet.totalPlatformFees += payment.platformFee;
     await adminWallet.save({ session });
 
-    // ── Credit provider wallet with FULL amount (platform fee deducted at withdrawal) ──
+    // ── Credit provider wallet with FULL amount ──────────────────────────────
     providerWallet.balance += payment.providerAmount;
     providerWallet.totalEarnings += payment.providerAmount;
     providerWallet.transactionHistory.push(payment._id);
@@ -413,23 +335,26 @@ export async function confirmCompletionByCustomer(req, res) {
     job.paymentStatus = 'released_to_provider';
     await job.save({ session });
 
+    // ── INCREMENT SERVICE ORDER COUNT FOR PROVIDER ──────────────────────────
+    const provider = await Provider.findById(job.provider).session(session);
+    if (provider) {
+      await provider.incrementServiceOrderCount(job.service);
+    }
+
     await session.commitTransaction();
 
     // ── Notifications ────────────────────────────────────────────────────────
-    // Notify provider
-    const provider = await Provider.findById(payment.providerId);
     if (provider) {
       await createNotification({
         userId: provider.userId,
-        title: 'Payment Released',
-        message: `Customer confirmed job completion for Order #${job.orderId}. BDT ${payment.providerAmount} has been credited to your wallet.`,
+        title: 'Payment Released & Order Completed',
+        message: `Customer confirmed job completion for Order #${job.orderId}. BDT ${payment.providerAmount} has been credited to your wallet. Total orders completed: ${provider.totalOrdersCompleted}`,
         type: 'payment',
         referenceId: job._id,
         metadata: { orderId: job.orderId, jobId: job._id, amount: payment.providerAmount },
       });
     }
 
-    // Notify customer
     await createNotification({
       userId: customerId,
       title: 'Job Completed',
@@ -450,6 +375,10 @@ export async function confirmCompletionByCustomer(req, res) {
           providerAmount: payment.providerAmount,
           status: 'released_to_provider',
         },
+        providerStats: provider ? {
+          totalOrdersCompleted: provider.totalOrdersCompleted,
+          serviceOrdersCount: Object.fromEntries(provider.serviceOrdersCount)
+        } : null
       },
     });
   } catch (error) {
@@ -459,7 +388,6 @@ export async function confirmCompletionByCustomer(req, res) {
     session.endSession();
   }
 }
-
 
 export async function rejectCompletion(req, res) {
   const session = await mongoose.startSession();
@@ -530,3 +458,243 @@ export async function rejectCompletion(req, res) {
     session.endSession();
   }
 }
+
+
+export const getMyOrders = async (req, res) => {
+    try {
+        const userId = req.user._id;
+        
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        
+        const { status } = req.query; // pending, accepted, in_progress, completed_by_provider, confirmed_by_user, disputed, cancelled
+        
+        // Build query
+        let query = { customer: userId };
+        
+        // If status provided, filter by it, otherwise get all
+        if (status && status !== 'all') {
+            const validStatuses = [
+                'pending', 
+                'accepted', 
+                'rejected_by_provider',
+                'in_progress', 
+                'completed_by_provider', 
+                'confirmed_by_user', 
+                'disputed', 
+                'cancelled'
+            ];
+            if (!validStatuses.includes(status)) {
+                throw new ApiError(400, 'Invalid status. Valid values: pending, accepted, in_progress, completed_by_provider, confirmed_by_user, disputed, cancelled, all');
+            }
+            query.status = status;
+        }
+        
+        // Sorting
+        const sortField = req.query.sortBy || 'createdAt';
+        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+        const sort = { [sortField]: sortOrder };
+        
+        // Get orders with pagination
+        const [orders, totalCount] = await Promise.all([
+            Job.find(query)
+                .populate('provider', 'userId')
+                .populate({
+                    path: 'provider',
+                    populate: {
+                        path: 'userId',
+                        select: 'name email profilePicture phoneNumber'
+                    }
+                })
+                .populate('service', 'name icon price description averageRating')
+                .populate('customer', 'name email profilePicture')
+                .sort(sort)
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Job.countDocuments(query)
+        ]);
+        
+        // Get status counts for filters
+        const statusCounts = await Job.aggregate([
+            { $match: { customer: userId } },
+            { $group: {
+                _id: '$status',
+                count: { $sum: 1 }
+            }}
+        ]);
+        
+        const counts = {
+            all: totalCount,
+            pending: 0,
+            accepted: 0,
+            rejected_by_provider: 0,
+            in_progress: 0,
+            completed_by_provider: 0,
+            confirmed_by_user: 0,
+            disputed: 0,
+            cancelled: 0
+        };
+        
+        statusCounts.forEach(item => {
+            if (counts.hasOwnProperty(item._id)) {
+                counts[item._id] = item.count;
+            }
+        });
+        
+        // Format orders
+        const formattedOrders = orders.map(order => ({
+            _id: order._id,
+            orderId: order.orderId,
+            status: order.status,
+            paymentStatus: order.paymentStatus,
+            amount: order.amount,
+            service: {
+                _id: order.service?._id,
+                name: order.service?.name,
+                icon: order.service?.icon,
+                price: order.service?.price,
+                description: order.service?.description,
+                averageRating: order.service?.averageRating || 0
+            },
+            provider: {
+                _id: order.provider?._id,
+                name: order.provider?.userId?.name,
+                email: order.provider?.userId?.email,
+                phone: order.provider?.userId?.phoneNumber,
+                profilePicture: order.provider?.userId?.profilePicture
+            },
+            timestamps: {
+                createdAt: order.createdAt,
+                acceptedAt: order.acceptedAt,
+                startedAt: order.startedAt,
+                completedByProviderAt: order.completedByProviderAt,
+                confirmedByUserAt: order.confirmedByUserAt,
+                disputedAt: order.disputedAt,
+                cancelledAt: order.cancelledAt
+            },
+            rejectionReason: order.rejectionReason,
+            disputeReason: order.disputeReason
+        }));
+        
+        const totalPages = Math.ceil(totalCount / limit);
+        
+        res.status(200).json(
+            new ApiResponse(200, {
+                orders: formattedOrders,
+                counts: counts,
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalItems: totalCount,
+                    itemsPerPage: limit,
+                    hasNextPage: page < totalPages,
+                    hasPrevPage: page > 1
+                },
+                currentFilter: {
+                    status: status || 'all'
+                }
+            }, 'Orders retrieved successfully')
+        );
+    } catch (error) {
+        console.error('Error getting orders:', error);
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        } else {
+            res.status(500).json(new ApiResponse(500, null, error.message));
+        }
+    }
+};
+
+export const getOrderById = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        const userId = req.user._id;
+        console.log('Fetching order details for jobId:', jobId, 'userId:', userId);
+        if (!mongoose.Types.ObjectId.isValid(jobId)) {
+            throw new ApiError(400, 'Invalid job ID format');
+        }
+        
+        // Find order by _id (not orderId field)
+        const order = await Job.findOne({ _id: jobId, customer: userId })
+            .populate('provider', 'userId')
+            .populate({
+                path: 'provider',
+                populate: {
+                    path: 'userId',
+                    select: 'name email profileImage phoneNumber'
+                }
+            })
+            .populate('service', 'name icon price description averageRating')
+            .populate('customer', 'name email profileImage')
+            .lean();
+        
+        if (!order) {
+            throw new ApiError(404, 'Order not found');
+        }
+        
+        // Get payment details
+        const payment = await Payment.findOne({ jobId: order._id }).lean();
+        
+        const formattedOrder = {
+            _id: order._id,
+            orderId: order.orderId,
+            status: order.status,
+            paymentStatus: order.paymentStatus,
+            amount: order.amount,
+            service: {
+                _id: order.service?._id,
+                name: order.service?.name,
+                icon: order.service?.icon,
+                price: order.service?.price,
+                description: order.service?.description,
+                averageRating: order.service?.averageRating || 0
+            },
+            provider: {
+                _id: order.provider?._id,
+                name: order.provider?.userId?.name,
+                email: order.provider?.userId?.email,
+                phone: order.provider?.userId?.phoneNumber,
+                profileImage: order.provider?.userId?.profileImage
+            },
+            customer: {
+                _id: order.customer?._id,
+                name: order.customer?.name,
+                email: order.customer?.email,
+                profileImage: order.customer?.profileImage
+            },
+            payment: payment ? {
+                _id: payment._id,
+                totalAmount: payment.totalAmount,
+                platformFee: payment.platformFee,
+                providerAmount: payment.providerAmount,
+                paymentStatus: payment.paymentStatus,
+                escrowStatus: payment.escrowStatus,
+                createdAt: payment.createdAt
+            } : null,
+            timestamps: {
+                createdAt: order.createdAt,
+                acceptedAt: order.acceptedAt,
+                startedAt: order.startedAt,
+                completedByProviderAt: order.completedByProviderAt,
+                confirmedByUserAt: order.confirmedByUserAt,
+                disputedAt: order.disputedAt,
+                cancelledAt: order.cancelledAt
+            },
+            rejectionReason: order.rejectionReason,
+            disputeReason: order.disputeReason
+        };
+        
+        res.status(200).json(
+            new ApiResponse(200, formattedOrder, 'Order details retrieved successfully')
+        );
+    } catch (error) {
+        console.error('Error getting order:', error);
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        } else {
+            res.status(500).json(new ApiResponse(500, null, error.message));
+        }
+    }
+};

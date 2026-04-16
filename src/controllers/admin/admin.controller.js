@@ -211,7 +211,7 @@ export const getAllProviders = async (req, res) => {
                 name: provider.userId?.name,
                 email: provider.userId?.email,
                 phone: provider.userId?.phoneNumber,
-                profileImage: provider.userId?.profileImage,
+                profilePicture: provider.userId?.profilePicture,
                 isActive: provider.userId?.isActive
             },
             category: provider.Category,

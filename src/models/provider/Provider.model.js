@@ -34,27 +34,56 @@ const providerSchema = new mongoose.Schema(
       },
     ],
 
-    /** Document URLs: external or from this API (/uploads/...) after Multer save on PATCH profile. */
+    // Track service orders count
+    serviceOrdersCount: {
+      type: Map,
+      of: Number,
+      default: {},
+    },
+    
+    totalOrdersCompleted: {
+      type: Number,
+      default: 0
+    },
+
     facePhoto: { type: String, trim: true, default: '' },
     idCardFront: { type: String, trim: true, default: '' },
     idCardBack: { type: String, trim: true, default: '' },
     certificates: { type: [String], default: [] },
 
-   
     isKycCompleted: {
       type: Boolean,
       default: false
     },
     kycStatus: {
       type: String,
-      enum: ["pending", "approved", "suspended","rejected"],
+      enum: ["pending", "approved", "suspended", "rejected"],
       default: "pending"
+    },
+    bankDetails: {
+      accountHolderName: { type: String, trim: true, default: '' },
+      bankName: { type: String, trim: true, default: '' },
+      accountNumber: { type: String, trim: true, default: '' },
+      branchCode: { type: String, trim: true, default: '' },
     },
   },
   { timestamps: true }
 );
 
-/** Avoid persisting invalid GeoJSON (2dsphere rejects Point without coordinates). */
+// Method to increment service order count
+providerSchema.methods.incrementServiceOrderCount = async function(serviceId) {
+  const currentCount = this.serviceOrdersCount.get(serviceId.toString()) || 0;
+  this.serviceOrdersCount.set(serviceId.toString(), currentCount + 1);
+  this.totalOrdersCompleted += 1;
+  await this.save();
+  return this.serviceOrdersCount.get(serviceId.toString());
+};
+
+// Method to get service order count
+providerSchema.methods.getServiceOrderCount = function(serviceId) {
+  return this.serviceOrdersCount.get(serviceId.toString()) || 0;
+};
+
 providerSchema.pre('save', function clearInvalidLocation() {
   const loc = this.location;
   if (loc && typeof loc === 'object' && (!Array.isArray(loc.coordinates) || loc.coordinates.length !== 2)) {
@@ -90,5 +119,5 @@ providerSchema.set('toObject', {
   },
 });
 
- const Provider = mongoose.models.Provider || mongoose.model('Provider', providerSchema);
+const Provider = mongoose.models.Provider || mongoose.model('Provider', providerSchema);
 export default Provider;

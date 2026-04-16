@@ -7,9 +7,9 @@ import { server } from './src/app.js';
 
 // Bind to 0.0.0.0 for Render deployment
 server.listen(config.port, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${config.port}`);
+  console.log(` Server running on port ${config.port}`);
   if (process.env.NODE_ENV !== 'production') {
-    console.log(`🌐 Accessible on network: http://${getLocalIp()}:${config.port}`);
+    console.log(` Accessible on network: http://${getLocalIp()}:${config.port}`);
   }
 });
 

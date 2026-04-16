@@ -146,7 +146,7 @@ export const getServiceReviews = async (req, res) => {
         // Get reviews with pagination
         const [reviews, totalCount] = await Promise.all([
             Review.find({ service: serviceId })
-                .populate('userId', 'name email profileImage')
+                .populate('userId', 'name email profilePicture')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit)
@@ -206,7 +206,7 @@ export const getReviewById = async (req, res) => {
         const { reviewId } = req.params;
 
         const review = await Review.findById(reviewId)
-            .populate('userId', 'name email profileImage')
+            .populate('userId', 'name email profilePicture')
             .populate('service', 'name icon price');
 
         if (!review) {
