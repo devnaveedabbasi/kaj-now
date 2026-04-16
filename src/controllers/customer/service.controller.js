@@ -129,7 +129,7 @@ export const getServicesByCategory = async (req, res) => {
                     path: 'providerId',
                     populate: {
                         path: 'userId',
-                        select: 'name email profileImage'
+                        select: 'name email profilePicture'
                     }
                 })
                 .sort(sort)
@@ -151,7 +151,7 @@ export const getServicesByCategory = async (req, res) => {
                 _id: request.providerId?._id,
                 name: request.providerId?.userId?.name,
                 email: request.providerId?.userId?.email,
-                profileImage: request.providerId?.userId?.profileImage
+                profilePicture: request.providerId?.userId?.profilePicture
             },
             requestStatus: request.status,
             requestedAt: request.requestedAt
@@ -262,7 +262,7 @@ export const getAllApprovedServices = async (req, res) => {
                     path: 'providerId',
                     populate: {
                         path: 'userId',
-                        select: 'name email profileImage phoneNumber'
+                        select: 'name email profilePicture phone'
                     }
                 })
                 .sort(sort)
@@ -289,8 +289,8 @@ export const getAllApprovedServices = async (req, res) => {
                 _id: request.providerId?._id,
                 name: request.providerId?.userId?.name,
                 email: request.providerId?.userId?.email,
-                phone: request.providerId?.userId?.phoneNumber,
-                profileImage: request.providerId?.userId?.profileImage
+                phone: request.providerId?.userId?.phone,
+                profilePicture: request.providerId?.userId?.profilePicture
             },
             requestId: request._id,
             requestedAt: request.requestedAt,
@@ -323,5 +323,140 @@ export const getAllApprovedServices = async (req, res) => {
     } catch (error) {
         console.error('Error getting approved services:', error);
         res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+};
+
+
+
+export const getApprovedServiceById = async (req, res) => {
+    try {
+        const { serviceId } = req.params;
+        
+        // Validate ObjectId
+        if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+            throw new ApiError(400, 'Invalid service ID format');
+        }
+        
+        // Find approved service request
+        const serviceRequest = await ServiceRequest.findOne({
+            serviceId: serviceId,
+            status: 'approved'
+        })
+        .populate('serviceId', 'name icon price description averageRating userId')
+        .populate('categoryId', 'name icon description')
+        .populate({
+            path: 'providerId',
+            populate: {
+                path: 'userId',
+                select: 'name email profilePicture phone'
+            }
+        })
+        .lean();
+        
+        if (!serviceRequest) {
+            throw new ApiError(404, 'Approved service not found');
+        }
+        
+        // Get all reviews for this service
+        const Review = mongoose.model('Review');
+        const reviews = await Review.find({ service: serviceId })
+            .populate('userId', 'name email profilePicture')
+            .sort({ createdAt: -1 })
+            .lean();
+        
+        // Calculate rating distribution
+        const ratingDistribution = {
+            1: 0, 2: 0, 3: 0, 4: 0, 5: 0
+        };
+        
+        let totalRating = 0;
+        if (reviews && reviews.length > 0) {
+            reviews.forEach(review => {
+                if (review.rating >= 1 && review.rating <= 5) {
+                    ratingDistribution[review.rating]++;
+                    totalRating += review.rating;
+                }
+            });
+        }
+        
+        const averageRating = reviews.length > 0 ? totalRating / reviews.length : 0;
+        
+        // Format reviews
+        const formattedReviews = reviews.map(review => ({
+            _id: review._id,
+            rating: review.rating,
+            comment: review.comment,
+            user: {
+                _id: review.userId?._id,
+                name: review.userId?.name || 'Anonymous',
+                email: review.userId?.email,
+                profilePicture: review.userId?.profilePicture || null
+            },
+            createdAt: review.createdAt,
+            updatedAt: review.updatedAt
+        }));
+        
+        // Get similar services (same category)
+        const similarServices = await ServiceRequest.find({
+            categoryId: serviceRequest.categoryId._id,
+            status: 'approved',
+            serviceId: { $ne: serviceId }
+        })
+        .populate('serviceId', 'name icon price description averageRating')
+        .limit(5)
+        .lean();
+        
+        const formattedSimilarServices = similarServices.map(s => ({
+            _id: s.serviceId?._id,
+            name: s.serviceId?.name,
+            icon: s.serviceId?.icon,
+            price: s.serviceId?.price,
+            averageRating: s.serviceId?.averageRating || 0
+        }));
+        
+        // Format response
+        const response = {
+            _id: serviceRequest.serviceId?._id,
+            name: serviceRequest.serviceId?.name,
+            icon: serviceRequest.serviceId?.icon,
+            price: serviceRequest.serviceId?.price,
+            description: serviceRequest.serviceId?.description || 'No description available',
+            averageRating: serviceRequest.serviceId?.averageRating || averageRating,
+            totalReviews: reviews.length,
+            ratingDistribution: ratingDistribution,
+            category: {
+                _id: serviceRequest.categoryId?._id,
+                name: serviceRequest.categoryId?.name,
+                icon: serviceRequest.categoryId?.icon,
+                description: serviceRequest.categoryId?.description
+            },
+            provider: {
+                _id: serviceRequest.providerId?._id,
+                name: serviceRequest.providerId?.userId?.name,
+                email: serviceRequest.providerId?.userId?.email,
+                phone: serviceRequest.providerId?.userId?.phone||'',
+                profilePicture: serviceRequest.providerId?.userId?.profilePicture||''
+            },
+            reviews: formattedReviews,
+            similarServices: formattedSimilarServices,
+            stats: {
+                totalApprovedProviders: 1,
+                averageRating: serviceRequest.serviceId?.averageRating || averageRating,
+                totalRatings: reviews.length
+            },
+            requestedAt: serviceRequest.requestedAt,
+            approvedAt: serviceRequest.reviewedAt
+        };
+        
+        res.status(200).json(
+            new ApiResponse(200, response, 'Approved service details retrieved successfully')
+        );
+    } catch (error) {
+        console.error('Error getting approved service:', error);
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        } else {
+            res.status(500).json(new ApiResponse(500, null, error.message));
+        }
     }
 };

@@ -9,5 +9,5 @@ const router = Router();
 router.get('/', asyncHandler(Customer.getAllApprovedServices));
 router.get('/all-categories', asyncHandler(Customer.getAllCategories));
 router.get('/services-by-cat/:categoryId', asyncHandler(Customer.getServicesByCategory));
-
+router.get('/:serviceId', asyncHandler(Customer.getApprovedServiceById));
 export default router;
