@@ -641,13 +641,35 @@ export const updateProfile = async (req, res) => {
     // Update User fields (jo bhi aayega update karo)
     if (name) user.name = name.trim();
     
+    // Handle email update with OTP
     if (email && email !== user.email) {
       const existingUser = await User.findOne({ email, _id: { $ne: userId } });
       if (existingUser) {
         throw new ApiError(409, 'Email already registered');
       }
-      user.email = email.toLowerCase();
+      
+      const otp = generateNumericOtp(4);
+      console.log('Generated OTP for email update:', otp); // Debug log
+      user.pendingNewEmail = email.toLowerCase();
+      user.emailUpdateOTP = otp;
+      user.emailUpdateOtpExpiry = new Date(Date.now() + OTP_TTL_MS);
+      user.emailUpdateOtpAttempts = 0;
+      user.isEmailChanged = false;
+      
+      await sendOtpEmail(email, otp);
+      
+      await user.save();
+      await provider.save();
+      
+      return res.status(200).json(
+        new ApiResponse(200, {
+          message: `OTP sent to ${email}. Please verify to complete email update.`,
+          pendingEmail: email,
+          requiresOtpVerification: true
+        }, 'OTP sent for email verification')
+      );
     }
+
 
     if (phone) {
       if (!phoneRegex.test(phone)) {
@@ -683,8 +705,9 @@ export const updateProfile = async (req, res) => {
       if (isNaN(parsedDob.getTime())) {
         throw new ApiError(400, 'Invalid date');
       }
+      if(dob==!provider.dob){
       provider.dob = parsedDob;
-    }
+    }}
 
     if (permanentAddress) {
       provider.permanentAddress = permanentAddress;
@@ -749,13 +772,13 @@ export const verifyEmailUpdate = async (req, res) => {
     }
 
     if (user.emailUpdateOtpAttempts >= MAX_OTP_ATTEMPTS) {
-      throw new ApiError(429, 'Too many failed attempts');
+      throw new ApiError(429, 'Too many failed attempts. Request new OTP');
     }
 
     if (!user.emailUpdateOTP || !user.emailUpdateOtpExpiry || user.emailUpdateOtpExpiry < new Date()) {
       user.emailUpdateOtpAttempts += 1;
       await user.save();
-      throw new ApiError(410, 'OTP expired');
+      throw new ApiError(410, 'OTP expired. Please request new OTP');
     }
 
     if (user.emailUpdateOTP !== otp) {
@@ -771,11 +794,13 @@ export const verifyEmailUpdate = async (req, res) => {
     user.emailUpdateOtpExpiry = null;
     user.emailUpdateOtpAttempts = 0;
     user.isEmailVerified = true;
+    user.isEmailChanged = true;
     await user.save();
 
     res.status(200).json(
       new ApiResponse(200, {
-        email: user.email
+        email: user.email,
+        isEmailVerified: user.isEmailVerified
       }, 'Email updated successfully')
     );
   } catch (error) {

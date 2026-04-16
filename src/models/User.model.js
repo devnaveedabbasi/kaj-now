@@ -39,10 +39,7 @@ const userSchema = new mongoose.Schema({
   
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
-  fcmToken: {
-    type: String,
-    default: null
-  },
+ 
 
   
 }, {
@@ -74,6 +71,7 @@ userSchema.add({
   emailUpdateOTP: { type: String, default: null },
   emailUpdateOtpExpiry: { type: Date, default: null },
   emailUpdateOtpAttempts: { type: Number, default: 0 },
+  isEmailChanged:{ type: Boolean, default: false }
 });
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);

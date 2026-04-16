@@ -20,5 +20,5 @@ router.post('/change-password', authenticateToken, requireRole('provider'), asyn
 router.get('/me', authenticateToken, requireRole('provider'), asyncHandler(providerAuth.me));
 
 router.patch('/update-profile', authenticateToken, requireRole('provider'), uploadProviderProfilePicture, asyncHandler(providerAuth.updateProfile));
-router.post('/verify-email-update',asyncHandler(providerAuth.verifyEmailUpdate));
+router.post('/verify-email-update',authenticateToken,asyncHandler(providerAuth.verifyEmailUpdate));
 export default router;
