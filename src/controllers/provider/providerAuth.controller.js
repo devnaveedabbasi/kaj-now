@@ -661,8 +661,8 @@ export const updateProfile = async (req, res) => {
       await user.save();
       await provider.save();
       
-      return res.status(200).json(
-        new ApiResponse(200, {
+      return res.status(202).json(
+        new ApiResponse(202, {
           message: `OTP sent to ${email}. Please verify to complete email update.`,
           pendingEmail: email,
           requiresOtpVerification: true

@@ -6,78 +6,65 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import User from '../../models/User.model.js';
 import Provider from '../../models/provider/Provider.model.js';
+
 export const getAllCategories = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
-
         const search = req.query.search || '';
-
-        let query = {
-            isActive: true,
-            isDeleted: false
-        };
-
-        if (search) {
-            query.name = { $regex: search, $options: 'i' };
-        }
-
         const sortField = req.query.sortBy || 'createdAt';
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
         const sort = { [sortField]: sortOrder };
 
-        const [categories, totalCount] = await Promise.all([
-            Category.find(query)
-                .sort(sort)
-                .skip(skip)
-                .limit(limit)
-                .lean(),
-            Category.countDocuments(query)
-        ]);
-
-        // Get approved service count for each category from ServiceRequest
-        const categoriesWithCount = await Promise.all(
-            categories.map(async (category) => {
-                const activeServiceCount = await ServiceRequest.countDocuments({
-                    categoryId: category._id,
-                    status: 'approved'
-                });
-
-                return {
-                    ...category,
-                    activeServiceCount
-                };
-            })
-        );
-
-        const totalPages = Math.ceil(totalCount / limit);
-
-        res.status(200).json(
-            new ApiResponse(200, {
-                categories: categoriesWithCount,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit,
-                    hasNextPage: page < totalPages,
-                    hasPrevPage: page > 1
+        // Sirf approved service requests ki saari categories
+        const aggregationPipeline = [
+            { $match: { status: 'approved' } },  // Sirf approved
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: 'categoryId',
+                    foreignField: '_id',
+                    as: 'category'
                 }
-            }, 'Categories retrieved successfully')
-        );
+            },
+            { $unwind: '$category' },
+            ...(search ? [{ $match: { 'category.name': { $regex: search, $options: 'i' } } }] : []),
+            {
+                $group: {
+                    _id: '$categoryId',
+                    name: { $first: '$category.name' },
+                    icon: { $first: '$category.icon' },
+                    createdAt: { $first: '$category.createdAt' },
+                    updatedAt: { $first: '$category.updatedAt' },
+                    serviceCount: { $sum: 1 }
+                }
+            },
+            { $sort: sort },
+            { $skip: skip },
+            { $limit: limit }
+        ];
+
+        const categories = await ServiceRequest.aggregate(aggregationPipeline);
+        
+        res.status(200).json({
+            success: true,
+            categories: categories,
+            pagination: {
+                page: page,
+                limit: limit
+            }
+        });
     } catch (error) {
-        console.error('Error getting categories:', error);
-        res.status(500).json(new ApiResponse(500, null, error.message));
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
+// Get services by category from ServiceRequest only
 export const getServicesByCategory = async (req, res) => {
     try {
         const { categoryId } = req.params;
-        console.log('Fetching services for category ID:', categoryId);
 
-        // Validate ObjectId
         if (!mongoose.Types.ObjectId.isValid(categoryId)) {
             throw new ApiError(400, 'Invalid category ID format');
         }
@@ -88,77 +75,70 @@ export const getServicesByCategory = async (req, res) => {
 
         const search = req.query.search || '';
 
-        // Check if category exists and is active
-        const category = await Category.findOne({
-            _id: categoryId,
-            isActive: true,
-            isDeleted: false
-        });
+        // Simple pipeline - sirf serviceRequest aur service
+        let pipeline = [
+            { 
+                $match: { 
+                    categoryId: new mongoose.Types.ObjectId(categoryId), 
+                    status: 'approved' 
+                } 
+            },
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            { $unwind: '$service' }
+        ];
 
-        if (!category) {
-            throw new ApiError(404, 'Category not found');
-        }
-
-        // Build query for approved service requests in this category
-        let query = {
-            categoryId: categoryId,
-            status: 'approved'  // Only get approved services
-        };
-
-        // If search is provided, search in service name
+        // Search filter agar hai
         if (search) {
-            // First find services matching the search
-            const matchingServices = await Service.find({
-                name: { $regex: search, $options: 'i' },
-                isDeleted: false,
-                isActive: true
-            }).select('_id');
-
-            const serviceIds = matchingServices.map(s => s._id);
-            query.serviceId = { $in: serviceIds };
+            pipeline.push({
+                $match: {
+                    'service.name': { $regex: search, $options: 'i' }
+                }
+            });
         }
 
+        // Count total
+        const countPipeline = [...pipeline];
+        countPipeline.push({ $count: 'total' });
+
+        // Add sorting and pagination
         const sortField = req.query.sortBy || 'requestedAt';
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-        const sort = { [sortField]: sortOrder };
+        
+        pipeline.push(
+            { $sort: { [sortField]: sortOrder } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $project: {
+                    _id: '$service._id',
+                    name: '$service.name',
+                    icon: '$service.icon',
+                    price: '$service.price',
+                    description: '$service.description',
+                    averageRating: '$service.averageRating',
+                    requestStatus: '$status',
+                    requestedAt: '$requestedAt'
+                }
+            }
+        );
 
-        const [serviceRequests, totalCount] = await Promise.all([
-            ServiceRequest.find(query)
-                .populate('serviceId', 'name icon price description averageRating')
-                .populate('providerId', 'userId')
-                .populate({
-                    path: 'providerId',
-                    populate: {
-                        path: 'userId',
-                        select: 'name email profilePicture'
-                    }
-                })
-                .sort(sort)
-                .skip(skip)
-                .limit(limit)
-                .lean(),
-            ServiceRequest.countDocuments(query)
+        const [services, totalCountResult] = await Promise.all([
+            ServiceRequest.aggregate(pipeline),
+            ServiceRequest.aggregate(countPipeline)
         ]);
 
-        // Format the response
-        const formattedServices = serviceRequests.map(request => ({
-            _id: request.serviceId?._id,
-            name: request.serviceId?.name,
-            icon: request.serviceId?.icon,
-            price: request.serviceId?.price,
-            description: request.serviceId?.description,
-            averageRating: request.serviceId?.averageRating || 0,
-            provider: {
-                _id: request.providerId?._id,
-                name: request.providerId?.userId?.name,
-                email: request.providerId?.userId?.email,
-                profilePicture: request.providerId?.userId?.profilePicture|| null
-            },
-            requestStatus: request.status,
-            requestedAt: request.requestedAt
-        }));
-
+        const totalCount = totalCountResult[0]?.total || 0;
         const totalPages = Math.ceil(totalCount / limit);
+
+        // Category details lelo
+        const category = await Category.findById(categoryId);
 
         res.status(200).json(
             new ApiResponse(200, {
@@ -168,7 +148,7 @@ export const getServicesByCategory = async (req, res) => {
                     icon: category.icon,
                     description: category.description
                 },
-                services: formattedServices,
+                services: services,
                 pagination: {
                     currentPage: page,
                     totalPages,
@@ -180,7 +160,7 @@ export const getServicesByCategory = async (req, res) => {
             }, 'Services retrieved successfully')
         );
     } catch (error) {
-        console.error('Error getting services by category:', error);
+        console.error('Error:', error);
         if (error instanceof ApiError) {
             res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
         } else {
@@ -189,7 +169,7 @@ export const getServicesByCategory = async (req, res) => {
     }
 };
 
-
+// Get all approved services from ServiceRequest only
 export const getAllApprovedServices = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -199,110 +179,148 @@ export const getAllApprovedServices = async (req, res) => {
         const search = req.query.search || '';
         const { categoryId, minPrice, maxPrice } = req.query;
 
-        // Build query for approved service requests
-        let query = { status: 'approved' };
+        // Build pipeline
+        let pipeline = [
+            { $match: { status: 'approved' } },
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            { $unwind: '$service' },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: 'categoryId',
+                    foreignField: '_id',
+                    as: 'category'
+                }
+            },
+            { $unwind: '$category' },
+            {
+                $lookup: {
+                    from: 'providers',
+                    localField: 'providerId',
+                    foreignField: '_id',
+                    as: 'provider'
+                }
+            },
+            { $unwind: '$provider' },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'provider.userId',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' }
+        ];
 
-        // Filter by category
+        // Apply filters
+        let matchConditions = {};
+
         if (categoryId && mongoose.Types.ObjectId.isValid(categoryId)) {
-            query.categoryId = categoryId;
+            matchConditions['category._id'] = new mongoose.Types.ObjectId(categoryId);
         }
 
-        // Build service filter conditions
-        let serviceFilter = {};
         if (search) {
-            serviceFilter.name = { $regex: search, $options: 'i' };
+            matchConditions['service.name'] = { $regex: search, $options: 'i' };
         }
+
         if (minPrice !== undefined || maxPrice !== undefined) {
-            serviceFilter.price = {};
+            matchConditions['service.price'] = {};
             if (minPrice !== undefined && minPrice !== '') {
-                serviceFilter.price.$gte = Number(minPrice);
+                matchConditions['service.price'].$gte = Number(minPrice);
             }
             if (maxPrice !== undefined && maxPrice !== '') {
-                serviceFilter.price.$lte = Number(maxPrice);
+                matchConditions['service.price'].$lte = Number(maxPrice);
             }
         }
 
-        // First find services matching the filter
-        const matchingServices = await Service.find(serviceFilter).select('_id');
-        if (matchingServices.length > 0 || Object.keys(serviceFilter).length === 0) {
-            if (matchingServices.length > 0) {
-                query.serviceId = { $in: matchingServices.map(s => s._id) };
-            }
-        } else {
-            // No matching services found
-            return res.status(200).json(
-                new ApiResponse(200, {
-                    services: [],
-                    pagination: {
-                        currentPage: page,
-                        totalPages: 0,
-                        totalItems: 0,
-                        itemsPerPage: limit
-                    },
-                    filters: {
-                        search: search || null,
-                        categoryId: categoryId || null,
-                        minPrice: minPrice || null,
-                        maxPrice: maxPrice || null
-                    }
-                }, 'No services found')
-            );
+        if (Object.keys(matchConditions).length > 0) {
+            pipeline.push({ $match: matchConditions });
         }
 
-        // Sorting
-        const sortField = req.query.sortBy || 'createdAt';
+        // Add sorting
+        const sortField = req.query.sortBy || 'requestedAt';
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-        const sort = { [sortField]: sortOrder };
+        pipeline.push({ $sort: { [sortField]: sortOrder } });
 
-        // Get approved service requests with pagination
-        const [serviceRequests, totalCount] = await Promise.all([
-            ServiceRequest.find(query)
-                .populate('serviceId', 'name icon price description averageRating userId')
-                .populate('categoryId', 'name icon')
-                .populate({
-                    path: 'providerId',
-                    populate: {
-                        path: 'userId',
-                        select: 'name email profilePicture phone'
-                    }
-                })
-                .sort(sort)
-                .skip(skip)
-                .limit(limit)
-                .lean(),
-            ServiceRequest.countDocuments(query)
+        // Add pagination
+        pipeline.push(
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $project: {
+                    _id: '$service._id',
+                    name: '$service.name',
+                    icon: '$service.icon',
+                    price: '$service.price',
+                    description: '$service.description',
+                    averageRating: '$service.averageRating',
+                    category: {
+                        _id: '$category._id',
+                        name: '$category.name',
+                        icon: '$category.icon'
+                    },
+                    provider: {
+                        _id: '$provider._id',
+                        name: '$user.name',
+                        email: '$user.email',
+                        phone: '$user.phone',
+                        profilePicture: '$user.profilePicture'
+                    },
+                    requestId: '$_id',
+                    requestedAt: '$requestedAt',
+                    approvedAt: '$reviewedAt'
+                }
+            }
+        );
+
+        // Count total for pagination
+        let countPipeline = [
+            { $match: { status: 'approved' } },
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            { $unwind: '$service' },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: 'categoryId',
+                    foreignField: '_id',
+                    as: 'category'
+                }
+            },
+            { $unwind: '$category' }
+        ];
+
+        if (Object.keys(matchConditions).length > 0) {
+            countPipeline.push({ $match: matchConditions });
+        }
+
+        countPipeline.push({ $count: 'total' });
+
+        const [services, totalCountResult] = await Promise.all([
+            ServiceRequest.aggregate(pipeline),
+            ServiceRequest.aggregate(countPipeline)
         ]);
 
-        // Format the response
-        const formattedServices = serviceRequests.map(request => ({
-            _id: request.serviceId?._id,
-            name: request.serviceId?.name,
-            icon: request.serviceId?.icon,
-            price: request.serviceId?.price,
-            description: request.serviceId?.description || 'No description available',
-            averageRating: request.serviceId?.averageRating || 0,
-            category: {
-                _id: request.categoryId?._id,
-                name: request.categoryId?.name,
-                icon: request.categoryId?.icon
-            },
-            provider: {
-                _id: request.providerId?._id,
-                name: request.providerId?.userId?.name,
-                email: request.providerId?.userId?.email,
-                phone: request.providerId?.userId?.phone,
-                profilePicture: request.providerId?.userId?.profilePicture
-            },
-            requestId: request._id,
-            requestedAt: request.requestedAt,
-            approvedAt: request.reviewedAt
-        }));
-
+        const totalCount = totalCountResult[0]?.total || 0;
         const totalPages = Math.ceil(totalCount / limit);
 
         res.status(200).json(
             new ApiResponse(200, {
-                services: formattedServices,
+                services: services,
                 pagination: {
                     currentPage: page,
                     totalPages,
@@ -327,127 +345,165 @@ export const getAllApprovedServices = async (req, res) => {
     }
 };
 
-
-
+// Get single approved service by ID from ServiceRequest only
 export const getApprovedServiceById = async (req, res) => {
     try {
         const { serviceId } = req.params;
 
-        // Validate ObjectId
         if (!mongoose.Types.ObjectId.isValid(serviceId)) {
             throw new ApiError(400, 'Invalid service ID format');
         }
 
-        // Find approved service request
-        const serviceRequest = await ServiceRequest.findOne({
-            serviceId: serviceId,
-            status: 'approved'
-        })
-            .populate('serviceId', 'name icon price description averageRating userId')
-            .populate('categoryId', 'name icon description')
-            .populate({
-                path: 'providerId',
-                populate: {
-                    path: 'userId',
-                    select: 'name email profilePicture phone'
+        // Find service request with all details
+        const serviceRequest = await ServiceRequest.aggregate([
+            {
+                $match: {
+                    serviceId: new mongoose.Types.ObjectId(serviceId),
+                    status: 'approved'
                 }
-            })
-            .lean();
+            },
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            { $unwind: '$service' },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: 'categoryId',
+                    foreignField: '_id',
+                    as: 'category'
+                }
+            },
+            { $unwind: '$category' },
+            {
+                $lookup: {
+                    from: 'providers',
+                    localField: 'providerId',
+                    foreignField: '_id',
+                    as: 'provider'
+                }
+            },
+            { $unwind: '$provider' },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'provider.userId',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            {
+                $project: {
+                    _id: '$service._id',
+                    name: '$service.name',
+                    icon: '$service.icon',
+                    price: '$service.price',
+                    description: '$service.description',
+                    averageRating: '$service.averageRating',
+                    category: {
+                        _id: '$category._id',
+                        name: '$category.name',
+                        icon: '$category.icon',
+                        description: '$category.description'
+                    },
+                    provider: {
+                        _id: '$provider._id',
+                        name: '$user.name',
+                        email: '$user.email',
+                        phone: '$user.phone',
+                        profilePicture: '$user.profilePicture',
+                        location: '$provider.location'
+                    },
+                    requestedAt: '$requestedAt',
+                    approvedAt: '$reviewedAt'
+                }
+            }
+        ]);
 
-        if (!serviceRequest) {
+        if (!serviceRequest || serviceRequest.length === 0) {
             throw new ApiError(404, 'Approved service not found');
         }
 
-        // Get all reviews for this service
+        // Get reviews for this service
         const Review = mongoose.model('Review');
-        const reviews = await Review.find({ service: serviceId })
+        const reviews = await Review.find({ service: new mongoose.Types.ObjectId(serviceId) })
             .populate('userId', 'name email profilePicture')
             .sort({ createdAt: -1 })
             .lean();
 
         // Calculate rating distribution
-        const ratingDistribution = {
-            1: 0, 2: 0, 3: 0, 4: 0, 5: 0
-        };
-
+        const ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
         let totalRating = 0;
-        if (reviews && reviews.length > 0) {
-            reviews.forEach(review => {
-                if (review.rating >= 1 && review.rating <= 5) {
-                    ratingDistribution[review.rating]++;
-                    totalRating += review.rating;
-                }
-            });
-        }
+
+        reviews.forEach(review => {
+            if (review.rating >= 1 && review.rating <= 5) {
+                ratingDistribution[review.rating]++;
+                totalRating += review.rating;
+            }
+        });
 
         const averageRating = reviews.length > 0 ? totalRating / reviews.length : 0;
 
-        // Format reviews
-        const formattedReviews = reviews.map(review => ({
-            _id: review._id,
-            rating: review.rating,
-            comment: review.comment,
-            user: {
-                _id: review.userId?._id,
-                name: review.userId?.name || 'Anonymous',
-                email: review.userId?.email,
-                profilePicture: review.userId?.profilePicture || null
+        // Get similar services from ServiceRequest
+        const similarServices = await ServiceRequest.aggregate([
+            {
+                $match: {
+                    categoryId: serviceRequest[0].category._id,
+                    status: 'approved',
+                    serviceId: { $ne: new mongoose.Types.ObjectId(serviceId) }
+                }
             },
-            createdAt: review.createdAt,
-            updatedAt: review.updatedAt
-        }));
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            { $unwind: '$service' },
+            { $limit: 5 },
+            {
+                $project: {
+                    _id: '$service._id',
+                    name: '$service.name',
+                    icon: '$service.icon',
+                    price: '$service.price',
+                    averageRating: '$service.averageRating'
+                }
+            }
+        ]);
 
-        // Get similar services (same category)
-        const similarServices = await ServiceRequest.find({
-            categoryId: serviceRequest.categoryId._id,
-            status: 'approved',
-            serviceId: { $ne: serviceId }
-        })
-            .populate('serviceId', 'name icon price description averageRating')
-            .limit(5)
-            .lean();
-
-        const formattedSimilarServices = similarServices.map(s => ({
-            _id: s.serviceId?._id,
-            name: s.serviceId?.name,
-            icon: s.serviceId?.icon,
-            price: s.serviceId?.price,
-            averageRating: s.serviceId?.averageRating || 0
-        }));
-
-        // Format response
         const response = {
-            _id: serviceRequest.serviceId?._id,
-            name: serviceRequest.serviceId?.name,
-            icon: serviceRequest.serviceId?.icon,
-            price: serviceRequest.serviceId?.price,
-            description: serviceRequest.serviceId?.description || 'No description available',
-            averageRating: serviceRequest.serviceId?.averageRating || averageRating,
+            ...serviceRequest[0],
             totalReviews: reviews.length,
-            ratingDistribution: ratingDistribution,
-            category: {
-                _id: serviceRequest.categoryId?._id,
-                name: serviceRequest.categoryId?.name,
-                icon: serviceRequest.categoryId?.icon,
-                description: serviceRequest.categoryId?.description
-            },
-            provider: {
-                _id: serviceRequest.providerId?._id,
-                name: serviceRequest.providerId?.userId?.name,
-                email: serviceRequest.providerId?.userId?.email,
-                phone: serviceRequest.providerId?.userId?.phone || '',
-                profilePicture: serviceRequest.providerId?.userId?.profilePicture || '',
-                location: serviceRequest.providerId?.location || null
-            },
-            reviews: formattedReviews,
-            similarServices: formattedSimilarServices,
+            ratingDistribution,
+            averageRating: serviceRequest[0].averageRating || averageRating,
+            reviews: reviews.map(review => ({
+                _id: review._id,
+                rating: review.rating,
+                comment: review.comment,
+                user: {
+                    _id: review.userId?._id,
+                    name: review.userId?.name || 'Anonymous',
+                    email: review.userId?.email,
+                    profilePicture: review.userId?.profilePicture || null
+                },
+                createdAt: review.createdAt,
+                updatedAt: review.updatedAt
+            })),
+            similarServices,
             stats: {
                 totalApprovedProviders: 1,
-                averageRating: serviceRequest.serviceId?.averageRating || averageRating,
+                averageRating: serviceRequest[0].averageRating || averageRating,
                 totalRatings: reviews.length
-            },
-            requestedAt: serviceRequest.requestedAt,
-            approvedAt: serviceRequest.reviewedAt
+            }
         };
 
         res.status(200).json(
@@ -463,35 +519,24 @@ export const getApprovedServiceById = async (req, res) => {
     }
 };
 
-
-
-
-
-
-
-
-// Helper function to calculate distance between two coordinates (in km)
+// Helper function to calculate distance
 function calculateDistance(coord1, coord2) {
     if (!coord1 || !coord2) return null;
-
     const [lng1, lat1] = coord1;
     const [lng2, lat2] = coord2;
-
-    const R = 6371; // Earth's radius in km
+    const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lng2 - lng1) * Math.PI / 180;
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
         Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
         Math.sin(dLon / 2) * Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 }
 
-// Get recommended services based on user's location (within 1km) and high ratings
+// Get recommended services from ServiceRequest only
 export const getRecommendedServices = async (req, res) => {
     try {
-        // Check if user is authenticated
         if (!req.user || !req.user._id) {
             return res.status(200).json(
                 new ApiResponse(200, {
@@ -500,116 +545,121 @@ export const getRecommendedServices = async (req, res) => {
                 }, 'Login to see personalized recommendations')
             );
         }
-        
+
         const userId = req.user._id;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
-        
-        // Get user's location
+
         const user = await User.findById(userId).select('location');
         let userCoordinates = null;
-        
+
         if (user?.location?.coordinates && user.location.coordinates.length === 2) {
-            userCoordinates = user.location.coordinates; // [lng, lat]
+            userCoordinates = user.location.coordinates;
         }
-        
-        // Build query for approved services
-        let query = { status: 'approved' };
-        
-        // If user has location, find providers within 1km
-        let nearbyProviderIds = [];
-        if (userCoordinates) {
-            try {
-                const nearbyProviders = await Provider.find({
-                    location: {
-                        $near: {
-                            $geometry: {
-                                type: 'Point',
-                                coordinates: userCoordinates
-                            },
-                            $maxDistance: 1000 // 1km in meters
-                        }
-                    }
-                }).select('_id');
-                
-                nearbyProviderIds = nearbyProviders.map(p => p._id);
-                
-                if (nearbyProviderIds.length > 0) {
-                    query.providerId = { $in: nearbyProviderIds };
+
+        // Build pipeline for approved services
+        let pipeline = [
+            { $match: { status: 'approved' } },
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
                 }
-            } catch (geoError) {
-                console.error('Geo query error (index might be missing):', geoError);
-                // If geo query fails, just get all approved services
-                // Don't filter by location
+            },
+            { $unwind: '$service' },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: 'categoryId',
+                    foreignField: '_id',
+                    as: 'category'
+                }
+            },
+            { $unwind: '$category' },
+            {
+                $lookup: {
+                    from: 'providers',
+                    localField: 'providerId',
+                    foreignField: '_id',
+                    as: 'provider'
+                }
+            },
+            { $unwind: '$provider' },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'provider.userId',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' }
+        ];
+
+        // Filter by rating 4+
+        pipeline.push({
+            $match: {
+                $or: [
+                    { 'service.averageRating': { $gte: 4 } },
+                    { 'service.averageRating': 0 }
+                ]
             }
-        }
-        
-        // Get all approved services
-        let serviceRequests = await ServiceRequest.find(query)
-            .populate('serviceId', 'name icon price description averageRating reviews')
-            .populate('categoryId', 'name icon')
-            .populate({
-                path: 'providerId',
-                populate: {
-                    path: 'userId',
-                    select: 'name email profilePicture phone location'
-                }
-            })
-            .lean();
-        
-        // Filter by rating (4+ stars) and calculate distances
-        let filteredServices = serviceRequests
-            .filter(req => req.serviceId && (req.serviceId.averageRating >= 4 || req.serviceId.averageRating === 0))
-            .map(request => {
-                let distance = null;
-                let isNearby = false;
-                
-                if (userCoordinates && request.providerId?.userId?.location?.coordinates) {
-                    distance = calculateDistance(
-                        userCoordinates,
-                        request.providerId.userId.location.coordinates
-                    );
-                    isNearby = distance <= 1; // Within 1km
-                }
-                
-                return {
-                    _id: request.serviceId._id,
-                    name: request.serviceId.name,
-                    icon: request.serviceId.icon,
-                    price: request.serviceId.price,
-                    description: request.serviceId.description?.substring(0, 100),
-                    averageRating: request.serviceId.averageRating || 0,
-                    totalReviews: request.serviceId.reviews?.length || 0,
-                    category: {
-                        _id: request.categoryId?._id,
-                        name: request.categoryId?.name,
-                        icon: request.categoryId?.icon
-                    },
-                    provider: {
-                        _id: request.providerId?._id,
-                        name: request.providerId?.userId?.name,
-                        email: request.providerId?.userId?.email,
-                        phone: request.providerId?.userId?.phone,
-                        profilePicture: request.providerId?.userId?.profilePicture
-                    },
-                    isNearby: isNearby,
-                    distance: distance ? distance.toFixed(2) : null
-                };
-            });
-        
-        // Sort: Nearby services first, then by rating
+        });
+
+        let serviceRequests = await ServiceRequest.aggregate(pipeline);
+
+        // Calculate distances and filter
+        let filteredServices = serviceRequests.map(request => {
+            let distance = null;
+            let isNearby = false;
+
+            if (userCoordinates && request.user?.location?.coordinates) {
+                distance = calculateDistance(
+                    userCoordinates,
+                    request.user.location.coordinates
+                );
+                isNearby = distance <= 1;
+            }
+
+            return {
+                _id: request.service._id,
+                name: request.service.name,
+                icon: request.service.icon,
+                price: request.service.price,
+                description: request.service.description?.substring(0, 100),
+                averageRating: request.service.averageRating || 0,
+                totalReviews: request.service.reviews?.length || 0,
+                category: {
+                    _id: request.category._id,
+                    name: request.category.name,
+                    icon: request.category.icon
+                },
+                provider: {
+                    _id: request.provider._id,
+                    name: request.user.name,
+                    email: request.user.email,
+                    phone: request.user.phone,
+                    profilePicture: request.user.profilePicture
+                },
+                isNearby: isNearby,
+                distance: distance ? distance.toFixed(2) : null
+            };
+        });
+
+        // Sort and paginate
         filteredServices.sort((a, b) => {
             if (a.isNearby && !b.isNearby) return -1;
             if (!a.isNearby && b.isNearby) return 1;
             return b.averageRating - a.averageRating;
         });
-        
-        // Apply pagination
+
         const totalCount = filteredServices.length;
         const paginatedServices = filteredServices.slice(skip, skip + limit);
         const totalPages = Math.ceil(totalCount / limit);
-        
+
         res.status(200).json(
             new ApiResponse(200, {
                 services: paginatedServices,
@@ -634,23 +684,15 @@ export const getRecommendedServices = async (req, res) => {
     }
 };
 
-// Get popular services (highly rated and most requested)
+// Get popular services from ServiceRequest only
 export const getPopularServices = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        // Get popular services based on:
-        // 1. High average rating
-        // 2. Number of reviews
-        // 3. Number of times requested/approved
-
         const popularServices = await ServiceRequest.aggregate([
-            // Match only approved services
             { $match: { status: 'approved' } },
-
-            // Lookup service details
             {
                 $lookup: {
                     from: 'services',
@@ -660,8 +702,6 @@ export const getPopularServices = async (req, res) => {
                 }
             },
             { $unwind: '$service' },
-
-            // Lookup category
             {
                 $lookup: {
                     from: 'categories',
@@ -671,8 +711,6 @@ export const getPopularServices = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
-
-            // Lookup provider
             {
                 $lookup: {
                     from: 'providers',
@@ -682,8 +720,6 @@ export const getPopularServices = async (req, res) => {
                 }
             },
             { $unwind: '$provider' },
-
-            // Lookup user details
             {
                 $lookup: {
                     from: 'users',
@@ -693,28 +729,30 @@ export const getPopularServices = async (req, res) => {
                 }
             },
             { $unwind: '$user' },
-
-            // Calculate popularity score
+            {
+                $group: {
+                    _id: '$serviceId',
+                    service: { $first: '$service' },
+                    category: { $first: '$category' },
+                    provider: { $first: '$provider' },
+                    user: { $first: '$user' },
+                    requestCount: { $sum: 1 }
+                }
+            },
             {
                 $addFields: {
                     popularityScore: {
                         $add: [
-                            { $multiply: ['$service.averageRating', 2] }, // Rating weight 2
-                            { $divide: [{ $size: { $ifNull: ['$service.reviews', []] } }, 5] }, // Reviews weight
-                            1 // Base score for being approved
+                            { $multiply: ['$service.averageRating', 2] },
+                            { $divide: [{ $size: { $ifNull: ['$service.reviews', []] } }, 5] },
+                            { $divide: ['$requestCount', 10] }
                         ]
                     }
                 }
             },
-
-            // Sort by popularity score
             { $sort: { popularityScore: -1, 'service.averageRating': -1 } },
-
-            // Pagination
             { $skip: skip },
             { $limit: limit },
-
-            // Project final fields
             {
                 $project: {
                     _id: '$service._id',
@@ -724,6 +762,7 @@ export const getPopularServices = async (req, res) => {
                     description: '$service.description',
                     averageRating: '$service.averageRating',
                     totalReviews: { $size: { $ifNull: ['$service.reviews', []] } },
+                    requestCount: 1,
                     popularityScore: 1,
                     category: {
                         _id: '$category._id',
@@ -736,13 +775,12 @@ export const getPopularServices = async (req, res) => {
                         email: '$user.email',
                         phone: '$user.phone',
                         profilePicture: '$user.profilePicture'
-                    },
-                    totalRequests: 1
+                    }
                 }
             }
         ]);
 
-        // Get total count for pagination
+        // Get total count of unique services
         const totalCountResult = await ServiceRequest.aggregate([
             { $match: { status: 'approved' } },
             { $group: { _id: '$serviceId' } },
@@ -771,63 +809,109 @@ export const getPopularServices = async (req, res) => {
     }
 };
 
-// Alternative: Simple popular services based on rating only
+// Get top rated services from ServiceRequest only
 export const getTopRatedServices = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        let query = { status: 'approved' };
-
-        const [serviceRequests, totalCount] = await Promise.all([
-            ServiceRequest.find(query)
-                .populate('serviceId', 'name icon price description averageRating reviews')
-                .populate('categoryId', 'name icon')
-                .populate({
-                    path: 'providerId',
-                    populate: {
-                        path: 'userId',
-                        select: 'name email profilePicture phone'
+        const pipeline = [
+            { $match: { status: 'approved' } },
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            { $unwind: '$service' },
+            {
+                $match: {
+                    'service.averageRating': { $gte: 3 }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: 'categoryId',
+                    foreignField: '_id',
+                    as: 'category'
+                }
+            },
+            { $unwind: '$category' },
+            {
+                $lookup: {
+                    from: 'providers',
+                    localField: 'providerId',
+                    foreignField: '_id',
+                    as: 'provider'
+                }
+            },
+            { $unwind: '$provider' },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'provider.userId',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            { $sort: { 'service.averageRating': -1, 'service.reviews': -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $project: {
+                    _id: '$service._id',
+                    name: '$service.name',
+                    icon: '$service.icon',
+                    price: '$service.price',
+                    description: '$service.description',
+                    averageRating: '$service.averageRating',
+                    totalReviews: { $size: { $ifNull: ['$service.reviews', []] } },
+                    category: {
+                        _id: '$category._id',
+                        name: '$category.name',
+                        icon: '$category.icon'
+                    },
+                    provider: {
+                        _id: '$provider._id',
+                        name: '$user.name',
+                        email: '$user.email',
+                        phone: '$user.phone',
+                        profilePicture: '$user.profilePicture'
                     }
-                })
-                .sort({ 'serviceId.averageRating': -1, 'serviceId.reviews': -1 })
-                .skip(skip)
-                .limit(limit)
-                .lean(),
-            ServiceRequest.countDocuments(query)
+                }
+            }
+        ];
+
+        const [services, totalCountResult] = await Promise.all([
+            ServiceRequest.aggregate(pipeline),
+            ServiceRequest.aggregate([
+                { $match: { status: 'approved' } },
+                {
+                    $lookup: {
+                        from: 'services',
+                        localField: 'serviceId',
+                        foreignField: '_id',
+                        as: 'service'
+                    }
+                },
+                { $unwind: '$service' },
+                { $match: { 'service.averageRating': { $gte: 3 } } },
+                { $group: { _id: '$serviceId' } },
+                { $count: 'total' }
+            ])
         ]);
 
-        // Filter services with at least 3+ rating and format
-        const formattedServices = serviceRequests
-            .filter(req => req.serviceId && req.serviceId.averageRating >= 3)
-            .map(request => ({
-                _id: request.serviceId._id,
-                name: request.serviceId.name,
-                icon: request.serviceId.icon,
-                price: request.serviceId.price,
-                description: request.serviceId.description?.substring(0, 100),
-                averageRating: request.serviceId.averageRating || 0,
-                totalReviews: request.serviceId.reviews?.length || 0,
-                category: {
-                    _id: request.categoryId?._id,
-                    name: request.categoryId?.name,
-                    icon: request.categoryId?.icon
-                },
-                provider: {
-                    _id: request.providerId?._id,
-                    name: request.providerId?.userId?.name,
-                    email: request.providerId?.userId?.email,
-                    phone: request.providerId?.userId?.phone,
-                    profilePicture: request.providerId?.userId?.profilePicture
-                }
-            }));
-
+        const totalCount = totalCountResult[0]?.total || 0;
         const totalPages = Math.ceil(totalCount / limit);
 
         res.status(200).json(
             new ApiResponse(200, {
-                services: formattedServices,
+                services: services,
                 pagination: {
                     currentPage: page,
                     totalPages,
