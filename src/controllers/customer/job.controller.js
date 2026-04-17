@@ -18,6 +18,185 @@ async function generateOrderId() {
   return `OR-${padded}`;
 }
 
+
+// Card validation helper functions
+const validateCardNumber = (cardNumber) => {
+  // Remove spaces and dashes
+  const cleaned = cardNumber.replace(/[\s-]/g, '');
+
+  // Check length (13-19 digits)
+  if (cleaned.length < 13 || cleaned.length > 19) {
+    return { isValid: false, message: 'Card number must be between 13-19 digits' };
+  }
+
+  // Check if only numbers
+  if (!/^\d+$/.test(cleaned)) {
+    return { isValid: false, message: 'Card number must contain only digits' };
+  }
+
+  // Luhn algorithm (basic card validation)
+  let sum = 0;
+  let isEven = false;
+  for (let i = cleaned.length - 1; i >= 0; i--) {
+    let digit = parseInt(cleaned.charAt(i), 10);
+    if (isEven) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    isEven = !isEven;
+  }
+
+  if (sum % 10 !== 0) {
+    return { isValid: false, message: 'Invalid card number' };
+  }
+
+  // Detect card type
+  let cardType = 'unknown';
+  if (/^4/.test(cleaned)) cardType = 'visa';
+  else if (/^5[1-5]/.test(cleaned)) cardType = 'mastercard';
+  else if (/^3[47]/.test(cleaned)) cardType = 'amex';
+  else if (/^6(?:011|5)/.test(cleaned)) cardType = 'discover';
+
+  return { isValid: true, cardType, cleaned };
+};
+
+const validateExpiryDate = (expiryDate) => {
+  // Check format MM/YY or MM/YYYY
+  const patterns = [
+    /^(0[1-9]|1[0-2])\/(\d{2})$/,
+    /^(0[1-9]|1[0-2])\/(\d{4})$/
+  ];
+
+  let match = null;
+  for (const pattern of patterns) {
+    match = expiryDate.match(pattern);
+    if (match) break;
+  }
+
+  if (!match) {
+    return { isValid: false, message: 'Invalid expiry date format. Use MM/YY or MM/YYYY' };
+  }
+
+  const month = parseInt(match[1], 10);
+  let year = parseInt(match[2], 10);
+
+  // Convert 2-digit year to 4-digit
+  if (year < 100) year += 2000;
+
+  // Check month range
+  if (month < 1 || month > 12) {
+    return { isValid: false, message: 'Invalid month' };
+  }
+
+  // Check if card is expired
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+
+  if (year < currentYear || (year === currentYear && month < currentMonth)) {
+    return { isValid: false, message: 'Card has expired' };
+  }
+
+  // Check if expiry is too far (max 10 years)
+  if (year > currentYear + 10) {
+    return { isValid: false, message: 'Invalid expiry date' };
+  }
+
+  return { isValid: true, month, year };
+};
+
+const validateCVV = (cvv, cardType = null) => {
+  // Remove spaces
+  const cleaned = cvv.replace(/\s/g, '');
+
+  // Check if only numbers
+  if (!/^\d+$/.test(cleaned)) {
+    return { isValid: false, message: 'CVV must contain only digits' };
+  }
+
+  // Amex has 4-digit CVV, others have 3-digit
+  const expectedLength = cardType === 'amex' ? 4 : 3;
+
+  if (cleaned.length !== expectedLength) {
+    return {
+      isValid: false,
+      message: `CVV must be ${expectedLength} digits for ${cardType === 'amex' ? 'American Express' : 'this card type'}`
+    };
+  }
+
+  return { isValid: true, cvv: cleaned };
+};
+
+const validateCardHolderName = (name) => {
+  if (!name || name.trim().length < 3) {
+    return { isValid: false, message: 'Card holder name is required (min 3 characters)' };
+  }
+
+  if (name.trim().length > 50) {
+    return { isValid: false, message: 'Card holder name is too long' };
+  }
+
+  // Allow letters, spaces, dots, and hyphens
+  if (!/^[a-zA-Z\s\.\-]+$/.test(name.trim())) {
+    return { isValid: false, message: 'Invalid card holder name' };
+  }
+
+  return { isValid: true, name: name.trim() };
+};
+
+// Main validation function
+const validateCardDetails = (cardDetails) => {
+  const errors = [];
+
+  // Check if cardDetails exists
+  if (!cardDetails) {
+    throw new ApiError(400, 'Card details are required');
+  }
+
+  // Validate card number
+  const cardNumberValidation = validateCardNumber(cardDetails.cardNumber);
+  if (!cardNumberValidation.isValid) {
+    errors.push(cardNumberValidation.message);
+  }
+
+  // Validate expiry date
+  const expiryValidation = validateExpiryDate(cardDetails.expiryDate);
+  if (!expiryValidation.isValid) {
+    errors.push(expiryValidation.message);
+  }
+
+  // Validate CVV (with card type from card number validation)
+  const cvvValidation = validateCVV(cardDetails.cvv, cardNumberValidation.cardType);
+  if (!cvvValidation.isValid) {
+    errors.push(cvvValidation.message);
+  }
+
+  // Validate card holder name
+  const nameValidation = validateCardHolderName(cardDetails.cardHolderName);
+  if (!nameValidation.isValid) {
+    errors.push(nameValidation.message);
+  }
+
+  if (errors.length > 0) {
+    throw new ApiError(400, errors.join('. '));
+  }
+
+  return {
+    isValid: true,
+    cardNumber: cardNumberValidation.cleaned,
+    cardType: cardNumberValidation.cardType,
+    expiryMonth: expiryValidation.month,
+    expiryYear: expiryValidation.year,
+    cvv: cvvValidation.cvv,
+    cardHolderName: nameValidation.name
+  };
+};
+
+
+
+
+
 export async function bookJob(req, res) {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -40,13 +219,8 @@ export async function bookJob(req, res) {
       throw new ApiError(400, 'Complete card details required');
     }
 
-    if (cardDetails.cardNumber.length < 13 || cardDetails.cardNumber.length > 19) {
-      throw new ApiError(400, 'Invalid card number');
-    }
+    const validatedCard = validateCardDetails(cardDetails);
 
-    if (cardDetails.cvv.length < 3 || cardDetails.cvv.length > 4) {
-      throw new ApiError(400, 'Invalid CVV');
-    }
 
     // ── Fetch documents ─────────────────────────────────────────────────────
     const user = await User.findById(userId).session(session);
@@ -74,7 +248,7 @@ export async function bookJob(req, res) {
       status: { $in: ['pending', 'accepted', 'in_progress'] },
     }).session(session);
 
-    if (existingJob) throw new ApiError(400, 'Already have an active booking for this service');
+    if (existingJob) throw new ApiError(408, 'Already have an active booking for this service');
 
     // ── Price calculation ───────────────────────────────────────────────────
     const servicePrice = service.price;
@@ -113,7 +287,7 @@ export async function bookJob(req, res) {
           servicePrice,
           platformFee,
           totalAmount: servicePrice,
-          providerAmount,        // stored but released only after customer confirmation
+          providerAmount,
           paymentGateway: 'sslcommerz',
           paymentStatus: 'pending',
           escrowStatus: 'pending',
@@ -165,14 +339,14 @@ export async function bookJob(req, res) {
 
     if (!adminWallet) {
       [adminWallet] = await Wallet.create(
-        [{ 
-          userId: adminUser._id, 
-          role: 'admin', 
-          balance: 0, 
-          totalEarnings: 0, 
-          totalPlatformFees: 0, 
+        [{
+          userId: adminUser._id,
+          role: 'admin',
+          balance: 0,
+          totalEarnings: 0,
+          totalPlatformFees: 0,
           totalHeld: 0,  // NEW: Track held amount
-          isActive: true 
+          isActive: true
         }],
         { session }
       );
@@ -470,240 +644,242 @@ export async function rejectCompletion(req, res) {
 
 
 export const getMyOrders = async (req, res) => {
-    try {
-        const userId = req.user._id;
-        
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-        
-        const { status } = req.query; // pending, accepted, in_progress, completed_by_provider, confirmed_by_user, disputed, cancelled
-        
-        // Build query
-        let query = { customer: userId };
-        
-        // If status provided, filter by it, otherwise get all
-        if (status && status !== 'all') {
-            const validStatuses = [
-                'pending', 
-                'accepted', 
-                'rejected_by_provider',
-                'in_progress', 
-                'completed_by_provider', 
-                'confirmed_by_user', 
-                'disputed', 
-                'cancelled'
-            ];
-            if (!validStatuses.includes(status)) {
-                throw new ApiError(400, 'Invalid status. Valid values: pending, accepted, in_progress, completed_by_provider, confirmed_by_user, disputed, cancelled, all');
-            }
-            query.status = status;
-        }
-        
-        // Sorting
-        const sortField = req.query.sortBy || 'createdAt';
-        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-        const sort = { [sortField]: sortOrder };
-        
-        // Get orders with pagination
-        const [orders, totalCount] = await Promise.all([
-            Job.find(query)
-                .populate('provider', 'userId')
-                .populate({
-                    path: 'provider',
-                    populate: {
-                        path: 'userId',
-                        select: 'name email profilePicture phoneNumber'
-                    }
-                })
-                .populate('service', 'name icon price description averageRating')
-                .populate('customer', 'name email profilePicture')
-                .sort(sort)
-                .skip(skip)
-                .limit(limit)
-                .lean(),
-            Job.countDocuments(query)
-        ]);
-        
-        // Get status counts for filters
-        const statusCounts = await Job.aggregate([
-            { $match: { customer: userId } },
-            { $group: {
-                _id: '$status',
-                count: { $sum: 1 }
-            }}
-        ]);
-        
-        const counts = {
-            all: totalCount,
-            pending: 0,
-            accepted: 0,
-            rejected_by_provider: 0,
-            in_progress: 0,
-            completed_by_provider: 0,
-            confirmed_by_user: 0,
-            disputed: 0,
-            cancelled: 0
-        };
-        
-        statusCounts.forEach(item => {
-            if (counts.hasOwnProperty(item._id)) {
-                counts[item._id] = item.count;
-            }
-        });
-        
-        // Format orders
-        const formattedOrders = orders.map(order => ({
-            _id: order._id,
-            orderId: order.orderId,
-            status: order.status,
-            paymentStatus: order.paymentStatus,
-            amount: order.amount,
-            service: {
-                _id: order.service?._id,
-                name: order.service?.name,
-                icon: order.service?.icon,
-                price: order.service?.price,
-                description: order.service?.description,
-                averageRating: order.service?.averageRating || 0
-            },
-            provider: {
-                _id: order.provider?._id,
-                name: order.provider?.userId?.name,
-                email: order.provider?.userId?.email,
-                phone: order.provider?.userId?.phoneNumber,
-                profilePicture: order.provider?.userId?.profilePicture
-            },
-            timestamps: {
-                createdAt: order.createdAt,
-                acceptedAt: order.acceptedAt,
-                startedAt: order.startedAt,
-                completedByProviderAt: order.completedByProviderAt,
-                confirmedByUserAt: order.confirmedByUserAt,
-                disputedAt: order.disputedAt,
-                cancelledAt: order.cancelledAt
-            },
-            rejectionReason: order.rejectionReason,
-            disputeReason: order.disputeReason
-        }));
-        
-        const totalPages = Math.ceil(totalCount / limit);
-        
-        res.status(200).json(
-            new ApiResponse(200, {
-                orders: formattedOrders,
-                counts: counts,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit,
-                    hasNextPage: page < totalPages,
-                    hasPrevPage: page > 1
-                },
-                currentFilter: {
-                    status: status || 'all'
-                }
-            }, 'Orders retrieved successfully')
-        );
-    } catch (error) {
-        console.error('Error getting orders:', error);
-        if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        } else {
-            res.status(500).json(new ApiResponse(500, null, error.message));
-        }
+  try {
+    const userId = req.user._id;
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const { status } = req.query; // pending, accepted, in_progress, completed_by_provider, confirmed_by_user, disputed, cancelled
+
+    // Build query
+    let query = { customer: userId };
+
+    // If status provided, filter by it, otherwise get all
+    if (status && status !== 'all') {
+      const validStatuses = [
+        'pending',
+        'accepted',
+        'rejected_by_provider',
+        'in_progress',
+        'completed_by_provider',
+        'confirmed_by_user',
+        'disputed',
+        'cancelled'
+      ];
+      if (!validStatuses.includes(status)) {
+        throw new ApiError(400, 'Invalid status. Valid values: pending, accepted, in_progress, completed_by_provider, confirmed_by_user, disputed, cancelled, all');
+      }
+      query.status = status;
     }
+
+    // Sorting
+    const sortField = req.query.sortBy || 'createdAt';
+    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+    const sort = { [sortField]: sortOrder };
+
+    // Get orders with pagination
+    const [orders, totalCount] = await Promise.all([
+      Job.find(query)
+        .populate('provider', 'userId')
+        .populate({
+          path: 'provider',
+          populate: {
+            path: 'userId',
+            select: 'name email profilePicture phoneNumber'
+          }
+        })
+        .populate('service', 'name icon price description averageRating')
+        .populate('customer', 'name email profilePicture')
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Job.countDocuments(query)
+    ]);
+
+    // Get status counts for filters
+    const statusCounts = await Job.aggregate([
+      { $match: { customer: userId } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const counts = {
+      all: totalCount,
+      pending: 0,
+      accepted: 0,
+      rejected_by_provider: 0,
+      in_progress: 0,
+      completed_by_provider: 0,
+      confirmed_by_user: 0,
+      disputed: 0,
+      cancelled: 0
+    };
+
+    statusCounts.forEach(item => {
+      if (counts.hasOwnProperty(item._id)) {
+        counts[item._id] = item.count;
+      }
+    });
+
+    // Format orders
+    const formattedOrders = orders.map(order => ({
+      _id: order._id,
+      orderId: order.orderId,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      amount: order.amount,
+      service: {
+        _id: order.service?._id,
+        name: order.service?.name,
+        icon: order.service?.icon,
+        price: order.service?.price,
+        description: order.service?.description,
+        averageRating: order.service?.averageRating || 0
+      },
+      provider: {
+        _id: order.provider?._id,
+        name: order.provider?.userId?.name,
+        email: order.provider?.userId?.email,
+        phone: order.provider?.userId?.phoneNumber,
+        profilePicture: order.provider?.userId?.profilePicture
+      },
+      timestamps: {
+        createdAt: order.createdAt,
+        acceptedAt: order.acceptedAt,
+        startedAt: order.startedAt,
+        completedByProviderAt: order.completedByProviderAt,
+        confirmedByUserAt: order.confirmedByUserAt,
+        disputedAt: order.disputedAt,
+        cancelledAt: order.cancelledAt
+      },
+      rejectionReason: order.rejectionReason,
+      disputeReason: order.disputeReason
+    }));
+
+    const totalPages = Math.ceil(totalCount / limit);
+
+    res.status(200).json(
+      new ApiResponse(200, {
+        orders: formattedOrders,
+        counts: counts,
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalItems: totalCount,
+          itemsPerPage: limit,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1
+        },
+        currentFilter: {
+          status: status || 'all'
+        }
+      }, 'Orders retrieved successfully')
+    );
+  } catch (error) {
+    console.error('Error getting orders:', error);
+    if (error instanceof ApiError) {
+      res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    } else {
+      res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+  }
 };
 
 export const getOrderById = async (req, res) => {
-    try {
-        const { jobId } = req.params;
-        const userId = req.user._id;
-        console.log('Fetching order details for jobId:', jobId, 'userId:', userId);
-        if (!mongoose.Types.ObjectId.isValid(jobId)) {
-            throw new ApiError(400, 'Invalid job ID format');
-        }
-        
-        // Find order by _id (not orderId field)
-        const order = await Job.findOne({ _id: jobId, customer: userId })
-            .populate('provider', 'userId')
-            .populate({
-                path: 'provider',
-                populate: {
-                    path: 'userId',
-                    select: 'name email profileImage phoneNumber'
-                }
-            })
-            .populate('service', 'name icon price description averageRating')
-            .populate('customer', 'name email profileImage')
-            .lean();
-        
-        if (!order) {
-            throw new ApiError(404, 'Order not found');
-        }
-        
-        // Get payment details
-        const payment = await Payment.findOne({ jobId: order._id }).lean();
-        
-        const formattedOrder = {
-            _id: order._id,
-            orderId: order.orderId,
-            status: order.status,
-            paymentStatus: order.paymentStatus,
-            amount: order.amount,
-            service: {
-                _id: order.service?._id,
-                name: order.service?.name,
-                icon: order.service?.icon,
-                price: order.service?.price,
-                description: order.service?.description,
-                averageRating: order.service?.averageRating || 0
-            },
-            provider: {
-                _id: order.provider?._id,
-                name: order.provider?.userId?.name,
-                email: order.provider?.userId?.email,
-                phone: order.provider?.userId?.phoneNumber,
-                profileImage: order.provider?.userId?.profileImage
-            },
-            customer: {
-                _id: order.customer?._id,
-                name: order.customer?.name,
-                email: order.customer?.email,
-                profileImage: order.customer?.profileImage
-            },
-            payment: payment ? {
-                _id: payment._id,
-                totalAmount: payment.totalAmount,
-                platformFee: payment.platformFee,
-                providerAmount: payment.providerAmount,
-                paymentStatus: payment.paymentStatus,
-                escrowStatus: payment.escrowStatus,
-                createdAt: payment.createdAt
-            } : null,
-            timestamps: {
-                createdAt: order.createdAt,
-                acceptedAt: order.acceptedAt,
-                startedAt: order.startedAt,
-                completedByProviderAt: order.completedByProviderAt,
-                confirmedByUserAt: order.confirmedByUserAt,
-                disputedAt: order.disputedAt,
-                cancelledAt: order.cancelledAt
-            },
-            rejectionReason: order.rejectionReason,
-            disputeReason: order.disputeReason
-        };
-        
-        res.status(200).json(
-            new ApiResponse(200, formattedOrder, 'Order details retrieved successfully')
-        );
-    } catch (error) {
-        console.error('Error getting order:', error);
-        if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        } else {
-            res.status(500).json(new ApiResponse(500, null, error.message));
-        }
+  try {
+    const { jobId } = req.params;
+    const userId = req.user._id;
+    console.log('Fetching order details for jobId:', jobId, 'userId:', userId);
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+      throw new ApiError(400, 'Invalid job ID format');
     }
+
+    // Find order by _id (not orderId field)
+    const order = await Job.findOne({ _id: jobId, customer: userId })
+      .populate('provider', 'userId')
+      .populate({
+        path: 'provider',
+        populate: {
+          path: 'userId',
+          select: 'name email profileImage phoneNumber'
+        }
+      })
+      .populate('service', 'name icon price description averageRating')
+      .populate('customer', 'name email profileImage')
+      .lean();
+
+    if (!order) {
+      throw new ApiError(404, 'Order not found');
+    }
+
+    // Get payment details
+    const payment = await Payment.findOne({ jobId: order._id }).lean();
+
+    const formattedOrder = {
+      _id: order._id,
+      orderId: order.orderId,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      amount: order.amount,
+      service: {
+        _id: order.service?._id,
+        name: order.service?.name,
+        icon: order.service?.icon,
+        price: order.service?.price,
+        description: order.service?.description,
+        averageRating: order.service?.averageRating || 0
+      },
+      provider: {
+        _id: order.provider?._id,
+        name: order.provider?.userId?.name,
+        email: order.provider?.userId?.email,
+        phone: order.provider?.userId?.phoneNumber,
+        profileImage: order.provider?.userId?.profileImage
+      },
+      customer: {
+        _id: order.customer?._id,
+        name: order.customer?.name,
+        email: order.customer?.email,
+        profileImage: order.customer?.profileImage
+      },
+      payment: payment ? {
+        _id: payment._id,
+        totalAmount: payment.totalAmount,
+        platformFee: payment.platformFee,
+        providerAmount: payment.providerAmount,
+        paymentStatus: payment.paymentStatus,
+        escrowStatus: payment.escrowStatus,
+        createdAt: payment.createdAt
+      } : null,
+      timestamps: {
+        createdAt: order.createdAt,
+        acceptedAt: order.acceptedAt,
+        startedAt: order.startedAt,
+        completedByProviderAt: order.completedByProviderAt,
+        confirmedByUserAt: order.confirmedByUserAt,
+        disputedAt: order.disputedAt,
+        cancelledAt: order.cancelledAt
+      },
+      rejectionReason: order.rejectionReason,
+      disputeReason: order.disputeReason
+    };
+
+    res.status(200).json(
+      new ApiResponse(200, formattedOrder, 'Order details retrieved successfully')
+    );
+  } catch (error) {
+    console.error('Error getting order:', error);
+    if (error instanceof ApiError) {
+      res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    } else {
+      res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+  }
 };

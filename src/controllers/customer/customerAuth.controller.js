@@ -436,3 +436,154 @@ export const updateMyLocation = async (req, res) => {
 };
 
 
+
+
+export const updateProfile = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { name, email, phone } = req.body;
+    const files = req.files || {};
+
+    // Find user and provider
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    // Update User fields (jo bhi aayega update karo)
+    if (name) user.name = name.trim();
+    
+    // Handle email update with OTP
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email, _id: { $ne: userId } });
+      if (existingUser) {
+        throw new ApiError(409, 'Email already registered');
+      }
+      
+      const otp = generateNumericOtp(4);
+      console.log('Generated OTP for email update:', otp); // Debug log
+      user.pendingNewEmail = email.toLowerCase();
+      user.emailUpdateOTP = otp;
+      user.emailUpdateOtpExpiry = new Date(Date.now() + OTP_TTL_MS);
+      user.emailUpdateOtpAttempts = 0;
+      user.isEmailChanged = false;
+      
+      await sendOtpEmail(email, otp);
+      
+      await user.save();
+      await provider.save();
+      
+      return res.status(200).json(
+        new ApiResponse(200, {
+          message: `OTP sent to ${email}. Please verify to complete email update.`,
+          pendingEmail: email,
+          requiresOtpVerification: true
+        }, 'OTP sent for email verification')
+      );
+    }
+
+
+    if (phone) {
+      if (!phoneRegex.test(phone)) {
+        throw new ApiError(400, 'Invalid phone number');
+      }
+      const existingUser = await User.findOne({ phone, _id: { $ne: userId } });
+      if (existingUser) {
+        throw new ApiError(409, 'Phone number already registered');
+      }
+      user.phone = phone;
+    }
+
+    // Update profile picture
+    if (files.profilePicture && files.profilePicture[0]) {
+      if (user.profilePicture) {
+        const oldPath = path.join(process.cwd(), 'public', user.profilePicture.replace(process.env.BASE_URL, ''));
+        deleteFile(oldPath);
+      }
+      user.profilePicture = `/uploads/users/${files.profilePicture[0].filename}`;
+    }
+
+    await user.save();
+
+    res.status(200).json(
+      new ApiResponse(200, {
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          profilePicture: user.profilePicture
+        },
+      }, 'Profile updated successfully')
+    );
+  } catch (error) {
+    // Clean up uploaded file on error
+    if (req.files?.profilePicture) {
+      deleteFile(req.files.profilePicture[0].path);
+    }
+    
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500).json(new ApiResponse(500, null, error.message));
+  }
+};
+
+export const verifyEmailUpdate = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { otp } = req.body;
+
+    if (!otp) {
+      throw new ApiError(400, 'OTP is required');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    if (!user.pendingNewEmail) {
+      throw new ApiError(400, 'No pending email update');
+    }
+
+    if (user.emailUpdateOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      throw new ApiError(429, 'Too many failed attempts. Request new OTP');
+    }
+
+    if (!user.emailUpdateOTP || !user.emailUpdateOtpExpiry || user.emailUpdateOtpExpiry < new Date()) {
+      user.emailUpdateOtpAttempts += 1;
+      await user.save();
+      throw new ApiError(410, 'OTP expired. Please request new OTP');
+    }
+
+    if (user.emailUpdateOTP !== otp) {
+      user.emailUpdateOtpAttempts += 1;
+      await user.save();
+      throw new ApiError(400, 'Invalid OTP');
+    }
+
+    // Update email
+    user.email = user.pendingNewEmail;
+    user.pendingNewEmail = null;
+    user.emailUpdateOTP = null;
+    user.emailUpdateOtpExpiry = null;
+    user.emailUpdateOtpAttempts = 0;
+    user.isEmailVerified = true;
+    user.isEmailChanged = true;
+    await user.save();
+
+    res.status(200).json(
+      new ApiResponse(200, {
+        email: user.email,
+        isEmailVerified: user.isEmailVerified
+      }, 'Email updated successfully')
+    );
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500).json(new ApiResponse(500, null, error.message));
+  }
+};
+
