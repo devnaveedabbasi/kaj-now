@@ -841,7 +841,8 @@ export const getOrderById = async (req, res) => {
         name: order.provider?.userId?.name,
         email: order.provider?.userId?.email,
         phone: order.provider?.userId?.phoneNumber,
-        profileImage: order.provider?.userId?.profileImage
+        profileImage: order.provider?.userId?.profileImage,
+        location: order.provider?.location
       },
       customer: {
         _id: order.customer?._id,
