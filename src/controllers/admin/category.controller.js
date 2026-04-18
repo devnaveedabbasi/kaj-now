@@ -66,7 +66,7 @@ export const getAllCategories = async (req, res) => {
     const search = req.query.search || '';
     
     const { isActive, isDeleted } = req.query;
-    
+    // s/
     // Build query
     let query = { userId };
     
