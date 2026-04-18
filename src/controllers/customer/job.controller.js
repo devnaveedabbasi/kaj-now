@@ -808,11 +808,11 @@ export const getOrderById = async (req, res) => {
         path: 'provider',
         populate: {
           path: 'userId',
-          select: 'name email profileImage phoneNumber'
+          select: 'name email profilePicture phoneNumber'
         }
       })
       .populate('service', 'name icon price description averageRating')
-      .populate('customer', 'name email profileImage')
+      .populate('customer', 'name email profilePicture')
       .lean();
 
     if (!order) {
@@ -841,14 +841,14 @@ export const getOrderById = async (req, res) => {
         name: order.provider?.userId?.name,
         email: order.provider?.userId?.email,
         phone: order.provider?.userId?.phoneNumber,
-        profileImage: order.provider?.userId?.profileImage,
+        profilePicture: order.provider?.userId?.profilePicture,
         location: order.provider?.location
       },
       customer: {
         _id: order.customer?._id,
         name: order.customer?.name,
         email: order.customer?.email,
-        profileImage: order.customer?.profileImage
+        profilePicture: order.customer?.profilePicture
       },
       payment: payment ? {
         _id: payment._id,
