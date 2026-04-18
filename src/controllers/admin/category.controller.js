@@ -57,39 +57,32 @@ export const createCategory = async (req, res) => {
 // Get All Categories  with Pagination, Search, Filters
 export const getAllCategories = async (req, res) => {
     const userId = req.user._id;
-    
-    // Pagination parameters
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    
+
     const search = req.query.search || '';
-    
     const { isActive, isDeleted } = req.query;
-    // s/
-    // Build query
+
     let query = { userId };
-    
-    // Add search condition
+
     if (search) {
         query.name = { $regex: search, $options: 'i' };
     }
-    
-    // Add filters
+
     if (isActive !== undefined && isActive !== '') {
         query.isActive = isActive === 'true';
     }
-    
+
     if (isDeleted !== undefined && isDeleted !== '') {
         query.isDeleted = isDeleted === 'true';
     }
-    
-    // Sorting
+
     const sortField = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortField]: sortOrder };
-    
-    // Execute queries
+
     const [categories, totalCount] = await Promise.all([
         Category.find(query)
             .sort(sort)
@@ -98,46 +91,60 @@ export const getAllCategories = async (req, res) => {
             .lean(),
         Category.countDocuments(query)
     ]);
-    
-    // Get service count for each category
+
+    // Summary counters (GLOBAL)
+    const [totalCategories, activeCategories, deletedCategories, totalServices] =
+        await Promise.all([
+            Category.countDocuments({ userId }),
+            Category.countDocuments({ userId, isActive: true, isDeleted: false }),
+            Category.countDocuments({ userId, isDeleted: true }),
+            service.countDocuments({ userId })
+        ]);
+
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
             const serviceCount = await service.countDocuments({
                 userId,
                 categoryId: category._id
             });
-            
-            const activeserviceCount = await service.countDocuments({
+
+            const activeServiceCount = await service.countDocuments({
                 userId,
                 categoryId: category._id,
                 isActive: true,
                 isDeleted: false
             });
-            
+
             return {
                 ...category,
                 serviceCount,
-                activeserviceCount
+                activeServiceCount
             };
         })
     );
-    
-    // Pagination metadata
+
     const totalPages = Math.ceil(totalCount / limit);
-    const hasNextPage = page < totalPages;
-    const hasPrevPage = page > 1;
-    
+
     res.status(200).json(
         new ApiResponse(200, {
+            summary: {
+                totalCategories,
+                activeCategories,
+                deletedCategories,
+                totalServices
+            },
+
             categories: categoriesWithCount,
+
             pagination: {
                 currentPage: page,
                 totalPages,
                 totalItems: totalCount,
                 itemsPerPage: limit,
-                hasNextPage,
-                hasPrevPage
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
             },
+
             filters: {
                 search: search || null,
                 isActive: isActive || null,
