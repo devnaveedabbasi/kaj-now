@@ -3,13 +3,13 @@ import mongoose from 'mongoose';
 const serviceSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
-    name: { type: String, required: true, trim: true ,unique: true},
+    name: { type: String, required: true, trim: true ,unique: true,minlength: 4, maxlength: 100},
     icon: {
         type: String,
         required: true,
     },
     price: { type: Number, required: true },
-    description: { type: String, trim: true },
+    description: { type: String, trim: true ,minlength: 10, maxlength: 200},
     isActive: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },
     reviews: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }], 

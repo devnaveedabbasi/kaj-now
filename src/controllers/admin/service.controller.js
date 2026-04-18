@@ -264,7 +264,7 @@ export const updateService = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user._id;
-        const { name, categoryId, price } = req.body;
+        const { name, categoryId, price ,description} = req.body;
 
         const iconFile = req.files?.icon?.[0];
         const newImageFiles = req.files?.images || [];
@@ -321,6 +321,7 @@ export const updateService = async (req, res) => {
             ...(categoryId && { categoryId }),
             ...(iconFile && { icon: iconPath }),
             ...(price !== undefined && { price: Number(price) }),
+            ...(description !== undefined && { description })
         };
 
         // Update the service

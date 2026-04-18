@@ -15,7 +15,7 @@ if (process.env.TRUST_PROXY === "true") {
 const server = createServer(app);
 
 const corsOptions = {
-    origin: "*",
+    origin: "http://localhost:3000",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -45,10 +45,7 @@ app.use((req, res, next) => {
   next(error);
 });
 
-/**
- * Global Error Handling Middleware
- * Catches all errors from controllers and returns standardized response
- */
+
 app.use((err, req, res, next) => {
   let error = err;
 
