@@ -21,25 +21,25 @@ const userSchema = new mongoose.Schema({
   emailOTP: { type: String },
   otpExpiry: { type: Date },
   otpAttempts: { type: Number, default: 0 },
-
+  token: { type: String, default: null },
   resetOTP: String,          // forgot password
   resetOtpExpiry: Date,
   resetOtpAttempts: { type: Number, default: 0 },
   resetPasswordVerified: { type: Boolean, default: false },
- location: {
-      type: {
-        type: String,
-        enum: ['Point'],
-      },
-      coordinates: {
-        type: [Number],
-      },
-      locationName: { type: String, trim: true, default: '' },
+  location: {
+    type: {
+      type: String,
+      enum: ['Point'],
     },
-  
+    coordinates: {
+      type: [Number],
+    },
+    locationName: { type: String, trim: true, default: '' },
+  },
+
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
- 
+
 
 }, {
   timestamps: true,
@@ -70,7 +70,7 @@ userSchema.add({
   emailUpdateOTP: { type: String, default: null },
   emailUpdateOtpExpiry: { type: Date, default: null },
   emailUpdateOtpAttempts: { type: Number, default: 0 },
-  isEmailChanged:{ type: Boolean, default: false }
+  isEmailChanged: { type: Boolean, default: false }
 });
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);

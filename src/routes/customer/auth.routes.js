@@ -21,4 +21,5 @@ router.put('/location', authenticateToken, requireRole('customer'), asyncHandler
 
 router.patch('/update-profile', authenticateToken, requireRole('customer'), uploadProfilePicture, asyncHandler(customerAuth.updateProfile));
 router.post('/verify-email-update',authenticateToken,asyncHandler(customerAuth.verifyEmailUpdate));
+router.post('/logout',authenticateToken,requireRole('customer'),asyncHandler(customerAuth.logout));
 export default router;

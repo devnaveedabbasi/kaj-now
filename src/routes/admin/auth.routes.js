@@ -15,5 +15,6 @@ router.post('/set-new-password', asyncHandler(adminAuth.setNewPassword));
 router.post('/change-password', authenticateToken, requireRole('admin'), asyncHandler(adminAuth.changePassword));
 
 router.get('/me', authenticateToken, requireRole('admin'), asyncHandler(adminAuth.me));
+router.post('/logout',authenticateToken,requireRole('admin'),asyncHandler(adminAuth.logout));
 
 export default router;

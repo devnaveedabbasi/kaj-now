@@ -148,7 +148,9 @@ export async function verifyEmail(req, res) {
   await user.save();
 
   const token = signToken(user._id, user.role);
-
+  console.log('Generated JWT token:', token); 
+  user.token=token;
+  await user.save();
   const fresh = await User.findById(user._id);
   res.status(200).json(
     new ApiResponse(
@@ -416,6 +418,7 @@ export async function me(req, res) {
         phone: user.phone,
         status: user.status,
         location: user.location,
+        profilePicture: user.profilePicture,
       },
       'User profile retrieved successfully.'
     )
@@ -592,8 +595,24 @@ export const verifyEmailUpdate = async (req, res) => {
 
 
 export const logout = async (req, res) => {
-  
-  return res.status(200).json(
-    new ApiResponse(200, null, "Logged out successfully")
-  );
+  try {
+    const userId = req.user._id;
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    user.token = null;
+    await user.save();
+
+    return res.status(200).json(
+      new ApiResponse(200, null, "Logged out successfully")
+    );
+  } catch (error) {
+    return res.status(500).json(
+      new ApiResponse(500, null, error.message)
+    );
+  }
 };
