@@ -959,7 +959,6 @@ export const quickSearch = async (req, res) => {
             },
             { $unwind: '$service' },
             
-            // Get category details
             {
                 $lookup: {
                     from: 'categories',
@@ -981,7 +980,6 @@ export const quickSearch = async (req, res) => {
             },
             { $unwind: '$provider' },
             
-            // Get user details (provider's name)
             {
                 $lookup: {
                     from: 'users',
@@ -992,7 +990,6 @@ export const quickSearch = async (req, res) => {
             },
             { $unwind: '$user' },
             
-            // Search condition - service name OR category name OR provider name
             {
                 $match: {
                     $or: [
