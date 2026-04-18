@@ -6,7 +6,9 @@ import { generateNumericOtp } from '../../utils/otp.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { updateUserLocation } from '../../utils/updateUserLocation.js';
-
+import { deleteFile } from '../../utils/deleteFiles.js';
+import fs from 'fs';
+import path from 'path';
 const SALT_ROUNDS = 10;
 const OTP_TTL_MS = 10 * 60 * 1000;
 // const OTP_TTL_MS = 1 * 60 * 1000; // 1 minute
@@ -31,6 +33,8 @@ async function setEmailOtp(user, otpPlain) {
   user.otpAttempts = 0;
   await user.save();
 }
+
+
 
 export async function register(req, res) {
   const name = String(req.body.name || '').trim();
@@ -444,13 +448,11 @@ export const updateProfile = async (req, res) => {
     const { name, email, phone } = req.body;
     const files = req.files || {};
 
-    // Find user and provider
     const user = await User.findById(userId);
     if (!user) {
       throw new ApiError(404, 'User not found');
     }
 
-    // Update User fields (jo bhi aayega update karo)
     if (name) user.name = name.trim();
     
     // Handle email update with OTP
@@ -471,7 +473,6 @@ export const updateProfile = async (req, res) => {
       await sendOtpEmail(email, otp);
       
       await user.save();
-      await provider.save();
       
       return res.status(200).json(
         new ApiResponse(200, {

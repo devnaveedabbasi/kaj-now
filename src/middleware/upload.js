@@ -79,6 +79,21 @@ const providerStorage = multer.diskStorage({
   }
 });
 
+
+const userStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'public/uploads/users';
+    ensureDirectoryExists(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const fieldName = file.fieldname;
+    const ext = path.extname(file.originalname);
+    cb(null, `${fieldName}-${uniqueSuffix}${ext}`);
+  }
+});
+
 // Create multer instances
 export const uploadCategoryImage = multer({
   storage: categoryStorage,
@@ -172,7 +187,7 @@ export const uploadWithdrawalReceipt = multer({
 
 // Add this to your upload.js
 export const uploadProfilePicture = multer({
-  storage: providerStorage,
+  storage: userStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 }).fields([
