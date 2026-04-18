@@ -186,6 +186,13 @@ export const uploadWithdrawalReceipt = multer({
 
 
 // Add this to your upload.js
+export const uploadProviderProfilePicture = multer({
+  storage: providerStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: fileFilter
+}).fields([
+  { name: 'profilePicture', maxCount: 1 }
+]);
 export const uploadProfilePicture = multer({
   storage: userStorage,
   limits: { fileSize: 5 * 1024 * 1024 },

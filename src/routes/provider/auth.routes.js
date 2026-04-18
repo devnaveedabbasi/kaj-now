@@ -2,7 +2,7 @@ import { Router } from 'express';
 import * as providerAuth from '../../controllers/provider/providerAuth.controller.js'
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { authMiddleware as authenticateToken, authorize as requireRole } from '../../middleware/auth.js';
-import { uploadProviderDocuments, uploadProfilePicture } from '../../middleware/upload.js';
+import { uploadProviderDocuments, uploadProviderProfilePicture } from '../../middleware/upload.js';
 
 const router = Router();
 
@@ -19,6 +19,6 @@ router.put('/complete-profile', authenticateToken, uploadProviderDocuments, asyn
 router.post('/change-password', authenticateToken, requireRole('provider'), asyncHandler(providerAuth.changePassword));
 router.get('/me', authenticateToken, requireRole('provider'), asyncHandler(providerAuth.me));
 
-router.patch('/update-profile', authenticateToken, requireRole('provider'), uploadProfilePicture, asyncHandler(providerAuth.updateProfile));
+router.patch('/update-profile', authenticateToken, requireRole('provider'), uploadProviderProfilePicture, asyncHandler(providerAuth.updateProfile));
 router.post('/verify-email-update',authenticateToken,asyncHandler(providerAuth.verifyEmailUpdate));
 export default router;

@@ -9,6 +9,8 @@ const router = Router();
 router.use(authenticateToken,requireRole('customer')); 
 
 router.get('/all-categories', asyncHandler(serviceController.getAllCategories));
+
+router.get('/search',asyncHandler(serviceController.quickSearch))
 router.get('/recommended', asyncHandler(serviceController.getRecommendedServices));
 router.get('/popular', asyncHandler(serviceController.getPopularServices));
 router.get('/top-rated', asyncHandler(serviceController.getTopRatedServices));

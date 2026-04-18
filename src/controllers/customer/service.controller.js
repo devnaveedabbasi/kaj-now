@@ -927,3 +927,122 @@ export const getTopRatedServices = async (req, res) => {
         res.status(500).json(new ApiResponse(500, null, error.message));
     }
 };
+
+
+
+export const quickSearch = async (req, res) => {
+    try {
+        const { q } = req.query;
+        
+        if (!q?.trim()) {
+            return res.status(200).json(
+                new ApiResponse(200, {
+                    services: [],
+                    query: null
+                }, 'No search keyword')
+            );
+        }
+
+        const searchKeyword = q.trim();
+
+        const services = await ServiceRequest.aggregate([
+            { $match: { status: 'approved' } },
+            
+            // Get service details
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            { $unwind: '$service' },
+            
+            // Get category details
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: 'categoryId',
+                    foreignField: '_id',
+                    as: 'category'
+                }
+            },
+            { $unwind: '$category' },
+            
+            // Get provider details
+            {
+                $lookup: {
+                    from: 'providers',
+                    localField: 'providerId',
+                    foreignField: '_id',
+                    as: 'provider'
+                }
+            },
+            { $unwind: '$provider' },
+            
+            // Get user details (provider's name)
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'provider.userId',
+                    foreignField: '_id',
+                    as: 'user'
+                }
+            },
+            { $unwind: '$user' },
+            
+            // Search condition - service name OR category name OR provider name
+            {
+                $match: {
+                    $or: [
+                        { 'service.name': { $regex: searchKeyword, $options: 'i' } },
+                        { 'category.name': { $regex: searchKeyword, $options: 'i' } },
+                        { 'user.name': { $regex: searchKeyword, $options: 'i' } },
+                        { 'provider.businessName': { $regex: searchKeyword, $options: 'i' } }
+                    ]
+                }
+            },
+            
+            // Project the required fields
+            {
+                $project: {
+                    _id: '$service._id',
+                    name: '$service.name',
+                    icon: '$service.icon',
+                    price: '$service.price',
+                    description: '$service.description',
+                    averageRating: '$service.averageRating',
+                    category: {
+                        _id: '$category._id',
+                        name: '$category.name',
+                        icon: '$category.icon'
+                    },
+                    provider: {
+                        _id: '$provider._id',
+                        name: '$user.name',
+                        email: '$user.email',
+                        phone: '$user.phone',
+                        profilePicture: '$user.profilePicture',
+                        businessName: '$provider.businessName'
+                    }
+                }
+            },
+            
+            { $limit: 10 }
+        ]);
+
+        res.status(200).json(
+            new ApiResponse(200, {
+                query: searchKeyword,
+                services: services,
+                count: services.length
+            }, 'Search completed successfully')
+        );
+    } catch (error) {
+        console.error('Quick search error:', error);
+        res.status(500).json(
+            new ApiResponse(500, null, error.message || 'Search failed')
+        );
+    }
+};

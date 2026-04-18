@@ -229,7 +229,8 @@ export async function login(req, res) {
   }
 
   const token = signToken(user._id, user.role);
-
+  user.token=token;
+await user.save();
   res.status(200).json(
     new ApiResponse(
       200,

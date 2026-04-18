@@ -26,16 +26,18 @@ const userSchema = new mongoose.Schema({
   resetOtpExpiry: Date,
   resetOtpAttempts: { type: Number, default: 0 },
   resetPasswordVerified: { type: Boolean, default: false },
-  location: {
-    type: {
-      type: String,
-      enum: ['Point'],
-    },
-    coordinates: {
-      type: [Number],
-    },
-    locationName: { type: String, trim: true, default: '' },
+ location: {
+  type: {
+    type: String,
+    enum: ['Point'],
+    default: 'Point',      
   },
+  coordinates: {
+    type: [Number],
+    default: [0, 0],       
+  },
+  locationName: { type: String, trim: true, default: '' },
+},
 
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
