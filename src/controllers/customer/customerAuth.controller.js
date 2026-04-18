@@ -588,3 +588,12 @@ export const verifyEmailUpdate = async (req, res) => {
   }
 };
 
+
+
+
+export const logout = async (req, res) => {
+  
+  return res.status(200).json(
+    new ApiResponse(200, null, "Logged out successfully")
+  );
+};

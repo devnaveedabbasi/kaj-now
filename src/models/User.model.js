@@ -41,7 +41,6 @@ const userSchema = new mongoose.Schema({
   profileLastUpdated: { type: Date },
  
 
-  
 }, {
   timestamps: true,
   toJSON: { virtuals: true }
