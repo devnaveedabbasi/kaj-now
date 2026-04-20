@@ -73,7 +73,8 @@ export async function getProviderJobs(req, res) {
         name: job.provider?.userId?.name,
         email: job.provider?.userId?.email,
         phone: job.provider?.userId?.phoneNumber,
-        profilePicture: job.provider?.userId?.profilePicture
+        profilePicture: job.provider?.userId?.profilePicture,
+        location: job.provider?.location||job.provider?.userId?.location
       },
       timestamps: {
         createdAt: job.createdAt,
@@ -138,7 +139,7 @@ export async function getJobDetails(req, res) {
           select: 'name email phone profilePicture location'
         }
       })
-      .populate('customer', 'name email phone profilePicture')
+      .populate('customer', 'name email phone profilePicture location')
       .populate('service', 'name price description icon averageRating')
       .lean();
     
@@ -166,7 +167,8 @@ export async function getJobDetails(req, res) {
         name: job.customer?.name,
         email: job.customer?.email,
         phone: job.customer?.phone,
-        profilePicture: job.customer?.profilePicture
+        profilePicture: job.customer?.profilePicture,
+        location: job.customer?.location||null
       },
       provider: {
         _id: job.provider?._id,
@@ -174,7 +176,7 @@ export async function getJobDetails(req, res) {
         email: job.provider?.userId?.email,
         phone: job.provider?.userId?.phone,
         profilePicture: job.provider?.userId?.profilePicture,
-        location: job.provider?.userId?.location
+        location: job.provider?.location||job.provider?.userId?.location
       },
       payment: payment ? {
         _id: payment._id,
