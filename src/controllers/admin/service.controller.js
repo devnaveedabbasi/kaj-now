@@ -137,6 +137,8 @@ export const getAllServices = async (req, res) => {
         
         if (isDeleted !== undefined && isDeleted !== '') {
             query.isDeleted = isDeleted === 'true';
+        } else {
+            query.isDeleted = false; // Hide soft-deleted by default
         }
         
         // Price range filter
@@ -167,6 +169,13 @@ export const getAllServices = async (req, res) => {
             Service.countDocuments(query)
         ]);
         
+        // Summary counters (GLOBAL)
+        const [totalServices, activeServices, deletedServices] = await Promise.all([
+            Service.countDocuments({ userId }),
+            Service.countDocuments({ userId, isActive: true, isDeleted: false }),
+            Service.countDocuments({ userId, isDeleted: true })
+        ]);
+        
         // Calculate average rating if needed
         const servicesWithRating = services.map(service => {
             let avgRating = 0;
@@ -188,6 +197,11 @@ export const getAllServices = async (req, res) => {
         
         res.status(200).json(
             new ApiResponse(200, {
+                summary: {
+                    totalServices,
+                    activeServices,
+                    deletedServices
+                },
                 services: servicesWithRating,
                 pagination: {
                     currentPage: page,

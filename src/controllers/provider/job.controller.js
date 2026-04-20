@@ -30,7 +30,7 @@ export async function getProviderJobs(req, res) {
     const skip = (page - 1) * limit;
     const [jobs, total] = await Promise.all([
       Job.find(query)
-        .populate('customer', 'name phone email profilePicture')
+        .populate('customer', 'name phone email location profilePicture')
         .populate('service', 'name price icon description averageRating') // Service details
         .populate({
           path: 'provider',
@@ -66,7 +66,8 @@ export async function getProviderJobs(req, res) {
         name: job.customer?.name,
         email: job.customer?.email,
         phone: job.customer?.phone,
-        profilePicture: job.customer?.profilePicture
+        profilePicture: job.customer?.profilePicture,
+        location: job.customer?.location || null
       },
       provider: {
         _id: job.provider?._id,
@@ -74,7 +75,7 @@ export async function getProviderJobs(req, res) {
         email: job.provider?.userId?.email,
         phone: job.provider?.userId?.phoneNumber,
         profilePicture: job.provider?.userId?.profilePicture,
-        location: job.provider?.location||job.provider?.userId?.location
+        location: job.provider?.location || job.provider?.userId?.location
       },
       timestamps: {
         createdAt: job.createdAt,
@@ -87,13 +88,13 @@ export async function getProviderJobs(req, res) {
 
     // Get order counts
     const totalOrders = await Job.countDocuments({ provider: provider._id });
-    const completedOrders = await Job.countDocuments({ 
-      provider: provider._id, 
-      status: 'confirmed_by_user' 
+    const completedOrders = await Job.countDocuments({
+      provider: provider._id,
+      status: 'confirmed_by_user'
     });
-    const pendingOrders = await Job.countDocuments({ 
-      provider: provider._id, 
-      status: 'pending' 
+    const pendingOrders = await Job.countDocuments({
+      provider: provider._id,
+      status: 'pending'
     });
     const inProgressOrders = await Job.countDocuments({
       provider: provider._id,
@@ -102,7 +103,7 @@ export async function getProviderJobs(req, res) {
 
     return res.status(200).json({
       success: true,
-      data: { 
+      data: {
         jobs: formattedJobs,
         stats: {
           totalOrders,
@@ -111,12 +112,12 @@ export async function getProviderJobs(req, res) {
           inProgressOrders,
           totalEarnings: completedOrders * 100 // Calculate properly
         },
-        pagination: { 
-          total, 
-          page: parseInt(page), 
-          limit: parseInt(limit), 
-          totalPages: Math.ceil(total / limit) 
-        } 
+        pagination: {
+          total,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(total / limit)
+        }
       },
     });
   } catch (error) {
@@ -140,9 +141,18 @@ export async function getJobDetails(req, res) {
         }
       })
       .populate('customer', 'name email phone profilePicture location')
-      .populate('service', 'name price description icon averageRating')
-      .lean();
-    
+      .populate('service', 'name price description icon averageRating reviews')
+      .populate({
+        path: 'service',
+        populate: {
+          path: 'reviews',
+          populate: {
+            path: 'userId',
+            select: 'name email phone profilePicture'
+          }
+        }
+      }).lean();
+
     if (!job) throw new ApiError(404, 'Job not found');
 
     const payment = await Payment.findOne({ jobId }).lean();
@@ -160,7 +170,8 @@ export async function getJobDetails(req, res) {
         icon: job.service?.icon,
         price: job.service?.price,
         description: job.service?.description,
-        averageRating: job.service?.averageRating || 0
+        averageRating: job.service?.averageRating || 0,
+        reviews: job.service?.reviews || []
       },
       customer: {
         _id: job.customer?._id,
@@ -168,7 +179,7 @@ export async function getJobDetails(req, res) {
         email: job.customer?.email,
         phone: job.customer?.phone,
         profilePicture: job.customer?.profilePicture,
-        location: job.customer?.location||null
+        location: job.customer?.location || null
       },
       provider: {
         _id: job.provider?._id,
@@ -176,7 +187,7 @@ export async function getJobDetails(req, res) {
         email: job.provider?.userId?.email,
         phone: job.provider?.userId?.phone,
         profilePicture: job.provider?.userId?.profilePicture,
-        location: job.provider?.location||job.provider?.userId?.location
+        location: job.provider?.location || job.provider?.userId?.location
       },
       payment: payment ? {
         _id: payment._id,
@@ -229,7 +240,7 @@ export async function acceptJob(req, res) {
       .populate('service', 'name')
       .populate('customer', 'name email')
       .session(session);
-    
+
     if (!job) throw new ApiError(404, 'Job not found');
 
     // Check if provider is authorized
@@ -237,7 +248,7 @@ export async function acceptJob(req, res) {
       throw new ApiError(403, 'Not authorized to accept this job');
     }
 
-     if (job.status == 'accepted') {
+    if (job.status == 'accepted') {
       throw new ApiError(400, `Job already accepted. Current: ${job.status}`);
     }
 
@@ -246,7 +257,7 @@ export async function acceptJob(req, res) {
       throw new ApiError(400, `Job must be pending first. Current: ${job.status}`);
     }
 
-    
+
 
     // Update job status
     job.status = 'accepted';
@@ -278,9 +289,9 @@ export async function acceptJob(req, res) {
       });
     }
 
-    return res.status(200).json({ 
-      success: true, 
-      message: 'Job accepted successfully', 
+    return res.status(200).json({
+      success: true,
+      message: 'Job accepted successfully',
       data: {
         _id: job._id,
         orderId: job.orderId,
@@ -288,7 +299,7 @@ export async function acceptJob(req, res) {
         acceptedAt: job.acceptedAt,
         service: job.service,
         customer: job.customer
-      } 
+      }
     });
   } catch (error) {
     await session.abortTransaction();
@@ -320,7 +331,7 @@ export async function startJob(req, res) {
     const job = await Job.findById(jobId)
       .populate('service', 'name')
       .session(session);
-    
+
     if (!job) {
       throw new ApiError(404, 'Job not found');
     }
@@ -329,7 +340,7 @@ export async function startJob(req, res) {
       throw new ApiError(403, 'Not authorized to start this job');
     }
 
-       if (job.status == 'in_progress') {
+    if (job.status == 'in_progress') {
       throw new ApiError(400, `Job already started. Current: ${job.status}`);
     }
 
@@ -351,10 +362,10 @@ export async function startJob(req, res) {
       referenceId: job._id,
     });
 
-    return res.status(200).json({ 
-      success: true, 
-      message: 'Job started successfully', 
-      data: job 
+    return res.status(200).json({
+      success: true,
+      message: 'Job started successfully',
+      data: job
     });
   } catch (error) {
     await session.abortTransaction();
@@ -384,7 +395,7 @@ export async function markCompletedByProvider(req, res) {
     const job = await Job.findById(jobId)
       .populate('service', 'name')
       .session(session);
-    
+
     if (!job) {
       throw new ApiError(404, 'Job not found');
     }
@@ -393,7 +404,7 @@ export async function markCompletedByProvider(req, res) {
       throw new ApiError(403, 'Not authorized to update this job');
     }
 
-     if ('completed_by_provider'.includes(job.status)) {
+    if ('completed_by_provider'.includes(job.status)) {
       throw new ApiError(400, `Job already completed. Current: ${job.status}`);
     }
 

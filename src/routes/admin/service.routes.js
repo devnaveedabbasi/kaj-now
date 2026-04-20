@@ -28,7 +28,7 @@ router.put('/:id', uploadServiceFiles.fields([
 ]), asyncHandler(updateService));
 
 // New routes for toggle and delete
-router.patch('/:id/toggle', asyncHandler(toggleServiceActive));
+router.patch('/:id/toggle-active', asyncHandler(toggleServiceActive));
 router.delete('/:id/soft', asyncHandler(softDeleteService));
 router.delete('/:id/hard', asyncHandler(hardDeleteService));
 

@@ -33,6 +33,12 @@ const providerSchema = new mongoose.Schema(
         ref: 'ServiceRequest',
       },
     ],
+    approvedServices: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Service',
+      },
+    ],
 
     // Track service orders count
     serviceOrdersCount: {
@@ -92,6 +98,7 @@ providerSchema.pre('save', function clearInvalidLocation() {
 });
 
 providerSchema.index({ location: '2dsphere' }, { sparse: true });
+providerSchema.index({ approvedServices: 1, kycStatus: 1 });
 
 function attachLatLng(ret) {
   if (ret.location?.coordinates?.length === 2) {

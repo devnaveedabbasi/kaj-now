@@ -1,5 +1,7 @@
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import Provider from '../../models/provider/Provider.model.js';
+import User from '../../models/User.model.js';
+import Service from '../../models/admin/service.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 
@@ -8,10 +10,40 @@ export const getAllServiceRequests = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
+    const { status, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
 
+    let query = {};
+    if (status) query.status = status;
+
+    if (search) {
+        const [matchingUsers, matchingServices] = await Promise.all([
+            User.find({
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } }
+                ]
+            }).select('_id'),
+            Service.find({
+                name: { $regex: search, $options: 'i' }
+            }).select('_id')
+        ]);
+        
+        const userIds = matchingUsers.map(u => u._id);
+        const matchingProviders = await Provider.find({ userId: { $in: userIds } }).select('_id');
+        const providerIds = matchingProviders.map(p => p._id);
+        const serviceIds = matchingServices.map(s => s._id);
+
+        query.$or = [
+            { providerId: { $in: providerIds } },
+            { serviceId: { $in: serviceIds } }
+        ];
+    }
+    
+    let sortQuery = {};
+    sortQuery[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
     const [requests, totalCount] = await Promise.all([
-        ServiceRequest.find()
+        ServiceRequest.find(query)
             .populate({
                 path: 'providerId',
                 select: 'userId',
@@ -23,11 +55,11 @@ export const getAllServiceRequests = async (req, res) => {
             .populate('serviceId', 'name icon price')
             .populate('categoryId', 'name')
             .populate('reviewedByAdmin', 'name email')
-            .sort({ createdAt: -1 })
+            .sort(sortQuery)
             .skip(skip)
             .limit(limit)
             .lean(),
-        ServiceRequest.countDocuments()
+        ServiceRequest.countDocuments(query)
     ]);
 
     const totalPages = Math.ceil(totalCount / limit);
@@ -93,16 +125,21 @@ export const approveServiceRequest = async (req, res) => {
     request.reviewedByAdmin = userId;
     await request.save();
 
-    // Update provider's services array if not already there
+    // Update provider's arrays
     const provider = await Provider.findById(request.providerId);
     if (provider) {
-        if (!provider.services) {
-            provider.services = [];
+        if (!provider.services) provider.services = [];
+        if (!provider.approvedServices) provider.approvedServices = [];
+        
+        if (!provider.services.includes(request._id)) {
+            provider.services.push(request._id);
         }
-        if (!provider.services.includes(request.serviceId)) {
-            provider.services.push(request.serviceId);
-            await provider.save();
+        
+        if (!provider.approvedServices.includes(request.serviceId)) {
+            provider.approvedServices.push(request.serviceId);
         }
+        
+        await provider.save();
     }
 
     // Populate the updated request

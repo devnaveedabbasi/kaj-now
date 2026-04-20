@@ -61,6 +61,13 @@ const authMiddleware = async (req, res, next) => {
         });
       }
       
+      if (provider.kycStatus === 'suspended' || provider.kycStatus === 'blocked') {
+        return res.status(403).json({
+          success: false,
+          message: 'Provider account has been suspended.'
+        });
+      }
+
       
       // Provider specific info attach kar do req mein
       req.provider = provider;

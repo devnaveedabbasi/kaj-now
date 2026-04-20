@@ -5,6 +5,8 @@ import Category from "../../models/admin/category.model.js";
 import ServiceRequest from "../../models/admin/serviceRequest.model.js";
 import Review from "../../models/reviews.model.js";
 import Notification from "../../models/notification.model.js";
+import Wallet from "../../models/wallet.model.js";
+import Job from "../../models/job.model.js";
 import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
 import { createNotification } from "../../utils/createNotification.js";
@@ -76,11 +78,43 @@ export const getUserById = async (req, res) => {
                 .populate('Category', 'name icon')
                 .populate('services');
         }
-        
+
+        // Fetch job statistics
+        const jobStats = await Job.aggregate([
+            { $match: { customer: user._id } },
+            { $group: {
+                _id: '$status',
+                count: { $sum: 1 }
+            }}
+        ]);
+
+        const stats = {
+            total: 0,
+            active: 0,
+            completed: 0,
+            cancelled: 0
+        };
+
+        jobStats.forEach(stat => {
+            stats.total += stat.count;
+            if (['pending', 'accepted', 'in_progress'].includes(stat._id)) stats.active += stat.count;
+            if (stat._id === 'confirmed_by_user') stats.completed += stat.count;
+            if (stat._id === 'cancelled') stats.cancelled += stat.count;
+        });
+
+        // Fetch wallet summary
+        const wallet = await Wallet.findOne({ userId: user._id });
+
         res.status(200).json(
             new ApiResponse(200, {
                 user,
-                providerDetails
+                providerDetails,
+                jobStats: stats,
+                walletSummary: {
+                    balance: wallet?.balance || 0,
+                    totalSpent: wallet?.totalEarnings || 0, // In this model totalEarnings for customer might mean total spent? Need to check wallet model.
+                    totalEarnings: wallet?.totalEarnings || 0
+                }
             }, 'User retrieved successfully')
         );
     } catch (error) {
@@ -183,6 +217,17 @@ export const getAllProviders = async (req, res) => {
         let query = {};
         if (kycStatus) query.kycStatus = kycStatus;
         
+        if (search) {
+            const matchingUsers = await User.find({
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } }
+                ]
+            }).select('_id');
+            const userIds = matchingUsers.map(u => u._id);
+            query.userId = { $in: userIds };
+        }
+        
         const providers = await Provider.find(query)
             .populate('userId', '-password')
             .sort({ createdAt: -1 })
@@ -190,19 +235,10 @@ export const getAllProviders = async (req, res) => {
             .limit(limit)
             .lean();
         
-        // Filter by search if provided
-        let filteredProviders = providers;
-        if (search) {
-            filteredProviders = providers.filter(provider => 
-                provider.userId?.name?.toLowerCase().includes(search.toLowerCase()) ||
-                provider.userId?.email?.toLowerCase().includes(search.toLowerCase())
-            );
-        }
-        
         const totalCount = await Provider.countDocuments(query);
         const totalPages = Math.ceil(totalCount / limit);
         
-        const formattedProviders = filteredProviders.map(provider => ({
+        const formattedProviders = providers.map(provider => ({
             _id: provider._id,
             kycStatus: provider.kycStatus,
             isKycCompleted: provider.isKycCompleted,
@@ -280,10 +316,17 @@ export const getProviderById = async (req, res) => {
             if (stats[stat._id] !== undefined) stats[stat._id] = stat.count;
         });
         
+        const jobs = await Job.find({ provider: provider._id })
+            .populate('customer', 'name email')
+            .populate('service', 'name')
+            .sort({ createdAt: -1 })
+            .lean();
+        
         res.status(200).json(
             new ApiResponse(200, {
                 ...provider,
-                serviceStats: stats
+                serviceStats: stats,
+                jobs
             }, 'Provider details retrieved successfully')
         );
     } catch (error) {
@@ -475,7 +518,8 @@ export const getAdminDashboardStats = async (req, res) => {
             approvedRequests,
             totalReviews,
             pendingKyc,
-            approvedKyc
+            approvedKyc,
+            adminWallet
         ] = await Promise.all([
             User.countDocuments(),
             User.countDocuments({ role: 'provider' }),
@@ -486,7 +530,8 @@ export const getAdminDashboardStats = async (req, res) => {
             ServiceRequest.countDocuments({ status: 'approved' }),
             Review.countDocuments(),
             Provider.countDocuments({ kycStatus: 'pending' }),
-            Provider.countDocuments({ kycStatus: 'approved' })
+            Provider.countDocuments({ kycStatus: 'approved' }),
+            Wallet.findOne({ role: 'admin' })
         ]);
         
         // Recent activities
@@ -511,6 +556,11 @@ export const getAdminDashboardStats = async (req, res) => {
                     kycStats: {
                         pending: pendingKyc,
                         approved: approvedKyc
+                    },
+                    earnings: {
+                        totalPlatformFees: adminWallet?.totalPlatformFees || 0,
+                        balance: adminWallet?.balance || 0,
+                        totalHeld: adminWallet?.totalHeld || 0
                     }
                 },
                 recentActivities: {

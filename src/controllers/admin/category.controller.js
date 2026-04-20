@@ -1,5 +1,6 @@
 import Category from '../../models/admin/category.model.js';
-import service from '../../models/admin/service.model.js';
+import Service from '../../models/admin/service.model.js';
+import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import fs from 'fs';
 import path from 'path';
 import { ApiError } from '../../utils/errorHandler.js';
@@ -33,7 +34,7 @@ export const createCategory = async (req, res) => {
         userId,
         name: { $regex: new RegExp(`^${name}$`, 'i') }
     });
-    
+
     if (existingCategory) {
         if (req.file) {
             fs.unlinkSync(req.file.path);
@@ -72,12 +73,10 @@ export const getAllCategories = async (req, res) => {
     }
 
     if (isActive !== undefined && isActive !== '') {
-        query.isActive = isActive === 'true';
+        query.isActive = isActive == true;
     }
 
-    if (isDeleted !== undefined && isDeleted !== '') {
-        query.isDeleted = isDeleted === 'true';
-    }
+    query.isDeleted = { $ne: true };
 
     const sortField = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
@@ -93,22 +92,26 @@ export const getAllCategories = async (req, res) => {
     ]);
 
     // Summary counters (GLOBAL)
-    const [totalCategories, activeCategories, deletedCategories, totalServices] =
+    const [totalCategories, activeCategories, totalServices] =
         await Promise.all([
-            Category.countDocuments({ userId }),
+            Category.countDocuments({ userId, isDeleted: false }),
             Category.countDocuments({ userId, isActive: true, isDeleted: false }),
-            Category.countDocuments({ userId, isDeleted: true }),
-            service.countDocuments({ userId })
+            Service.countDocuments({ userId, isDeleted: false })
         ]);
+
+    const deletedCategories = await Category.countDocuments({
+        userId,
+        isDeleted: true
+    });
 
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
-            const serviceCount = await service.countDocuments({
+            const serviceCount = await Service.countDocuments({
                 userId,
                 categoryId: category._id
             });
 
-            const activeServiceCount = await service.countDocuments({
+            const activeServiceCount = await Service.countDocuments({
                 userId,
                 categoryId: category._id,
                 isActive: true,
@@ -167,9 +170,9 @@ export const getCategoryById = async (req, res) => {
     }
 
     // Get all subcategories for this category (including deleted/inactive)
-    const subCategories = await service.find({ 
-        userId, 
-        categoryId: category._id 
+    const subCategories = await Service.find({
+        userId,
+        categoryId: category._id
     }).sort({ createdAt: -1 });
 
     const subCategoriesStats = {
@@ -238,23 +241,34 @@ export const updateCategory = async (req, res) => {
 // Toggle Category Active Status
 export const toggleCategoryActive = async (req, res) => {
     const { id } = req.params;
-    const userId = req.user._id;
 
-    const category = await Category.findOne({ _id: id, userId });
+    const category = await Category.findById(id);
+    if (!category) throw new Error("Not found");
 
-    if (!category) {
-        throw new ApiError(404, 'Category not found');
-    }
+    const newStatus = !category.isActive;
 
-    category.isActive = !category.isActive;
+    // 1. update category
+    category.isActive = newStatus;
     await category.save();
 
-    res.status(200).json(
-        new ApiResponse(200, { 
-            _id: category._id, 
-            isActive: category.isActive 
-        }, `Category ${category.isActive ? 'activated' : 'deactivated'} successfully`)
+    // 2. update services
+    await Service.updateMany(
+        { categoryId: id },
+        { isActive: newStatus }
     );
+
+    // 3. update requests
+    if (!newStatus) {
+        await ServiceRequest.updateMany(
+            { categoryId: id, status: "pending" },
+            {
+                status: "admin_deactivated",
+                notes: "Category deactivated",
+            }
+        );
+    }
+
+    res.json({ success: true });
 };
 
 // Soft Delete Category
@@ -269,23 +283,39 @@ export const softDeleteCategory = async (req, res) => {
     }
 
     if (category.isDeleted) {
-        throw new ApiError(400, 'Category is already deleted');
+        throw new ApiError(400, 'Category already deleted');
     }
- category.isDeleted = !category.isDeleted;
 
-    category.isActive = category.isDeleted ? false : category.isActive;
+    // 1. delete category
+    category.isDeleted = true;
+    category.isActive = false;
     await category.save();
 
-    await service.updateMany(
-        { userId, categoryId: category._id },
-        { isDeleted: true, isActive: false }
+    // 2. delete all services
+    await Service.updateMany(
+        { categoryId: category._id },
+        {
+            isDeleted: true,
+            isActive: false
+        }
+    );
+
+    // 3. cancel related requests
+    await ServiceRequest.updateMany(
+        {
+            categoryId: category._id,
+            status: { $in: ['pending', 'approved'] }
+        },
+        {
+            status: 'admin_deactivated',
+            notes: 'Category deleted by admin'
+        }
     );
 
     res.status(200).json(
         new ApiResponse(200, {}, 'Category deleted successfully')
     );
 };
-
 
 // Permanently Delete Category (Hard Delete)
 export const hardDeleteCategory = async (req, res) => {
@@ -305,14 +335,14 @@ export const hardDeleteCategory = async (req, res) => {
     }
 
     // Hard delete all subcategories under this category
-    const subCategories = await service.find({ userId, categoryId: category._id });
+    const subCategories = await Service.find({ userId, categoryId: category._id });
     for (const service of subCategories) {
         if (service.icon) {
             const imagePath = path.join('public', service.icon);
             deleteOldImage(imagePath);
         }
     }
-    await service.deleteMany({ userId, categoryId: category._id });
+    await Service.deleteMany({ userId, categoryId: category._id });
 
     // Hard delete category
     await Category.deleteOne({ _id: category._id });
