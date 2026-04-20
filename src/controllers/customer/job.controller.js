@@ -10,6 +10,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { processSSLCommerzPayment } from '../../utils/sslcommerz.js';
 import { createNotification } from '../../utils/createNotification.js';
+import { createActivityLog } from '../../utils/createActivityLog.js';
 
 
 async function generateOrderId() {
@@ -360,6 +361,16 @@ export async function bookJob(req, res) {
 
     await session.commitTransaction();
 
+    // Activity Log
+    await createActivityLog({
+      userId,
+      action: 'JOB_BOOKED',
+      entityType: 'Job',
+      entityId: job[0]._id,
+      details: { orderId, amount: servicePrice },
+      req
+    });
+
     // ── Notifications (outside transaction — non-critical) ──────────────────
     // Notify customer
     await createNotification({
@@ -498,8 +509,9 @@ export async function confirmCompletionByCustomer(req, res) {
       );
     }
 
-    // ── Deduct from admin wallet ─────────────────────────────────────────────
-    adminWallet.balance -= payment.totalAmount;
+    // ── Deduct from admin wallet (Only the part going to provider) ──────────
+    adminWallet.balance -= payment.providerAmount;
+    adminWallet.totalHeld = (adminWallet.totalHeld || 0) - payment.totalAmount;
     adminWallet.totalPlatformFees += payment.platformFee;
     await adminWallet.save({ session });
 
@@ -525,6 +537,16 @@ export async function confirmCompletionByCustomer(req, res) {
     }
 
     await session.commitTransaction();
+
+    // Activity Log
+    await createActivityLog({
+      userId,
+      action: 'JOB_DELIVERY_CONFIRMED',
+      entityType: 'Job',
+      entityId: job._id,
+      details: { orderId: job.orderId, amount: payment.providerAmount },
+      req
+    });
 
     // ── Notifications ────────────────────────────────────────────────────────
     if (provider) {

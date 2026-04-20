@@ -10,6 +10,109 @@ import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { processSSLCommerzPayment } from '../../utils/sslcommerz.js';
 import { createNotification } from '../../utils/createNotification.js';
+import { createActivityLog } from '../../utils/createActivityLog.js';
+
+
+export async function rejectJob(req, res) {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { jobId } = req.params;
+    const { reason } = req.body;
+    const userId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(jobId)) throw new ApiError(400, 'Invalid job ID');
+    if (!reason) throw new ApiError(400, 'Rejection reason is required');
+
+    const provider = await Provider.findOne({ userId }).session(session);
+    if (!provider) throw new ApiError(404, 'Provider profile not found');
+
+    const job = await Job.findById(jobId).populate('service', 'name').session(session);
+    if (!job) throw new ApiError(404, 'Job not found');
+
+    if (job.provider.toString() !== provider._id.toString()) {
+      throw new ApiError(403, 'Not authorized to reject this job');
+    }
+
+    if (job.status !== 'pending') {
+      throw new ApiError(400, `Job cannot be rejected in current status: ${job.status}`);
+    }
+
+    const payment = await Payment.findOne({ jobId }).session(session);
+    if (!payment) throw new ApiError(404, 'Payment record not found');
+
+    // ── Refund Logic ────────────────────────────────────────────────────────
+    const adminUser = await User.findOne({ role: 'admin' }).session(session);
+    const adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
+
+    if (!adminWallet || adminWallet.balance < payment.totalAmount) {
+      throw new ApiError(500, 'Admin wallet sync error during refund');
+    }
+
+    let customerWallet = await Wallet.findOne({ userId: job.customer, role: 'customer' }).session(session);
+    if (!customerWallet) {
+      [customerWallet] = await Wallet.create([{
+        userId: job.customer,
+        role: 'customer',
+        balance: 0,
+        isActive: true
+      }], { session });
+    }
+
+    // Move money from admin escrow back to customer wallet
+    adminWallet.balance -= payment.totalAmount;
+    adminWallet.totalHeld = (adminWallet.totalHeld || 0) - payment.totalAmount;
+    await adminWallet.save({ session });
+
+    customerWallet.balance += payment.totalAmount;
+    customerWallet.transactionHistory.push(payment._id);
+    await customerWallet.save({ session });
+
+    // Update payment
+    payment.paymentStatus = 'refunded';
+    payment.escrowStatus = 'refunded_to_customer';
+    payment.refundReason = `provider_rejected: ${reason}`;
+    payment.refundedAt = new Date();
+    await payment.save({ session });
+
+    // Update job
+    job.status = 'rejected_by_provider';
+    job.rejectionReason = reason;
+    job.cancelledAt = new Date();
+    job.paymentStatus = 'refunded_to_customer';
+    await job.save({ session });
+
+    await session.commitTransaction();
+
+    // ── Activity Log ────────────────────────────────────────────────────────
+    await createActivityLog({
+      userId,
+      action: 'JOB_REJECTED_BY_PROVIDER',
+      entityType: 'Job',
+      entityId: job._id,
+      details: { reason, orderId: job.orderId },
+      req
+    });
+
+    // ── Notifications ────────────────────────────────────────────────────────
+    await createNotification({
+      userId: job.customer,
+      title: 'Booking Rejected & Refunded',
+      message: `The provider rejected your booking for "${job.service?.name}" (Order #${job.orderId}). BDT ${payment.totalAmount} has been refunded to your wallet.`,
+      type: 'payment',
+      referenceId: job._id,
+      metadata: { reason, orderId: job.orderId }
+    });
+
+    return res.status(200).json({ success: true, message: 'Job rejected and funds refunded to customer wallet.' });
+  } catch (error) {
+    await session.abortTransaction();
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
+  }
+}
 
 
 
@@ -266,6 +369,16 @@ export async function acceptJob(req, res) {
 
     await session.commitTransaction();
 
+    // Activity Log
+    await createActivityLog({
+      userId,
+      action: 'JOB_ACCEPTED',
+      entityType: 'Job',
+      entityId: job._id,
+      details: { orderId: job.orderId },
+      req
+    });
+
     // Send notification to customer
     await createNotification({
       userId: job.customer._id,
@@ -354,6 +467,16 @@ export async function startJob(req, res) {
 
     await session.commitTransaction();
 
+    // Activity Log
+    await createActivityLog({
+      userId,
+      action: 'JOB_STARTED',
+      entityType: 'Job',
+      entityId: job._id,
+      details: { orderId: job.orderId },
+      req
+    });
+
     await createNotification({
       userId: job.customer,
       title: 'Job Started',
@@ -417,6 +540,16 @@ export async function markCompletedByProvider(req, res) {
     await job.save({ session });
 
     await session.commitTransaction();
+
+    // Activity Log
+    await createActivityLog({
+      userId,
+      action: 'JOB_COMPLETED_BY_PROVIDER',
+      entityType: 'Job',
+      entityId: job._id,
+      details: { orderId: job.orderId },
+      req
+    });
 
     await createNotification({
       userId: job.customer,

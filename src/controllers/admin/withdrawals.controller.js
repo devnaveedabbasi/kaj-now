@@ -6,6 +6,7 @@ import Withdrawal from '../../models/withdrawal.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/createNotification.js';
+import { createActivityLog } from '../../utils/createActivityLog.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -147,6 +148,16 @@ export const approveWithdrawal = async (req, res) => {
         withdrawal.receiptFileName = receiptFile.originalname;
         await withdrawal.save({ session });
 
+        // Activity Log
+        await createActivityLog({
+            userId: req.user._id,
+            action: 'WITHDRAWAL_APPROVED',
+            entityType: 'Withdrawal',
+            entityId: withdrawal._id,
+            details: { amount: withdrawal.requestedAmount, transactionId },
+            req
+        });
+
         // Update provider wallet totals
         const providerWallet = await Wallet.findOne({ userId: withdrawal.providerId, role: 'provider' }).session(session);
         if (providerWallet) {
@@ -247,6 +258,16 @@ export const rejectWithdrawal = async (req, res) => {
         withdrawal.rejectedAt = new Date();
         withdrawal.rejectionReason = reason;
         await withdrawal.save({ session });
+
+        // Activity Log
+        await createActivityLog({
+            userId: req.user._id,
+            action: 'WITHDRAWAL_REJECTED',
+            entityType: 'Withdrawal',
+            entityId: withdrawal._id,
+            details: { amount: withdrawal.requestedAmount, reason },
+            req
+        });
 
         await session.commitTransaction();
 

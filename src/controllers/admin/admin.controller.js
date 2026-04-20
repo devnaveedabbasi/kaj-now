@@ -7,6 +7,7 @@ import Review from "../../models/reviews.model.js";
 import Notification from "../../models/notification.model.js";
 import Wallet from "../../models/wallet.model.js";
 import Job from "../../models/job.model.js";
+import ActivityLog from "../../models/activityLog.model.js";
 import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
 import { createNotification } from "../../utils/createNotification.js";
@@ -571,6 +572,47 @@ export const getAdminDashboardStats = async (req, res) => {
         );
     } catch (error) {
         console.error('Error getting dashboard stats:', error);
+        res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+};
+
+// Get all activity logs
+export const getActivityLogs = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+        const { action, entityType } = req.query;
+
+        let query = {};
+        if (action) query.action = action;
+        if (entityType) query.entityType = entityType;
+
+        const [logs, total] = await Promise.all([
+            ActivityLog.find(query)
+                .populate('userId', 'name email role')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            ActivityLog.countDocuments(query)
+        ]);
+
+        const totalPages = Math.ceil(total / limit);
+
+        res.status(200).json(
+            new ApiResponse(200, {
+                logs,
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalItems: total,
+                    itemsPerPage: limit
+                }
+            }, 'Activity logs retrieved successfully')
+        );
+    } catch (error) {
+        console.error('Error getting activity logs:', error);
         res.status(500).json(new ApiResponse(500, null, error.message));
     }
 };

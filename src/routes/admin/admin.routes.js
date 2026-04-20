@@ -7,6 +7,7 @@ const router = Router();
 router.get('/all-categories', asyncHandler(service.getAllCategories));
 router.get('/by-category/:categoryId', asyncHandler(service.getServicesByCategory));
 router.get('/dashboard/stats', asyncHandler(adminController.getAdminDashboardStats));
+router.get('/logs', asyncHandler(adminController.getActivityLogs));
 
 // User management
 router.get('/users', asyncHandler(adminController.getAllUsers));
