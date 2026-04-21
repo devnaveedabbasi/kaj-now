@@ -170,7 +170,17 @@ export const requestService = async (req, res) => {
             const missingIds = finalServiceIds.filter(id => !foundIds.includes(id));
             throw new ApiError(404, `Services not found: ${missingIds.join(', ')}`);
         }
-        
+        console.log('All requested services are valid:', services.map(s => s._id));
+        console.log(finalServiceIds,"service id array");
+
+        if(provider.approvedServices && provider.approvedServices.length > 0){
+            const alreadyApprovedIds = provider.approvedServices.map(id => id.toString());
+            const duplicateIds = finalServiceIds.filter(id => alreadyApprovedIds.includes(id));
+            if(duplicateIds.length > 0){
+                throw new ApiError(409, `Already have approved requests for services: ${duplicateIds.join(', ')}`);
+            }
+        }
+
         // Check for existing requests
         const existingRequests = await ServiceRequest.find({
             providerId: provider._id,
@@ -231,77 +241,87 @@ export const requestService = async (req, res) => {
 
 
 export const getMyServices = async (req, res) => {
-    try {
-        const userId = req.user._id;
-        
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-        const { status } = req.query;
-        
-        const provider = await Provider.findOne({ userId });
-        if (!provider) {
-            throw new ApiError(404, 'Provider profile not found');
-        }
-        
-        let query = { providerId: provider._id };
-        if (status) {
-            query.status = status;
-        }
-        
-    const [services, totalCount] = await Promise.all([
-    ServiceRequest.find(query)
-        .populate('serviceId', 'name icon price description userId')
-        .populate({
-            path: 'providerId',
-            populate: {
-                path: 'userId',
-                select: 'name email'
-            }
-        })
-        .populate('categoryId', 'name icon')
-        .populate('reviewedByAdmin', 'name email')
-        .sort({ reviewedAt: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-    ServiceRequest.countDocuments(query)
-]);
-        const totalPages = Math.ceil(totalCount / limit);
-        
-        const results = services.map(s => ({
-            _id: s._id,
-            status: s.status,
-            name: s.serviceId?.name || 'Unknown Service',
-            icon: s.serviceId?.icon || '',
-            price: s.serviceId?.price || 0,
-            description: s.serviceId?.description || 'No description available',
-            averageRating: s.serviceId?.averageRating || 0,
-            profilePicture: s.providerId?.userId?.profilePicture || null,
-            providerName: s.providerId?.userId?.name || 'Unknown Provider',
-            providerEmail: s.providerId?.userId?.email || 'Unknown Email',
-            categoryName: s.categoryId?.name || 'Unknown Category',
-        }));
+  try {
+    const userId = req.user._id;
 
-        res.status(200).json(
-            new ApiResponse(200, {
-                services: results,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit
-                }
-            }, 'Services retrieved successfully')
-        );
-    } catch (error) {
-        console.error('Error getting services:', error);
-        if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        } else {
-            res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
-        }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const { status } = req.query;
+
+    const provider = await Provider.findOne({ userId })
+      .populate({
+        path: 'userId',
+        select: 'name email profilePicture'
+      })
+      .populate({
+        path: 'approvedServices',
+        select: 'name icon price description averageRating'
+      });
+
+    if (!provider) {
+      throw new ApiError(404, 'Provider profile not found');
     }
+
+    // 🔥 GET SERVICE REQUESTS ONLY FOR STATUS FILTER
+    let query = { providerId: provider._id };
+    if (status) query.status = status;
+
+    const [requests, totalCount] = await Promise.all([
+      ServiceRequest.find(query)
+        .select('status serviceId')
+        .lean(),
+
+      ServiceRequest.countDocuments(query)
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limit);
+
+    // 🔥 GET ALL APPROVED SERVICES FROM PROVIDER
+    const approvedServices = (provider.approvedServices || []).map(service => ({
+      _id: service._id,
+      name: service.name,
+      icon: service.icon,
+      price: service.price,
+      description: service.description,
+      averageRating: service.averageRating
+    }));
+
+    // 🔥 FINAL SINGLE OBJECT RESPONSE
+    const result = {
+      _id: provider._id,
+      providerName: provider.userId?.name || 'Unknown Provider',
+      providerEmail: provider.userId?.email || 'Unknown Email',
+      profilePicture: provider.userId?.profilePicture || null,
+
+      services: approvedServices, // 👈 ONLY THIS YOU WANT
+
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalItems: totalCount,
+        itemsPerPage: limit
+      }
+    };
+
+    return res.status(200).json(
+      new ApiResponse(200, result, 'Services retrieved successfully')
+    );
+
+  } catch (error) {
+    console.error('Error getting services:', error);
+
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(
+        new ApiResponse(error.statusCode, null, error.message)
+      );
+    }
+
+    return res.status(500).json(
+      new ApiResponse(500, null, 'Internal server error')
+    );
+  }
 };
 
 

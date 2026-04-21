@@ -6,19 +6,18 @@ import routes from "./routes/index.js";
 import cors from "cors";
 import requestLogger from "./middleware/requestLogger.js";
 import { ApiError } from "./utils/errorHandler.js";
+import errorHandler from "./middleware/errorHandler.js";
 
 const app = express();
 
-if (process.env.TRUST_PROXY === "true") {
-    app.set("trust proxy", 1);
-}
+
 const server = createServer(app);
 
 const corsOptions = {
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true,
+  origin: '*',
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: false,
 };
 
 app.use(cors(corsOptions));
@@ -28,11 +27,11 @@ app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
 app.use(requestLogger);
 
 app.get('/', (req, res) => {
-    res.send('API is working');
+  res.send('API is working');
 });
 
 app.use("/api", routes);
-
+app.use(errorHandler);
 /**
  * 404 Not Found Handler
  */
@@ -53,20 +52,20 @@ app.use((err, req, res, next) => {
   if (!(error instanceof ApiError)) {
     const statusCode = error.statusCode || error.status || 500;
     const message = error.message || "Internal Server Error";
-    
+
     error = new ApiError(statusCode, message, error.errors || []);
   }
 
   // Log error for debugging (but don't expose in production)
-const errorResponse = {
+  const errorResponse = {
     code: error.statusCode, //  statusCode ki jagah code
     message: error.message,
     success: error.success,
     ...(process.env.NODE_ENV === 'development' && {
-        stack: error.stack,
-        errors: error.errors
+      stack: error.stack,
+      errors: error.errors
     }),
-};
+  };
   if (process.env.NODE_ENV !== 'production') {
     console.error('Error:', {
       statusCode: error.statusCode,

@@ -9,7 +9,7 @@ const serviceSchema = new mongoose.Schema({
         required: true,
     },
     price: { type: Number, required: true },
-    description: { type: String, trim: true ,minlength: 10, maxlength: 200},
+    description: { type: String, trim: true ,minlength: 10, maxlength: 1000},
     isActive: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },
     reviews: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }], 

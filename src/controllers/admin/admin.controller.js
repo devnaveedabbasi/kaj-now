@@ -17,44 +17,58 @@ import mongoose from "mongoose";
 
 // Get all users
 export const getAllUsers = async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-        const { role, isActive, search } = req.query;
-        
-        let query = {};
-        if (role) query.role = role;
-        if (isActive !== undefined) query.isActive = isActive === 'true';
-        if (search) {
-            query.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { email: { $regex: search, $options: 'i' } }
-            ];
-        }
-        
-        const [users, totalCount] = await Promise.all([
-            User.find(query).select('-password').sort({ createdAt: -1 }).skip(skip).limit(limit),
-            User.countDocuments(query)
-        ]);
-        
-        const totalPages = Math.ceil(totalCount / limit);
-        
-        res.status(200).json(
-            new ApiResponse(200, {
-                users,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit
-                }
-            }, 'Users retrieved successfully')
-        );
-    } catch (error) {
-        console.error('Error getting users:', error);
-        res.status(500).json(new ApiResponse(500, null, error.message));
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const { isActive, search } = req.query;
+
+    let query = {
+      role: { $ne: "admin" } // ❌ exclude admins
+    };
+
+    if (isActive !== undefined) {
+      query.isActive = isActive === "true";
     }
+
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } }
+      ];
+    }
+
+    const [users, totalCount] = await Promise.all([
+      User.find(query)
+        .select("-password")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+
+      User.countDocuments(query)
+    ]);
+
+    const totalPages = Math.ceil(totalCount / limit);
+
+    res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          users,
+          pagination: {
+            currentPage: page,
+            totalPages,
+            totalItems: totalCount,
+            itemsPerPage: limit
+          }
+        },
+        "Users retrieved successfully"
+      )
+    );
+  } catch (error) {
+    console.error("Error getting users:", error);
+    res.status(500).json(new ApiResponse(500, null, error.message));
+  }
 };
 
 // Get user by ID
@@ -128,51 +142,58 @@ export const getUserById = async (req, res) => {
     }
 };
 
-// Update user status (activate/deactivate)
 export const updateUserStatus = async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { isActive } = req.body;
-        
-        if (!mongoose.Types.ObjectId.isValid(userId)) {
-            throw new ApiError(400, 'Invalid user ID format');
-        }
-        
-        const user = await User.findById(userId);
-        
-        if (!user) {
-            throw new ApiError(404, 'User not found');
-        }
-        
-        // Check if already in same status
-        if (user.isActive === isActive) {
-            throw new ApiError(400, `User is already ${isActive ? 'activated' : 'deactivated'}`);
-        }
-        
-        user.isActive = isActive;
-        await user.save();
-        
-        // Send notification to user
-        await createNotification({
-            userId: user._id,
-            title: isActive ? 'Account Activated' : 'Account Deactivated',
-            message: isActive ? 'Your account has been activated' : 'Your account has been deactivated. Contact support for details.',
-            type: 'system'
-        });
-        
-        res.status(200).json(
-            new ApiResponse(200, user, `User ${isActive ? 'activated' : 'deactivated'} successfully`)
-        );
-    } catch (error) {
-        console.error('Error updating user status:', error);
-        if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        } else {
-            res.status(500).json(new ApiResponse(500, null, error.message));
-        }
-    }
-};
+  try {
+    const { userId } = req.params;
+    const { status } = req.body;
 
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw new ApiError(400, "Invalid user ID format");
+    }
+
+    // validate status
+    const allowedStatus = ["pending", "approved", "blocked", "suspended"];
+    if (!allowedStatus.includes(status)) {
+      throw new ApiError(400, "Invalid status value");
+    }
+
+    const user = await User.findById(userId);
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    // check same status
+    if (user.status === status) {
+      throw new ApiError(400, `User is already ${status}`);
+    }
+
+    user.status = status;
+    await user.save();
+
+    // notification
+    await createNotification({
+      userId: user._id,
+      title: `Account ${status}`,
+      message: `Your account status has been updated to ${status}`,
+      type: "system",
+    });
+
+    res.status(200).json(
+      new ApiResponse(200, user, `User status updated to ${status}`)
+    );
+  } catch (error) {
+    console.error("Error updating user status:", error);
+
+    if (error instanceof ApiError) {
+      return res
+        .status(error.statusCode)
+        .json(new ApiResponse(error.statusCode, null, error.message));
+    }
+
+    res.status(500).json(new ApiResponse(500, null, error.message));
+  }
+};
 // Delete user
 export const deleteUser = async (req, res) => {
     try {
@@ -288,16 +309,20 @@ export const getProviderById = async (req, res) => {
         }
         
         const provider = await Provider.findById(providerId)
-            .populate('userId', '-password')
-            .populate('Category', 'name icon description')
-            .populate({
-                path: 'services',
-                populate: {
-                    path: 'serviceId',
-                    select: 'name icon price description averageRating'
-                }
-            })
-            .lean();
+  .populate('userId', '-password')
+  .populate('Category', 'name icon description')
+  .populate({
+    path: 'services',
+    populate: {
+      path: 'serviceId',
+      select: 'name icon price description averageRating'
+    }
+  })
+  .populate({
+    path: 'approvedServices',  
+    select: 'name icon price description averageRating'
+  })
+  .lean();
         
         if (!provider) {
             throw new ApiError(404, 'Provider not found');

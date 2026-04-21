@@ -10,7 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
-
+import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 const SALT_ROUNDS = 10;
 const OTP_TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
@@ -438,27 +438,33 @@ export const completeProfile = async (req, res) => {
   const files = req.files || {};
 
   // REQUIRED VALIDATION
-  if (!gender) throw new ApiError(400, 'Gender is required');
-  if (!dob) throw new ApiError(400, 'Date of birth is required');
-  if (!serviceCategoryId) throw new ApiError(400, 'Service category is required');
-  if (!serviceIds) throw new ApiError(400, 'Services are required');
-  if (!latitude || !longitude) throw new ApiError(400, 'Location coordinates are required');
+  if (!gender) throw new ApiError(400, "Gender is required");
+  if (!dob) throw new ApiError(400, "Date of birth is required");
+  if (!serviceCategoryId) throw new ApiError(400, "Service category is required");
+  if (!serviceIds) throw new ApiError(400, "Services are required");
+  if (!latitude || !longitude) throw new ApiError(400, "Location coordinates are required");
 
   // GENDER VALIDATION
-  const allowedGenders = ['male', 'female', 'other', 'prefer_not_say'];
+  const allowedGenders = ["male", "female", "other", "prefer_not_say"];
   if (!allowedGenders.includes(gender)) {
-    throw new ApiError(400, 'Invalid gender value');
+    throw new ApiError(400, "Invalid gender value");
   }
 
-  // DATE VALIDATION (18+)
+  // DOB VALIDATION (accurate age check)
   const parsedDob = new Date(dob);
   if (isNaN(parsedDob.getTime())) {
-    throw new ApiError(400, 'Invalid date of birth');
+    throw new ApiError(400, "Invalid date of birth");
   }
 
-  const age = new Date().getFullYear() - parsedDob.getFullYear();
+  const today = new Date();
+  let age = today.getFullYear() - parsedDob.getFullYear();
+  const m = today.getMonth() - parsedDob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < parsedDob.getDate())) {
+    age--;
+  }
+
   if (age < 18) {
-    throw new ApiError(400, 'You must be at least 18 years old');
+    throw new ApiError(400, "You must be at least 18 years old");
   }
 
   // LOCATION VALIDATION
@@ -466,15 +472,15 @@ export const completeProfile = async (req, res) => {
   const lng = parseFloat(longitude);
 
   if (isNaN(lat) || lat < -90 || lat > 90) {
-    throw new ApiError(400, 'Invalid latitude');
+    throw new ApiError(400, "Invalid latitude");
   }
 
   if (isNaN(lng) || lng < -180 || lng > 180) {
-    throw new ApiError(400, 'Invalid longitude');
+    throw new ApiError(400, "Invalid longitude");
   }
 
   // FILE VALIDATION
-  const requiredFiles = ['facePhoto', 'idCardFront', 'idCardBack'];
+  const requiredFiles = ["facePhoto", "idCardFront", "idCardBack"];
 
   for (let field of requiredFiles) {
     if (!files[field] || !files[field][0]) {
@@ -482,28 +488,19 @@ export const completeProfile = async (req, res) => {
     }
   }
 
-  // FIND PROVIDER
-  const provider = await Provider.findOne({ userId });
-  if (!provider) {
-    throw new ApiError(404, 'Provider not found');
-  }
-
-  // FIND USER
+  // FIND USER & PROVIDER
   const user = await User.findById(userId);
-  if (!user) {
-    throw new ApiError(404, 'User not found');
-  }
+  if (!user) throw new ApiError(404, "User not found");
+
+  const provider = await Provider.findOne({ userId });
+  if (!provider) throw new ApiError(404, "Provider not found");
 
   // CATEGORY VALIDATION
   const category = await Category.findById(serviceCategoryId);
-  if (!category) {
-    throw new ApiError(404, 'Invalid category');
-  }
+  if (!category) throw new ApiError(404, "Invalid category");
 
   // SERVICES VALIDATION
-  let serviceIdArray = Array.isArray(serviceIds)
-    ? serviceIds
-    : [serviceIds];
+  let serviceIdArray = Array.isArray(serviceIds) ? serviceIds : [serviceIds];
 
   const services = await Service.find({
     _id: { $in: serviceIdArray },
@@ -511,79 +508,82 @@ export const completeProfile = async (req, res) => {
   });
 
   if (services.length !== serviceIdArray.length) {
-    throw new ApiError(400, 'Invalid services for selected category');
+    throw new ApiError(400, "Invalid services for selected category");
   }
 
+  // OPTIONAL: check duplicates request
+  const existingRequests = await ServiceRequest.find({
+    providerId: provider._id,
+    serviceId: { $in: serviceIdArray },
+    status: { $in: ["pending", "approved"] },
+  });
+
+  if (existingRequests.length > 0) {
+    throw new ApiError(400, "Service request already exists");
+  }
+
+  // CREATE SERVICE REQUEST (ONLY ONCE VALIDATION PASSED)
+  await ServiceRequest.create({
+    providerId: provider._id,
+    serviceId: serviceIdArray,
+    categoryId: serviceCategoryId,
+  });
+
+  // UPDATE PROVIDER
+  const uploadPath = "/uploads/provider/";
 
   provider.gender = gender;
   provider.dob = parsedDob;
   provider.Category = serviceCategoryId;
   provider.services = serviceIdArray;
-  
+
   if (permanentAddress) {
     provider.permanentAddress = permanentAddress;
   }
 
   provider.location = {
-    type: 'Point',
+    type: "Point",
     coordinates: [lng, lat],
-    locationName: locationName || '',
+    locationName: locationName || "",
   };
 
-  // FILE HANDLING FOR PROVIDER
-  const uploadPath = '/uploads/provider/';
-
-  provider.facePhoto = `${process.env.BASE_URL}${uploadPath}${files.facePhoto[0].filename}`;
-  provider.idCardFront = `${process.env.BASE_URL}${uploadPath}${files.idCardFront[0].filename}`;
-  provider.idCardBack = `${process.env.BASE_URL}${uploadPath}${files.idCardBack[0].filename}`;
+  provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
+  provider.idCardFront = `${uploadPath}${files.idCardFront[0].filename}`;
+  provider.idCardBack = `${uploadPath}${files.idCardBack[0].filename}`;
 
   if (files.certificates?.length > 0) {
     provider.certificates = files.certificates.map(
-      f => `${process.env.BASE_URL}${uploadPath}${f.filename}`
+      (f) => `${uploadPath}${f.filename}`
     );
   }
 
-  // KYC STATUS
   provider.isKycCompleted = true;
-  provider.kycStatus = 'pending';
+  provider.kycStatus = "pending";
 
   await provider.save();
 
-
+  // UPDATE USER
   user.location = {
-    type: 'Point',
+    type: "Point",
     coordinates: [lng, lat],
-    locationName: locationName || '',
+    locationName: locationName || "",
   };
-  
+
   user.profileLastUpdated = new Date();
-  
+
   await user.save();
 
-  
-  // Populate provider with references
-  await provider.populate('Category', 'name icon');
-  await provider.populate('services', 'name icon price');
+  await provider.populate("Category", "name icon");
+  await provider.populate("services", "name icon price");
 
   res.status(200).json(
     new ApiResponse(
       200,
       {
-        provider: {
-          ...provider.toObject(),
-          location: provider.location 
-        },
-        user: {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          phone: user.phone,
-          role: user.role,
-          location: user.location,
-          profileLastUpdated: user.profileLastUpdated
-        }
+        provider,
+        user,
       },
-      'Profile completed successfully'
+      "Profile completed successfully"
     )
   );
 };

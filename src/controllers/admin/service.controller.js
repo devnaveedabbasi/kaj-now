@@ -97,18 +97,29 @@ export const createService = async (req, res) => {
         res.status(201).json(
             new ApiResponse(201, newService, 'Service created successfully')
         );
-    } catch (error) {
-        cleanupFiles(req.files);
-        
-        if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        } else {
-            console.error('Error creating service:', error);
-            res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
-        }
-    }
-};
+ } catch (error) {
+    cleanupFiles(req.files);
 
+    console.error("Error creating service:", error);
+
+    if (error.name === "ValidationError") {
+        const messages = Object.values(error.errors).map(e => e.message);
+
+        return res.status(400).json(
+            new ApiResponse(400, null, messages.join(", "))
+        );
+    }
+
+    if (error instanceof ApiError) {
+        return res.status(error.statusCode).json(
+            new ApiResponse(error.statusCode, null, error.message)
+        );
+    }
+    return res.status(500).json(
+        new ApiResponse(500, null, error.message || "Internal server error")
+    );
+}
+}
 // Get all services with filters and pagination
 export const getAllServices = async (req, res) => {
     try {

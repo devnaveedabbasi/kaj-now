@@ -89,7 +89,7 @@ export const getServiceRequestById = async (req, res) => {
             select: 'userId',
             populate: {
                 path: 'userId',
-                select: 'name email'
+                select: 'name email profilePicture'
             }
         })
         .populate('serviceId', 'name icon price description')
@@ -109,7 +109,7 @@ export const getServiceRequestById = async (req, res) => {
 export const approveServiceRequest = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id;
-
+console.log(`Approving service request with ID: ${id} by admin user ID: ${userId}`);
     const request = await ServiceRequest.findById(id);
     if (!request) {
         throw new ApiError(404, 'Service request not found');
@@ -127,31 +127,28 @@ export const approveServiceRequest = async (req, res) => {
 
     // Update provider's arrays
     const provider = await Provider.findById(request.providerId);
-    if (provider) {
-        if (!provider.services) provider.services = [];
-        if (!provider.approvedServices) provider.approvedServices = [];
-        
-        if (!provider.services.includes(request._id)) {
-            provider.services.push(request._id);
-        }
-        
-        if (!provider.approvedServices.includes(request.serviceId)) {
-            provider.approvedServices.push(request.serviceId);
-        }
-        
-        await provider.save();
-    }
 
+if (provider) {
+  const serviceIds = request.serviceId.map(id => id.toString());
+
+  const existing = provider.approvedServices.map(id => id.toString());
+
+  provider.approvedServices = [
+    ...new Set([...existing, ...serviceIds])
+  ];
+
+  await provider.save();
+}
     // Populate the updated request
     await request.populate([
         {
             path: 'providerId',
             select: 'userId',
-            populate: { path: 'userId', select: 'name email' }
+            populate: { path: 'userId', select: 'name email profilePicture' }
         },
         { path: 'serviceId', select: 'name icon price' },
         { path: 'categoryId', select: 'name' },
-        { path: 'reviewedByAdmin', select: 'name email' }
+        { path: 'reviewedByAdmin', select: 'name email profilePicture' }
     ]);
 
     res.status(200).json(
@@ -189,11 +186,11 @@ export const rejectServiceRequest = async (req, res) => {
         {
             path: 'providerId',
             select: 'userId',
-            populate: { path: 'userId', select: 'name email' }
+            populate: { path: 'userId', select: 'name email profilePicture' }
         },
         { path: 'serviceId', select: 'name icon price' },
         { path: 'categoryId', select: 'name' },
-        { path: 'reviewedByAdmin', select: 'name email' }
+        { path: 'reviewedByAdmin', select: 'name email profilePicture' }
     ]);
 
     res.status(200).json(

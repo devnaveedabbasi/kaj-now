@@ -254,8 +254,6 @@ export async function bookJob(req, res) {
     // ── Price calculation ───────────────────────────────────────────────────
     const servicePrice = service.price;
     const platformFeePercentage = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE || '10');
-    // Platform fee is deducted at withdrawal time, not at booking time.
-    // providerAmount is calculated properly at withdrawal.
     const platformFee = parseFloat(((platformFeePercentage / 100) * servicePrice).toFixed(2));
     const providerAmount = parseFloat((servicePrice - platformFee).toFixed(2));
 

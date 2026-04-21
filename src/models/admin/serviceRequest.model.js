@@ -2,7 +2,10 @@ import mongoose from 'mongoose';
 
 const serviceRequestSchema = new mongoose.Schema({
     providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Provider', required: true },
-    serviceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Service', required: true },
+serviceId: [{
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "Service"
+}],
     categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
     status: { 
         type: String, 
