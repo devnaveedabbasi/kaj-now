@@ -4,7 +4,7 @@ import * as notification from '../controllers/notification.controller.js';
 
 const router = express.Router();
 
-router.use(authenticateToken, requireRole(['customer', 'provider', 'admin']));
+router.use(authenticateToken);
 
 router.get('/', notification.getUserNotifications);
 router.get('/badge', notification.getNotificationBadge);
