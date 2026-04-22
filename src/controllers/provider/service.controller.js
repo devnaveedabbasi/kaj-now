@@ -326,55 +326,56 @@ export const getMyServices = async (req, res) => {
 
 
 
+
 export const getServiceById = async (req, res) => {
     try {
-        const { serviceId:serviceRequestId } = req.params;
-        
-        // Validate ObjectId
-        if (!mongoose.Types.ObjectId.isValid(serviceRequestId)) {
-            throw new ApiError(400, 'Invalid service request ID format');
+        const { serviceId } = req.params;
+console.log('Fetching service request with ID:', serviceId);
+        if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+            throw new ApiError(400, 'Invalid service ID format');
         }
-        
-        // Find service request by ID
-        const serviceRequest = await ServiceRequest.findById(serviceRequestId)
-            .populate('serviceId', 'name icon price description userId averageRating')
-            .populate({
-                path: 'providerId',
-                populate: {
-                    path: 'userId',
-                    select: 'name email profilePicture phoneNumber'
-                }
-            })
+
+        const serviceRequest = await ServiceRequest.findOne({ serviceId: serviceId })
+            .populate('providerId', 'userId businessName businessPhone businessEmail location')
+            .populate('serviceId', 'name price icon description categoryId averageRating')
             .populate('categoryId', 'name icon')
-            .populate('reviewedByAdmin', 'name email')
             .lean();
-        
+
         if (!serviceRequest) {
             throw new ApiError(404, 'Service request not found');
         }
-        
-        // Get reviews for this service
-        const reviews = await mongoose.model('Review').find({ 
-            service: serviceRequest.serviceId._id 
-        })
-        .populate('userId', 'name email profilePicture')
-        .lean();
-        
-        // Calculate rating distribution
-        const ratingDistribution = {
-            1: 0, 2: 0, 3: 0, 4: 0, 5: 0
-        };
-        
-        let totalRating = 0;
-        if (reviews && reviews.length > 0) {
-            reviews.forEach(review => {
-                ratingDistribution[review.rating]++;
-                totalRating += review.rating;
-            });
+
+        // Get provider user details
+        let providerUser = null;
+        if (serviceRequest.providerId?.userId) {
+            providerUser = await mongoose.model('User').findById(serviceRequest.providerId.userId)
+                .select('name email profilePicture phoneNumber')
+                .lean();
         }
-        
-        // Format reviews
-        const formattedReviews = reviews?.map(review => ({
+
+        // Get reviews for the service
+        let reviews = [];
+        let ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        let totalRating = 0;
+
+        if (serviceRequest.serviceId && serviceRequest.serviceId.length > 0) {
+            const firstService = serviceRequest.serviceId[0];
+            reviews = await mongoose.model('Review').find({
+                service: firstService._id
+            })
+            .populate('userId', 'name email profilePicture')
+            .lean();
+
+            if (reviews.length > 0) {
+                reviews.forEach(review => {
+                    ratingDistribution[review.rating]++;
+                    totalRating += review.rating;
+                });
+            }
+        }
+
+        // Format reviews exactly as before
+        const formattedReviews = reviews.map(review => ({
             _id: review._id,
             rating: review.rating,
             comment: review.comment,
@@ -383,73 +384,64 @@ export const getServiceById = async (req, res) => {
             userImage: review.userId?.profilePicture || null,
             createdAt: review.createdAt,
             updatedAt: review.updatedAt
-        })) || [];
-        
-        // Prepare response
+        }));
+
+        // Final response - same structure as before
         const response = {
-            // Service Request Info
             _id: serviceRequest._id,
-            status: serviceRequest.status,
-            requestedAt: serviceRequest.requestedAt,
-            reviewedAt: serviceRequest.reviewedAt,
-            notes: serviceRequest.notes,
-            rejectionReason: serviceRequest.rejectionReason,
-            createdAt: serviceRequest.createdAt,
-            updatedAt: serviceRequest.updatedAt,
-            
-            // Service Info
-            service: {
-                _id: serviceRequest.serviceId?._id,
-                name: serviceRequest.serviceId?.name,
-                description: serviceRequest.serviceId?.description || 'No description available',
-                icon: serviceRequest.serviceId?.icon,
-                price: serviceRequest.serviceId?.price,
-                averageRating: serviceRequest.serviceId?.averageRating || 0,
-                totalReviews: reviews?.length || 0
-            },
-            
-            // Provider Info
+            name: serviceRequest.serviceId?.[0]?.name || 'N/A',
+            description: serviceRequest.serviceId?.[0]?.description || 'No description available',
+            icon: serviceRequest.serviceId?.[0]?.icon || null,
+            price: serviceRequest.serviceId?.[0]?.price || 0,
+            isActive: serviceRequest.status === 'approved',
+            averageRating: serviceRequest.serviceId?.[0]?.averageRating || 0,
+            totalReviews: reviews.length,
+
+            // Provider (service owner)
             provider: {
-                _id: serviceRequest.providerId?._id,
-                name: serviceRequest.providerId?.userId?.name,
-                email: serviceRequest.providerId?.userId?.email,
-                phone: serviceRequest.providerId?.userId?.phoneNumber,
-                profilePicture: serviceRequest.providerId?.userId?.profilePicture,
-                location: serviceRequest.providerId?.location || null
+                _id: providerUser?._id,
+                name: providerUser?.name,
+                email: providerUser?.email,
+                phone: providerUser?.phoneNumber,
+                profilePicture: providerUser?.profilePicture,
+                location: serviceRequest.providerId?.location,
             },
-            
-            // Category Info
+
+            // Category
             category: {
                 _id: serviceRequest.categoryId?._id,
                 name: serviceRequest.categoryId?.name,
                 icon: serviceRequest.categoryId?.icon
             },
-            
-            // Admin Info (who reviewed)
-            reviewedBy: serviceRequest.reviewedByAdmin ? {
-                _id: serviceRequest.reviewedByAdmin._id,
-                name: serviceRequest.reviewedByAdmin.name,
-                email: serviceRequest.reviewedByAdmin.email
-            } : null,
-            
-            // Reviews & Ratings
+
+            // Reviews
             reviews: formattedReviews,
-            ratingDistribution: ratingDistribution,
+            ratingDistribution,
+
             stats: {
-                averageRating: serviceRequest.serviceId?.averageRating || 0,
-                totalRatings: reviews?.length || 0
-            }
+                averageRating: serviceRequest.serviceId?.[0]?.averageRating || 0,
+                totalRatings: reviews.length
+            },
+
+            createdAt: serviceRequest.createdAt,
+            updatedAt: serviceRequest.updatedAt
         };
-        
+
         res.status(200).json(
-            new ApiResponse(200, response, 'Service request details retrieved successfully')
+            new ApiResponse(200, response, 'Service request retrieved successfully')
         );
+
     } catch (error) {
-        console.error('Error getting service request details:', error);
+        console.error('Error getting service request:', error);
+
         if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        } else {
-            res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
+            return res
+                .status(error.statusCode)
+                .json(new ApiResponse(error.statusCode, null, error.message));
         }
+
+        res.status(500).json(
+            new ApiResponse(500, null, 'Internal server error')
+        );
     }
 };

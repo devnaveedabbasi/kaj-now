@@ -175,7 +175,7 @@ export const getAllApprovedServices = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
-
+console.log('Query params:');
         const search = req.query.search || '';
         const { categoryId, minPrice, maxPrice } = req.query;
 

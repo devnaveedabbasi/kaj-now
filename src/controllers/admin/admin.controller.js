@@ -534,6 +534,41 @@ export const rejectProviderKyc = async (req, res) => {
 // Get admin dashboard stats
 export const getAdminDashboardStats = async (req, res) => {
     try {
+        const { filter = 'thisMonth' } = req.query; // Options: lastMonth, thisMonth, lastYear
+        
+        // Date range calculations
+        const now = new Date();
+        let startDate, endDate;
+        
+        switch(filter) {
+            case 'lastMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+                break;
+            case 'thisMonth':
+                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                break;
+            case 'lastYear':
+                startDate = new Date(now.getFullYear() - 1, 0, 1);
+                endDate = new Date(now.getFullYear() - 1, 11, 31);
+                break;
+            default:
+                startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        }
+        
+        // Set end date to end of day
+        endDate.setHours(23, 59, 59, 999);
+        
+        // Filter object for date ranges
+        const dateFilter = {
+            createdAt: {
+                $gte: startDate,
+                $lte: endDate
+            }
+        };
+        
         const [
             totalUsers,
             totalProviders,
@@ -545,31 +580,100 @@ export const getAdminDashboardStats = async (req, res) => {
             totalReviews,
             pendingKyc,
             approvedKyc,
-            adminWallet
+            adminWallet,
+            // Job stats by status
+            activeJobs,
+            completedJobs,
+            cancelledJobs,
+            // Revenue data for charts
+            monthlyRevenueData,
+            // Recent jobs
+            recentJobs
         ] = await Promise.all([
+            // Total users (all time)
             User.countDocuments(),
+            // Total providers (all time)
             User.countDocuments({ role: 'provider' }),
+            // Total services (all time)
             Service.countDocuments({ isDeleted: false }),
+            // Total categories (all time)
             Category.countDocuments({ isDeleted: false }),
-            ServiceRequest.countDocuments(),
-            ServiceRequest.countDocuments({ status: 'pending' }),
-            ServiceRequest.countDocuments({ status: 'approved' }),
-            Review.countDocuments(),
+            // Service requests in date range
+            ServiceRequest.countDocuments(dateFilter),
+            // Pending requests in date range
+            ServiceRequest.countDocuments({ ...dateFilter, status: 'pending' }),
+            // Approved requests in date range
+            ServiceRequest.countDocuments({ ...dateFilter, status: 'approved' }),
+            // Reviews in date range
+            Review.countDocuments(dateFilter),
+            // Pending KYC (all time)
             Provider.countDocuments({ kycStatus: 'pending' }),
+            // Approved KYC (all time)
             Provider.countDocuments({ kycStatus: 'approved' }),
-            Wallet.findOne({ role: 'admin' })
+            // Admin wallet
+            Wallet.findOne({ role: 'admin' }),
+            // Job status breakdown
+            ServiceRequest.countDocuments({ ...dateFilter, status: 'active' }),
+            ServiceRequest.countDocuments({ ...dateFilter, status: 'completed' }),
+            ServiceRequest.countDocuments({ ...dateFilter, status: 'cancelled' }),
+            // Revenue data for chart (grouped by month)
+            ServiceRequest.aggregate([
+                {
+                    $match: {
+                        ...dateFilter,
+                        status: 'approved'
+                    }
+                },
+                {
+                    $group: {
+                        _id: {
+                            year: { $year: '$createdAt' },
+                            month: { $month: '$createdAt' }
+                        },
+                        totalAmount: { $sum: '$price' },
+                        platformFee: { $sum: { $multiply: ['$price', 0.1] } } // Assuming 10% platform fee
+                    }
+                },
+                {
+                    $sort: { '_id.year': 1, '_id.month': 1 }
+                }
+            ]),
+            // Recent 5 jobs for table
+            ServiceRequest.find()
+                .populate('serviceId', 'name price')
+                .populate('providerId', 'businessName')
+                .populate('categoryId', 'name')
+                .sort({ createdAt: -1 })
+                .limit(5)
+                .lean()
         ]);
         
-        // Recent activities
-        const recentUsers = await User.find().select('-password').sort({ createdAt: -1 }).limit(5);
-        const recentRequests = await ServiceRequest.find()
-            .populate('serviceId', 'name')
-            .populate('providerId')
-            .sort({ createdAt: -1 })
-            .limit(5);
+        // Format monthly data for charts
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const chartData = monthlyRevenueData.map(item => ({
+            month: `${monthNames[item._id.month - 1]} ${item._id.year}`,
+            totalAmount: item.totalAmount,
+            platformFee: item.platformFee
+        }));
+        
+        // Format recent jobs
+        const formattedRecentJobs = recentJobs.map(job => ({
+            _id: job._id,
+            serviceName: job.serviceId?.[0]?.name || 'N/A',
+            price: job.serviceId?.[0]?.price || 0,
+            providerName: job.providerId?.businessName || 'N/A',
+            categoryName: job.categoryId?.name || 'N/A',
+            status: job.status,
+            createdAt: job.createdAt
+        }));
         
         res.status(200).json(
             new ApiResponse(200, {
+                filterApplied: filter,
+                dateRange: {
+                    startDate,
+                    endDate
+                },
                 stats: {
                     totalUsers,
                     totalProviders,
@@ -589,17 +693,25 @@ export const getAdminDashboardStats = async (req, res) => {
                         totalHeld: adminWallet?.totalHeld || 0
                     }
                 },
-                recentActivities: {
-                    recentUsers,
-                    recentRequests
-                }
+                // jobStats: {
+                //     total: totalServiceRequests,
+                //     active: activeJobs,
+                //     pending: pendingRequests,
+                //     approved: approvedRequests,
+                //     completed: completedJobs,
+                //     cancelled: cancelledJobs
+                // },
+                chartData: {
+                    revenue: chartData
+                },
+                recentJobs: formattedRecentJobs
             }, 'Dashboard stats retrieved successfully')
         );
     } catch (error) {
         console.error('Error getting dashboard stats:', error);
         res.status(500).json(new ApiResponse(500, null, error.message));
     }
-};
+};;
 
 // Get all activity logs
 export const getActivityLogs = async (req, res) => {

@@ -41,9 +41,7 @@ const userSchema = new mongoose.Schema({
 
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
-
-
-}, {
+fcmToken: { type: String, default: null }}, {
   timestamps: true,
   toJSON: { virtuals: true }
 });

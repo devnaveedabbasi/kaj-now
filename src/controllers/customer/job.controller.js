@@ -461,25 +461,61 @@ export async function acceptJob(req, res) {
 
 export async function confirmCompletionByCustomer(req, res) {
   const session = await mongoose.startSession();
-  session.startTransaction();
 
   try {
     const { jobId } = req.params;
     const customerId = req.user._id;
 
-    if (!mongoose.Types.ObjectId.isValid(jobId)) throw new ApiError(400, 'Invalid job ID');
-
-    const job = await Job.findById(jobId).populate('service', 'name').session(session);
-    if (!job) throw new ApiError(404, 'Job not found');
-
-    if (job.customer.toString() !== customerId.toString()) {
-      throw new ApiError(403, 'Not authorized to confirm this job');
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+      throw new ApiError(400, 'Invalid job ID');
     }
 
-    if (job.status !== 'completed_by_provider') {
-      throw new ApiError(400, `Job must be completed by provider first. Current: ${job.status}`);
+    session.startTransaction();
+
+    // primary STEP 1: Atomic job update (prevents race condition)
+    const job = await Job.findOneAndUpdate(
+      {
+        _id: jobId,
+        customer: customerId,
+        status: 'completed_by_provider', // only allow this state
+      },
+      {
+        $set: {
+          status: 'confirmed_by_user',
+          confirmedByUserAt: new Date(),
+          paymentStatus: 'released_to_provider',
+        },
+      },
+      { new: true, session }
+    ).populate('service', 'name');
+
+    // 🧠 Handle edge cases
+    if (!job) {
+      const existingJob = await Job.findById(jobId);
+
+      if (!existingJob) {
+        throw new ApiError(404, 'Job not found');
+      }
+
+      if (existingJob.customer.toString() !== customerId.toString()) {
+        throw new ApiError(403, 'Not authorized');
+      }
+
+      // primary Idempotent response
+      if (existingJob.status === 'confirmed_by_user') {
+        return res.status(200).json({
+          success: true,
+          message: 'Job already confirmed',
+        });
+      }
+
+      throw new ApiError(
+        400,
+        `Job not ready for confirmation. Current status: ${existingJob.status}`
+      );
     }
 
+    // primary STEP 2: Payment validation
     const payment = await Payment.findOne({ jobId }).session(session);
     if (!payment) throw new ApiError(404, 'Payment record not found');
 
@@ -487,48 +523,62 @@ export async function confirmCompletionByCustomer(req, res) {
       throw new ApiError(400, 'Payment is not in escrow');
     }
 
+    // primary STEP 3: Admin wallet
     const adminUser = await User.findOne({ role: 'admin' }).session(session);
     if (!adminUser) throw new ApiError(500, 'Admin not found');
 
-    const adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
+    const adminWallet = await Wallet.findOne({
+      userId: adminUser._id,
+      role: 'admin',
+    }).session(session);
+
     if (!adminWallet) throw new ApiError(500, 'Admin wallet not found');
 
-    if (adminWallet.balance < payment.totalAmount) {
-      throw new ApiError(400, 'Insufficient balance in admin wallet');
+    // primary FIXED: correct balance check
+    if (adminWallet.balance < payment.providerAmount) {
+      throw new ApiError(400, 'Insufficient admin balance');
     }
 
-    // ── Get / create provider wallet ─────────────────────────────────────────
-    let providerWallet = await Wallet.findOne({ userId: payment.providerId, role: 'provider' }).session(session);
+    // primary STEP 4: Provider wallet
+    let providerWallet = await Wallet.findOne({
+      userId: payment.providerId,
+      role: 'provider',
+    }).session(session);
 
     if (!providerWallet) {
       [providerWallet] = await Wallet.create(
-        [{ userId: payment.providerId, role: 'provider', balance: 0, totalEarnings: 0, totalWithdrawn: 0, totalPlatformFees: 0, isActive: true }],
+        [
+          {
+            userId: payment.providerId,
+            role: 'provider',
+            balance: 0,
+            totalEarnings: 0,
+            totalWithdrawn: 0,
+            totalPlatformFees: 0,
+            isActive: true,
+          },
+        ],
         { session }
       );
     }
 
-    // ── Deduct from admin wallet (Only the part going to provider) ──────────
+    // primary STEP 5: Wallet transactions
     adminWallet.balance -= payment.providerAmount;
     adminWallet.totalHeld = (adminWallet.totalHeld || 0) - payment.totalAmount;
     adminWallet.totalPlatformFees += payment.platformFee;
     await adminWallet.save({ session });
 
-    // ── Credit provider wallet with FULL amount ──────────────────────────────
     providerWallet.balance += payment.providerAmount;
     providerWallet.totalEarnings += payment.providerAmount;
     providerWallet.transactionHistory.push(payment._id);
     await providerWallet.save({ session });
 
+    // primary STEP 6: Update payment
     payment.escrowStatus = 'released_to_provider';
     payment.releasedAt = new Date();
     await payment.save({ session });
 
-    job.status = 'confirmed_by_user';
-    job.confirmedByUserAt = new Date();
-    job.paymentStatus = 'released_to_provider';
-    await job.save({ session });
-
-    // ── INCREMENT SERVICE ORDER COUNT FOR PROVIDER ──────────────────────────
+    // primary STEP 7: Provider stats
     const provider = await Provider.findById(job.provider).session(session);
     if (provider) {
       await provider.incrementServiceOrderCount(job.service);
@@ -536,40 +586,49 @@ export async function confirmCompletionByCustomer(req, res) {
 
     await session.commitTransaction();
 
-    // Activity Log
-    await createActivityLog({
-      userId,
-      action: 'JOB_DELIVERY_CONFIRMED',
-      entityType: 'Job',
-      entityId: job._id,
-      details: { orderId: job.orderId, amount: payment.providerAmount },
-      req
-    });
-
-    // ── Notifications ────────────────────────────────────────────────────────
-    if (provider) {
-      await createNotification({
-        userId: provider.userId,
-        title: 'Payment Released & Order Completed',
-        message: `Customer confirmed job completion for Order #${job.orderId}. BDT ${payment.providerAmount} has been credited to your wallet. Total orders completed: ${provider.totalOrdersCompleted}`,
-        type: 'payment',
-        referenceId: job._id,
-        metadata: { orderId: job.orderId, jobId: job._id, amount: payment.providerAmount },
+    // primary STEP 8: Activity Log (non-blocking)
+    try {
+      await createActivityLog({
+        userId: customerId,
+        action: 'JOB_CONFIRMED',
+        entityType: 'Job',
+        entityId: job._id,
+        details: {
+          orderId: job.orderId,
+          amount: payment.providerAmount,
+        },
+        req,
       });
+    } catch (e) {
+      console.error('Activity log failed:', e.message);
     }
 
-    await createNotification({
-      userId: customerId,
-      title: 'Job Completed',
-      message: `Thank you! Order #${job.orderId} has been marked as complete. We hope you enjoyed the service.`,
-      type: 'job',
-      referenceId: job._id,
-      metadata: { orderId: job.orderId, jobId: job._id },
-    });
+    // primary STEP 9: Notifications (non-blocking)
+    try {
+      if (provider) {
+        await createNotification({
+          userId: provider.userId,
+          title: 'Payment Released & Order Completed',
+          message: `Order #${job.orderId} confirmed. Amount credited.`,
+          type: 'payment',
+          referenceId: job._id,
+        });
+      }
+
+      await createNotification({
+        userId: customerId,
+        title: 'Job Completed',
+        message: `Order #${job.orderId} completed successfully.`,
+        type: 'job',
+        referenceId: job._id,
+      });
+    } catch (e) {
+      console.error('Notification failed:', e.message);
+    }
 
     return res.status(200).json({
       success: true,
-      message: 'Job confirmed. Payment released to provider wallet.',
+      message: 'Job confirmed. Payment released successfully.',
       data: {
         job,
         payment: {
@@ -578,15 +637,23 @@ export async function confirmCompletionByCustomer(req, res) {
           providerAmount: payment.providerAmount,
           status: 'released_to_provider',
         },
-        providerStats: provider ? {
-          totalOrdersCompleted: provider.totalOrdersCompleted,
-          serviceOrdersCount: Object.fromEntries(provider.serviceOrdersCount)
-        } : null
+        providerStats: provider
+          ? {
+              totalOrdersCompleted: provider.totalOrdersCompleted,
+              serviceOrdersCount: Object.fromEntries(
+                provider.serviceOrdersCount
+              ),
+            }
+          : null,
       },
     });
   } catch (error) {
     await session.abortTransaction();
-    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Internal server error',
+    });
   } finally {
     session.endSession();
   }

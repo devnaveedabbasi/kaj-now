@@ -7,7 +7,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/notification.js';
 
-const MIN_WITHDRAWAL_AMOUNT=100
+const MIN_WITHDRAWAL_AMOUNT=500
 // Request withdrawal
 export const requestWithdrawal = async (req, res) => {
     const session = await mongoose.startSession();
@@ -48,7 +48,7 @@ export const requestWithdrawal = async (req, res) => {
         }
 
         // Check minimum withdrawal amount
-        const minWithdrawal = parseFloat(MIN_WITHDRAWAL_AMOUNT || '500');
+        const minWithdrawal = parseFloat(MIN_WITHDRAWAL_AMOUNT);
         if (amount < minWithdrawal) {
             throw new ApiError(400, `Minimum withdrawal amount is BDT ${minWithdrawal}`);
         }
@@ -146,24 +146,35 @@ export const getMyWithdrawals = async (req, res) => {
         }
 
         const skip = (page - 1) * limit;
+
         const [withdrawals, total] = await Promise.all([
-            Withdrawal.find(query).sort({ createdAt: -1 }).skip(skip).limit(parseInt(limit)),
+            Withdrawal.find(query)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean(),
             Withdrawal.countDocuments(query)
         ]);
 
-        // Get statistics
+        // ✅ AGGREGATION WITH CORRECT FIELDS
         const stats = await Withdrawal.aggregate([
             { $match: { providerId: provider._id } },
-            { $group: {
-                _id: '$status',
-                totalAmount: { $sum: '$requestedAmount' },
-                count: { $sum: 1 }
-            }}
+            {
+                $group: {
+                    _id: '$status',
+                    totalRequested: { $sum: '$requestedAmount' },
+                    totalFees: { $sum: '$platformFee' },
+                    totalPayable: { $sum: '$payableAmount' },
+                    count: { $sum: 1 }
+                }
+            }
         ]);
 
+        // ✅ FIXED STATS STRUCTURE
         const withdrawalStats = {
             totalRequested: 0,
-            totalPaid: 0,
+            totalFees: 0,
+            totalPaid: 0, // what user actually receives
             pending: 0,
             completed: 0,
             rejected: 0
@@ -172,13 +183,17 @@ export const getMyWithdrawals = async (req, res) => {
         stats.forEach(stat => {
             if (stat._id === 'pending') {
                 withdrawalStats.pending = stat.count;
-                withdrawalStats.totalRequested += stat.totalAmount;
+                withdrawalStats.totalRequested += stat.totalRequested;
+                withdrawalStats.totalFees += stat.totalFees;
             }
+
             if (stat._id === 'completed') {
                 withdrawalStats.completed = stat.count;
-                withdrawalStats.totalPaid += stat.totalAmount;
-                withdrawalStats.totalRequested += stat.totalAmount;
+                withdrawalStats.totalRequested += stat.totalRequested;
+                withdrawalStats.totalFees += stat.totalFees;
+                withdrawalStats.totalPaid += stat.totalPayable; // ✅ actual money received
             }
+
             if (stat._id === 'rejected') {
                 withdrawalStats.rejected = stat.count;
             }
@@ -198,11 +213,14 @@ export const getMyWithdrawals = async (req, res) => {
                 }
             }, 'Withdrawal history retrieved successfully')
         );
+
     } catch (error) {
         if (error instanceof ApiError) {
-            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+            return res.status(error.statusCode)
+                .json(new ApiResponse(error.statusCode, null, error.message));
         }
-        return res.status(500).json(new ApiResponse(500, null, error.message));
+        return res.status(500)
+            .json(new ApiResponse(500, null, error.message));
     }
 };
 

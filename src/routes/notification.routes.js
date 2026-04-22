@@ -8,8 +8,6 @@ router.use(authenticateToken);
 
 router.get('/', notification.getUserNotifications);
 router.get('/badge', notification.getNotificationBadge);
-router.put('/:notificationId/read', notification.markNotificationAsRead);
-router.put('/read-all', notification.markAllNotificationsAsRead);
-router.delete('/:notificationId', notification.deleteNotification);
-
+router.post('/fcm-token', notification.saveFcmToken)
+router.post('/test-notification', requireRole('admin'), notification.sendTestNotification);
 export default router;

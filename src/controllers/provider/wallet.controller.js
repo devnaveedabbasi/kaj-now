@@ -46,7 +46,6 @@ export const getProviderWallet = async (req, res) => {
                     totalEarnings: wallet.totalEarnings,
                     totalWithdrawn: wallet.totalWithdrawn,
                     totalPlatformFees: wallet.totalPlatformFees,
-                    availableForWithdrawal: wallet.balance - pendingAmount,
                     pendingWithdrawal: pendingAmount,
                     isActive: wallet.isActive
                 },
