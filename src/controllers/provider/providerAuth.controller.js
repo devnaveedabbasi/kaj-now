@@ -1,7 +1,7 @@
 ﻿import bcrypt from 'bcryptjs';
 import User from '../../models/User.model.js';
 import Provider  from '../../models/provider/Provider.model.js';
-import { sendOtpEmail } from '../../utils/emailService.js';
+import { sendOtpEmail } from '../../service/emailService.js';
 import { signToken } from '../../utils/jwt.js';
 import { generateNumericOtp } from '../../utils/otp.js';
 import Category from '../../models/admin/category.model.js';

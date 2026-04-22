@@ -6,7 +6,7 @@ import Wallet from '../models/wallet.model.js';
 import User from '../models/User.model.js';
 import { ApiResponse } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/errorHandler.js';
-import { validateSSLCommerzPayment } from '../utils/sslcommerz.js';
+import { validateSSLCommerzPayment } from '../service/sslcommerz.js';
  
 export async function paymentSuccess(req, res) {
   const session = await mongoose.startSession();

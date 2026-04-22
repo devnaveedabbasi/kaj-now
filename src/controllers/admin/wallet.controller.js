@@ -8,7 +8,7 @@ import Withdrawal from '../../models/withdrawal.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
-import { createNotification } from '../../utils/createNotification.js';
+import { createNotification } from '../../utils/notification.js';
 
 // Get admin wallet details and dashboard stats
 export const getAdminWallet = async (req, res) => {

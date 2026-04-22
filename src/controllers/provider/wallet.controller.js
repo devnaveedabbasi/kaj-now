@@ -5,7 +5,7 @@ import User from '../../models/User.model.js';
 import Withdrawal from '../../models/withdrawal.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
-import { createNotification } from '../../utils/createNotification.js';
+import { createNotification } from '../../utils/notification.js';
 
 export const getProviderWallet = async (req, res) => {
     try {

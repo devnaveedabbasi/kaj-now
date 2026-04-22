@@ -1,10 +1,10 @@
 import express from 'express';
-import { authenticateUser } from '../middleware/auth.js';
+import  { authMiddleware as authenticateToken, authorize as requireRole } from '../middleware/auth.js';
 import * as notification from '../controllers/notification.controller.js';
 
 const router = express.Router();
 
-router.use(authenticateUser);
+router.use(authenticateToken, requireRole(['customer', 'provider', 'admin']));
 
 router.get('/', notification.getUserNotifications);
 router.get('/badge', notification.getNotificationBadge);

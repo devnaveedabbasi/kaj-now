@@ -6,9 +6,7 @@ import { authMiddleware as authenticateToken, authorize as requireRole } from '.
 
 const router = express.Router();
 
-// ====================================================
-// CALLBACK ENDPOINTS (From Payment Gateway)
-// ====================================================
+
 router.get('/success', asyncHandler(paymentController.paymentSuccess));
 router.get('/fail', asyncHandler(paymentController.paymentFailed));
 router.get('/cancel', (req, res) => {

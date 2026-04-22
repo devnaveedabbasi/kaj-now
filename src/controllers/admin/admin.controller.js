@@ -10,7 +10,7 @@ import Job from "../../models/job.model.js";
 import ActivityLog from "../../models/activityLog.model.js";
 import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
-import { createNotification } from "../../utils/createNotification.js";
+import { createNotification } from "../../utils/notification.js";
 import mongoose from "mongoose";
 
 // ==================== USER MANAGEMENT ====================

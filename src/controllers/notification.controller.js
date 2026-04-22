@@ -1,7 +1,7 @@
 import Notification from '../models/notification.model.js';
 import { ApiResponse } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/errorHandler.js';
-import { markAsRead, markAllAsRead, getUnreadCount } from '../helpers/notification.helper.js';
+import { markAsRead, markAllAsRead, getUnreadCount } from '../utils/notification.js';
 
 // Get user notifications
 export const getUserNotifications = async (req, res) => {
