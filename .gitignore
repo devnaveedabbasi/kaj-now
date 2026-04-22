@@ -143,4 +143,4 @@ dist
 
 
 # Firebase private key
-/src/config/firebase/firebase-service-account.json
+src/config/firebase/firebase-service-account.json
