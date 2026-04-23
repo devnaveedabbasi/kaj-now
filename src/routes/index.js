@@ -15,5 +15,4 @@ router.use('/provider', providerRoutes);
 router.use('/public', publicRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/notifications', notificationRoutes);
-
 export default router;

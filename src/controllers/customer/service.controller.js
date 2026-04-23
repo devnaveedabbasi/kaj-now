@@ -46,7 +46,7 @@ export const getAllCategories = async (req, res) => {
         ];
 
         const categories = await ServiceRequest.aggregate(aggregationPipeline);
-        
+
         res.status(200).json({
             success: true,
             categories: categories,
@@ -77,11 +77,11 @@ export const getServicesByCategory = async (req, res) => {
 
         // Simple pipeline - sirf serviceRequest aur service
         let pipeline = [
-            { 
-                $match: { 
-                    categoryId: new mongoose.Types.ObjectId(categoryId), 
-                    status: 'approved' 
-                } 
+            {
+                $match: {
+                    categoryId: new mongoose.Types.ObjectId(categoryId),
+                    status: 'approved'
+                }
             },
             {
                 $lookup: {
@@ -110,7 +110,7 @@ export const getServicesByCategory = async (req, res) => {
         // Add sorting and pagination
         const sortField = req.query.sortBy || 'requestedAt';
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-        
+
         pipeline.push(
             { $sort: { [sortField]: sortOrder } },
             { $skip: skip },
@@ -175,7 +175,7 @@ export const getAllApprovedServices = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
-console.log('Query params:');
+        console.log('Query params:');
         const search = req.query.search || '';
         const { categoryId, minPrice, maxPrice } = req.query;
 
@@ -520,411 +520,317 @@ export const getApprovedServiceById = async (req, res) => {
 };
 
 // Helper function to calculate distance
+const RADII = [10, 15, 20, 30];
+
 function calculateDistance(coord1, coord2) {
-    if (!coord1 || !coord2) return null;
+    if (!coord1?.length || !coord2?.length) return null;
+
     const [lng1, lat1] = coord1;
     const [lng2, lat2] = coord2;
+
     const R = 6371;
+
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lng2 - lng1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) *
+        Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) ** 2;
+
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
     return R * c;
 }
 
 // Get recommended services from ServiceRequest only
 export const getRecommendedServices = async (req, res) => {
     try {
-        if (!req.user || !req.user._id) {
+        if (!req.user?._id) {
             return res.status(200).json(
                 new ApiResponse(200, {
                     services: [],
-                    message: 'Please login to see recommended services'
-                }, 'Login to see personalized recommendations')
+                    message: "Please login to see recommendations"
+                })
             );
         }
 
-        const userId = req.user._id;
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
+        const user = await User.findById(req.user._id).select("location");
 
-        const user = await User.findById(userId).select('location');
-        let userCoordinates = null;
+        const userCoordinates =
+            user?.location?.coordinates?.length === 2
+                ? user.location.coordinates
+                : null;
 
-        if (user?.location?.coordinates && user.location.coordinates.length === 2) {
-            userCoordinates = user.location.coordinates;
-        }
+        const pipeline = [
+            { $match: { status: "approved" } },
 
-        // Build pipeline for approved services
-        let pipeline = [
-            { $match: { status: 'approved' } },
             {
                 $lookup: {
-                    from: 'services',
-                    localField: 'serviceId',
-                    foreignField: '_id',
-                    as: 'service'
-                }
+                    from: "services",
+                    localField: "serviceId",
+                    foreignField: "_id",
+                    as: "service",
+                },
             },
-            { $unwind: '$service' },
+            { $unwind: "$service" },
+
             {
                 $lookup: {
-                    from: 'categories',
-                    localField: 'categoryId',
-                    foreignField: '_id',
-                    as: 'category'
-                }
+                    from: "categories",
+                    localField: "categoryId",
+                    foreignField: "_id",
+                    as: "category",
+                },
             },
-            { $unwind: '$category' },
+            { $unwind: "$category" },
+
             {
                 $lookup: {
-                    from: 'providers',
-                    localField: 'providerId',
-                    foreignField: '_id',
-                    as: 'provider'
-                }
+                    from: "providers",
+                    localField: "providerId",
+                    foreignField: "_id",
+                    as: "provider",
+                },
             },
-            { $unwind: '$provider' },
+            { $unwind: "$provider" },
+
             {
                 $lookup: {
-                    from: 'users',
-                    localField: 'provider.userId',
-                    foreignField: '_id',
-                    as: 'user'
-                }
+                    from: "users",
+                    localField: "provider.userId",
+                    foreignField: "_id",
+                    as: "user",
+                },
             },
-            { $unwind: '$user' }
+            { $unwind: "$user" },
         ];
-
-        // Filter by rating 4+
-        pipeline.push({
-            $match: {
-                $or: [
-                    { 'service.averageRating': { $gte: 4 } },
-                    { 'service.averageRating': 0 }
-                ]
-            }
-        });
 
         let serviceRequests = await ServiceRequest.aggregate(pipeline);
 
-        // Calculate distances and filter
-        let filteredServices = serviceRequests.map(request => {
-            let distance = null;
-            let isNearby = false;
+        let results = [];
 
-            if (userCoordinates && request.user?.location?.coordinates) {
-                distance = calculateDistance(
-                    userCoordinates,
-                    request.user.location.coordinates
-                );
-                isNearby = distance <= 1;
+        // =========================
+        // 🔁 MULTI RADIUS SEARCH
+        // =========================
+        for (let radius of RADII) {
+            results = serviceRequests
+                .map((req) => {
+                    let distance = null;
+
+                    if (
+                        userCoordinates &&
+                        req.user?.location?.coordinates?.length === 2
+                    ) {
+                        distance = calculateDistance(
+                            userCoordinates,
+                            req.user.location.coordinates
+                        );
+                    }
+
+                    return {
+                        _id: req.service._id,
+                        name: req.service.name,
+                        icon: req.service.icon,
+                        price: req.service.price,
+                        description: req.service.description?.substring(0, 100),
+
+                        averageRating: req.service.averageRating || 0,
+                        totalReviews: req.service.reviews?.length || 0,
+
+                        category: {
+                            _id: req.category._id,
+                            name: req.category.name,
+                            icon: req.category.icon,
+                        },
+
+                        provider: {
+                            _id: req.provider._id,
+                            name: req.user.name,
+                            email: req.user.email,
+                            phone: req.user.phone,
+                            profilePicture: req.user.profilePicture,
+                        },
+
+                        distance,
+                        radiusMatched: radius,
+                        isWithinRadius:
+                            distance !== null && distance <= radius,
+                    };
+                })
+                .filter((item) => {
+                    if (!userCoordinates) return true;
+                    return item.distance !== null && item.distance <= radius;
+                });
+
+            // 👉 agar results mil gaye to break
+            if (results.length > 0) break;
+        }
+
+        // =========================
+        // 🧠 SORTING (SMART RANKING)
+        // =========================
+        results.sort((a, b) => {
+            // priority 1: distance
+            if (a.distance !== null && b.distance !== null) {
+                return a.distance - b.distance;
             }
 
-            return {
-                _id: request.service._id,
-                name: request.service.name,
-                icon: request.service.icon,
-                price: request.service.price,
-                description: request.service.description?.substring(0, 100),
-                averageRating: request.service.averageRating || 0,
-                totalReviews: request.service.reviews?.length || 0,
-                category: {
-                    _id: request.category._id,
-                    name: request.category.name,
-                    icon: request.category.icon
-                },
-                provider: {
-                    _id: request.provider._id,
-                    name: request.user.name,
-                    email: request.user.email,
-                    phone: request.user.phone,
-                    profilePicture: request.user.profilePicture
-                },
-                isNearby: isNearby,
-                distance: distance ? distance.toFixed(2) : null
-            };
-        });
-
-        // Sort and paginate
-        filteredServices.sort((a, b) => {
-            if (a.isNearby && !b.isNearby) return -1;
-            if (!a.isNearby && b.isNearby) return 1;
+            // priority 2: rating
             return b.averageRating - a.averageRating;
         });
 
-        const totalCount = filteredServices.length;
-        const paginatedServices = filteredServices.slice(skip, skip + limit);
-        const totalPages = Math.ceil(totalCount / limit);
+        // =========================
+        // 🔥 TOP 6 ONLY
+        // =========================
+        const topServices = results.slice(0, 6);
 
-        res.status(200).json(
-            new ApiResponse(200, {
-                services: paginatedServices,
-                userLocation: userCoordinates ? {
-                    lat: userCoordinates[1],
-                    lng: userCoordinates[0]
-                } : null,
-                hasLocation: !!userCoordinates,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit,
-                    hasNextPage: page < totalPages,
-                    hasPrevPage: page > 1
-                }
-            }, 'Recommended services retrieved successfully')
+        return res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    services: topServices,
+                    totalFound: results.length,
+                    usedRadius: results[0]?.radiusMatched || null,
+                    hasLocation: !!userCoordinates,
+                },
+                "Smart recommended services fetched successfully"
+            )
         );
     } catch (error) {
-        console.error('Error getting recommended services:', error);
-        res.status(500).json(new ApiResponse(500, null, error.message));
+        console.error("Recommendation Error:", error);
+        return res
+            .status(500)
+            .json(new ApiResponse(500, null, error.message));
     }
 };
-
-// Get popular services from ServiceRequest only
-export const getPopularServices = async (req, res) => {
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-
-        const popularServices = await ServiceRequest.aggregate([
-            { $match: { status: 'approved' } },
-            {
-                $lookup: {
-                    from: 'services',
-                    localField: 'serviceId',
-                    foreignField: '_id',
-                    as: 'service'
-                }
-            },
-            { $unwind: '$service' },
-            {
-                $lookup: {
-                    from: 'categories',
-                    localField: 'categoryId',
-                    foreignField: '_id',
-                    as: 'category'
-                }
-            },
-            { $unwind: '$category' },
-            {
-                $lookup: {
-                    from: 'providers',
-                    localField: 'providerId',
-                    foreignField: '_id',
-                    as: 'provider'
-                }
-            },
-            { $unwind: '$provider' },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'provider.userId',
-                    foreignField: '_id',
-                    as: 'user'
-                }
-            },
-            { $unwind: '$user' },
-            {
-                $group: {
-                    _id: '$serviceId',
-                    service: { $first: '$service' },
-                    category: { $first: '$category' },
-                    provider: { $first: '$provider' },
-                    user: { $first: '$user' },
-                    requestCount: { $sum: 1 }
-                }
-            },
-            {
-                $addFields: {
-                    popularityScore: {
-                        $add: [
-                            { $multiply: ['$service.averageRating', 2] },
-                            { $divide: [{ $size: { $ifNull: ['$service.reviews', []] } }, 5] },
-                            { $divide: ['$requestCount', 10] }
-                        ]
-                    }
-                }
-            },
-            { $sort: { popularityScore: -1, 'service.averageRating': -1 } },
-            { $skip: skip },
-            { $limit: limit },
-            {
-                $project: {
-                    _id: '$service._id',
-                    name: '$service.name',
-                    icon: '$service.icon',
-                    price: '$service.price',
-                    description: '$service.description',
-                    averageRating: '$service.averageRating',
-                    totalReviews: { $size: { $ifNull: ['$service.reviews', []] } },
-                    requestCount: 1,
-                    popularityScore: 1,
-                    category: {
-                        _id: '$category._id',
-                        name: '$category.name',
-                        icon: '$category.icon'
-                    },
-                    provider: {
-                        _id: '$provider._id',
-                        name: '$user.name',
-                        email: '$user.email',
-                        phone: '$user.phone',
-                        profilePicture: '$user.profilePicture'
-                    }
-                }
-            }
-        ]);
-
-        // Get total count of unique services
-        const totalCountResult = await ServiceRequest.aggregate([
-            { $match: { status: 'approved' } },
-            { $group: { _id: '$serviceId' } },
-            { $count: 'total' }
-        ]);
-
-        const totalCount = totalCountResult[0]?.total || 0;
-        const totalPages = Math.ceil(totalCount / limit);
-
-        res.status(200).json(
-            new ApiResponse(200, {
-                services: popularServices,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit,
-                    hasNextPage: page < totalPages,
-                    hasPrevPage: page > 1
-                }
-            }, 'Popular services retrieved successfully')
-        );
-    } catch (error) {
-        console.error('Error getting popular services:', error);
-        res.status(500).json(new ApiResponse(500, null, error.message));
-    }
-};
-
 // Get top rated services from ServiceRequest only
 export const getTopRatedServices = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
+        const limit = parseInt(req.query.limit) || 6;
 
         const pipeline = [
-            { $match: { status: 'approved' } },
+            { $match: { status: "approved" } },
+
             {
                 $lookup: {
-                    from: 'services',
-                    localField: 'serviceId',
-                    foreignField: '_id',
-                    as: 'service'
-                }
+                    from: "services",
+                    localField: "serviceId",
+                    foreignField: "_id",
+                    as: "service",
+                },
             },
-            { $unwind: '$service' },
-            {
-                $match: {
-                    'service.averageRating': { $gte: 3 }
-                }
-            },
-            {
-                $lookup: {
-                    from: 'categories',
-                    localField: 'categoryId',
-                    foreignField: '_id',
-                    as: 'category'
-                }
-            },
-            { $unwind: '$category' },
+            { $unwind: "$service" },
+
+            // =========================
+            // 🧠 IMPORTANT FIX
+            // include even low ratings (NO FILTER)
+            // =========================
+
             {
                 $lookup: {
-                    from: 'providers',
-                    localField: 'providerId',
-                    foreignField: '_id',
-                    as: 'provider'
-                }
+                    from: "categories",
+                    localField: "categoryId",
+                    foreignField: "_id",
+                    as: "category",
+                },
             },
-            { $unwind: '$provider' },
+            { $unwind: "$category" },
+
             {
                 $lookup: {
-                    from: 'users',
-                    localField: 'provider.userId',
-                    foreignField: '_id',
-                    as: 'user'
-                }
+                    from: "providers",
+                    localField: "providerId",
+                    foreignField: "_id",
+                    as: "provider",
+                },
             },
-            { $unwind: '$user' },
-            { $sort: { 'service.averageRating': -1, 'service.reviews': -1 } },
-            { $skip: skip },
+            { $unwind: "$provider" },
+
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "provider.userId",
+                    foreignField: "_id",
+                    as: "user",
+                },
+            },
+            { $unwind: "$user" },
+
+            // =========================
+            // 🧠 SORTING (MOST IMPORTANT)
+            // =========================
+            {
+                $addFields: {
+                    rating: { $ifNull: ["$service.averageRating", 0] },
+                    reviewsCount: {
+                        $size: { $ifNull: ["$service.reviews", []] },
+                    },
+                },
+            },
+
+            {
+                $sort: {
+                    rating: -1,        // highest rating first
+                    reviewsCount: -1,  // more reviews next
+                    createdAt: -1,     // fallback latest
+                },
+            },
+
             { $limit: limit },
+
             {
                 $project: {
-                    _id: '$service._id',
-                    name: '$service.name',
-                    icon: '$service.icon',
-                    price: '$service.price',
-                    description: '$service.description',
-                    averageRating: '$service.averageRating',
-                    totalReviews: { $size: { $ifNull: ['$service.reviews', []] } },
+                    _id: "$service._id",
+                    name: "$service.name",
+                    icon: "$service.icon",
+                    price: "$service.price",
+                    description: "$service.description",
+
+                    averageRating: "$rating",
+                    totalReviews: "$reviewsCount",
+
                     category: {
-                        _id: '$category._id',
-                        name: '$category.name',
-                        icon: '$category.icon'
+                        _id: "$category._id",
+                        name: "$category.name",
+                        icon: "$category.icon",
                     },
+
                     provider: {
-                        _id: '$provider._id',
-                        name: '$user.name',
-                        email: '$user.email',
-                        phone: '$user.phone',
-                        profilePicture: '$user.profilePicture'
-                    }
-                }
-            }
+                        _id: "$provider._id",
+                        name: "$user.name",
+                        email: "$user.email",
+                        phone: "$user.phone",
+                        profilePicture: "$user.profilePicture",
+                    },
+                },
+            },
         ];
 
-        const [services, totalCountResult] = await Promise.all([
-            ServiceRequest.aggregate(pipeline),
-            ServiceRequest.aggregate([
-                { $match: { status: 'approved' } },
+        const services = await ServiceRequest.aggregate(pipeline);
+
+        // =========================
+        // 🧠 SAFETY FALLBACK (IMPORTANT)
+        // =========================
+        const safeServices = services || [];
+
+        return res.status(200).json(
+            new ApiResponse(
+                200,
                 {
-                    $lookup: {
-                        from: 'services',
-                        localField: 'serviceId',
-                        foreignField: '_id',
-                        as: 'service'
-                    }
+                    services: safeServices,
+                    count: safeServices.length,
+                    isFallback: safeServices.length < limit,
                 },
-                { $unwind: '$service' },
-                { $match: { 'service.averageRating': { $gte: 3 } } },
-                { $group: { _id: '$serviceId' } },
-                { $count: 'total' }
-            ])
-        ]);
-
-        const totalCount = totalCountResult[0]?.total || 0;
-        const totalPages = Math.ceil(totalCount / limit);
-
-        res.status(200).json(
-            new ApiResponse(200, {
-                services: services,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit,
-                    hasNextPage: page < totalPages,
-                    hasPrevPage: page > 1
-                }
-            }, 'Top rated services retrieved successfully')
+                "Top rated services fetched successfully"
+            )
         );
     } catch (error) {
-        console.error('Error getting top rated services:', error);
-        res.status(500).json(new ApiResponse(500, null, error.message));
+        console.error("Top Rated Error:", error);
+        return res
+            .status(500)
+            .json(new ApiResponse(500, null, error.message));
     }
 };
 
@@ -933,7 +839,7 @@ export const getTopRatedServices = async (req, res) => {
 export const quickSearch = async (req, res) => {
     try {
         const { q } = req.query;
-        
+
         if (!q?.trim()) {
             return res.status(200).json(
                 new ApiResponse(200, {
@@ -947,7 +853,7 @@ export const quickSearch = async (req, res) => {
 
         const services = await ServiceRequest.aggregate([
             { $match: { status: 'approved' } },
-            
+
             // Get service details
             {
                 $lookup: {
@@ -958,7 +864,7 @@ export const quickSearch = async (req, res) => {
                 }
             },
             { $unwind: '$service' },
-            
+
             {
                 $lookup: {
                     from: 'categories',
@@ -968,7 +874,7 @@ export const quickSearch = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
-            
+
             // Get provider details
             {
                 $lookup: {
@@ -979,7 +885,7 @@ export const quickSearch = async (req, res) => {
                 }
             },
             { $unwind: '$provider' },
-            
+
             {
                 $lookup: {
                     from: 'users',
@@ -989,7 +895,7 @@ export const quickSearch = async (req, res) => {
                 }
             },
             { $unwind: '$user' },
-            
+
             {
                 $match: {
                     $or: [
@@ -1000,7 +906,7 @@ export const quickSearch = async (req, res) => {
                     ]
                 }
             },
-            
+
             // Project the required fields
             {
                 $project: {
@@ -1025,7 +931,7 @@ export const quickSearch = async (req, res) => {
                     }
                 }
             },
-            
+
             { $limit: 10 }
         ]);
 

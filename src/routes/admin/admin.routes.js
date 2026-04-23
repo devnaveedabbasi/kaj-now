@@ -11,6 +11,7 @@ router.get('/logs', asyncHandler(adminController.getActivityLogs));
 
 // User management
 router.get('/users', asyncHandler(adminController.getAllUsers));
+router.get('/users/stats', asyncHandler(adminController.getUserStats));
 router.get('/users/:userId', asyncHandler(adminController.getUserById));
 router.put('/users/:userId/status', asyncHandler(adminController.updateUserStatus));
 router.delete('/users/:userId', asyncHandler(adminController.deleteUser));

@@ -9,6 +9,7 @@ import adminRoutes from './admin.routes.js'
 import walletRoutes from './wallet.routes.js';
 import withdrawalsRoutes from './withdrawal.routes.js';
 import jobRoutes from './job.routes.js';
+import bannerRoutes from './banner.routes.js';
 const router = Router();
 
 router.use('/auth', adminAuthRoutes);
@@ -20,4 +21,5 @@ router.use('/service-requests', serviceRequestRoutes);
 router.use('/wallet', walletRoutes);
 router.use('/withdrawals', withdrawalsRoutes);
 router.use('/jobs', jobRoutes);
+router.use('/banners', bannerRoutes);
 export default router;

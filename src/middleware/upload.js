@@ -176,12 +176,37 @@ const withdrawalReceiptStorage = multer.diskStorage({
 });
 
 
+const uploadBannerStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'public/uploads/banners';
+    ensureDirectoryExists(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+   const filename = file.originalname;
+    const ext = path.extname(filename);
+    const nameWithoutExt = path.basename(filename, ext);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const bannerId = req.params.id || 'new';
+    cb(null, `ba-${bannerId}-${uniqueSuffix}${ext}`);
+  }
+});
+
+
+
+export const uploadBanner = multer({
+  storage: uploadBannerStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: fileFilter
+}).single('banner'); 
+
 
 export const uploadWithdrawalReceipt = multer({
   storage: withdrawalReceiptStorage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter: fileFilter
 }).single('receipt'); 
+
 
 
 
