@@ -79,6 +79,21 @@ export const getAllServiceRequests = async (req, res) => {
     );
 };
 
+export const getServiceRequestStats = async (req, res) => {
+    const totalRequests = await ServiceRequest.countDocuments();
+    const approvedRequests = await ServiceRequest.countDocuments({ status: 'approved' });
+    const pendingRequests = await ServiceRequest.countDocuments({ status: 'pending' });
+    const rejectedRequests = await ServiceRequest.countDocuments({ status: 'rejected' });
+    res.status(200).json(
+        new ApiResponse(200, {
+            totalRequests,
+            approvedRequests,
+            pendingRequests,
+            rejectedRequests
+        }, 'Service request statistics retrieved successfully')
+    );
+}
+
 // Get service request by ID
 export const getServiceRequestById = async (req, res) => {
     const { id } = req.params;

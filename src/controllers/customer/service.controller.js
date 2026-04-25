@@ -611,9 +611,7 @@ export const getRecommendedServices = async (req, res) => {
 
         let results = [];
 
-        // =========================
-        // 🔁 MULTI RADIUS SEARCH
-        // =========================
+      
         for (let radius of RADII) {
             results = serviceRequests
                 .map((req) => {
@@ -664,13 +662,9 @@ export const getRecommendedServices = async (req, res) => {
                     return item.distance !== null && item.distance <= radius;
                 });
 
-            // 👉 agar results mil gaye to break
             if (results.length > 0) break;
         }
 
-        // =========================
-        // 🧠 SORTING (SMART RANKING)
-        // =========================
         results.sort((a, b) => {
             // priority 1: distance
             if (a.distance !== null && b.distance !== null) {
@@ -681,9 +675,7 @@ export const getRecommendedServices = async (req, res) => {
             return b.averageRating - a.averageRating;
         });
 
-        // =========================
-        // 🔥 TOP 6 ONLY
-        // =========================
+
         const topServices = results.slice(0, 6);
 
         return res.status(200).json(

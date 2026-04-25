@@ -187,19 +187,22 @@ export const getAllServices = async (req, res) => {
             Service.countDocuments({ userId, isDeleted: true })
         ]);
         
-        // Calculate average rating if needed
-        const servicesWithRating = services.map(service => {
-            let avgRating = 0;
-            if (service.reviews && service.reviews.length > 0) {
-                const totalRating = service.reviews.reduce((sum, review) => sum + (review.rating || 0), 0);
-                avgRating = totalRating / service.reviews.length;
-            }
-            return {
-                ...service,
-                averageRating: avgRating,
-                totalReviews: service.reviews?.length || 0
-            };
-        });
+   const servicesWithRating = services.map(service => {
+    let avgRating = 3; // default
+
+    if (service.reviews && service.reviews.length > 0) {
+        const totalRating = service.reviews.reduce(
+            (sum, review) => sum + (review.rating || 0), 0
+        );
+        avgRating = totalRating / service.reviews.length;
+    }
+
+    return {
+        ...service,
+        averageRating: avgRating,
+        totalReviews: service.reviews?.length || 0
+    };
+});
         
         // Pagination metadata
         const totalPages = Math.ceil(totalCount / limit);

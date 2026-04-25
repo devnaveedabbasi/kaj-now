@@ -42,14 +42,21 @@ const authMiddleware = async (req, res, next) => {
       });
     }
 
-    const allowedStatuses = ['approved'];
-    if (!allowedStatuses.includes(user.status)) {
-      return res.status(403).json({
+
+      const blockedStatuses = ['suspended', 'blocked'];
+    if (blockedStatuses.includes(user.status)) {
+      return res.status(401).json({
         success: false,
         message: `Account not authorized. Current status: ${user.status}`
       });
     }
 
+    if (user.status !== 'approved') {
+      return res.status(403).json({
+        success: false,
+        message: `Account not authorized. Current status: ${user.status}`
+      });
+    }
     //  YAHI PE PROVIDER KA KYC CHECK KAR DO 
     if (user.role === 'provider') {
       const provider = await Provider.findOne({ userId: user._id });

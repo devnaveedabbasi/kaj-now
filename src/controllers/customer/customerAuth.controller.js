@@ -218,8 +218,11 @@ export async function login(req, res) {
     throw new ApiError(403, 'Please verify your email before logging in.');
   }
 
-  const allowedStatuses = ['approved'];
-  if (!allowedStatuses.includes(user.status)) {
+  if (user.status === 'suspended' || user.status === 'blocked') {
+    throw new ApiError(401, `Account not authorized. Current status: ${user.status}`);
+  }
+  
+  if (user.status !== 'approved') {
     throw new ApiError(403, `Account not authorized. Current status: ${user.status}`);
   }
 

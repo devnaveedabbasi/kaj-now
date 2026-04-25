@@ -18,6 +18,7 @@ router.delete('/users/:userId', asyncHandler(adminController.deleteUser));
 
 // Provider management
 router.get('/providers', asyncHandler(adminController.getAllProviders));
+router.get('/providers/stats', asyncHandler(adminController.getProviderStats));
 router.get('/providers/:providerId', asyncHandler(adminController.getProviderById));
 router.put('/providers/:providerId/kyc/approve', asyncHandler(adminController.approveProviderKyc));
 router.put('/providers/:providerId/kyc/suspend', asyncHandler(adminController.suspendProviderKyc));

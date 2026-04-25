@@ -19,7 +19,6 @@ export const getAdminWallet = async (req, res) => {
         }
 
         let adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' });
-        
         if (!adminWallet) {
             adminWallet = await Wallet.create({
                 userId: adminUser._id,
@@ -32,13 +31,42 @@ export const getAdminWallet = async (req, res) => {
             });
         }
 
-        // Get statistics
+        // --- New Aggregations for Admin Stats ---
+        const [
+            totalPlatformFeesResult,
+            withdrawnPlatformFeesResult,
+            totalProviderWithdrawalsResult
+        ] = await Promise.all([
+            Payment.aggregate([
+                { $match: { paymentStatus: 'completed' } },
+                { $group: { _id: null, total: { $sum: '$platformFee' } } }
+            ]),
+            Withdrawal.aggregate([
+                { $match: { status: 'completed' } },
+                { $group: { _id: null, total: { $sum: '$platformFee' } } }
+            ]),
+            Withdrawal.aggregate([
+                { $match: { status: 'completed' } },
+                { $group: { _id: null, total: { $sum: '$payableAmount' } } }
+            ])
+        ]);
+
+        const totalPlatformFees = totalPlatformFeesResult[0]?.total || 0;
+        const withdrawnPlatformFees = withdrawnPlatformFeesResult[0]?.total || 0;
+        const totalProviderWithdrawals = totalProviderWithdrawalsResult[0]?.total || 0;
+        
+        // ✅ FIXED: Admin earns fees from BOTH payment AND withdrawal
+        // adminNetEarning = platform fees from payments + platform fees from withdrawals
+        const adminNetEarning =   withdrawnPlatformFees;
+
+        // --- Existing Stats ---
         const [
             totalJobs,
             completedJobs,
             pendingJobs,
             totalPayments,
-            pendingWithdrawals,
+            pendingWithdrawalsCount,
+            pendingWithdrawalsAmountResult,
             totalWithdrawalsAmount,
             monthlyEarnings,
             weeklyEarnings
@@ -51,6 +79,10 @@ export const getAdminWallet = async (req, res) => {
                 { $group: { _id: null, total: { $sum: '$totalAmount' } } }
             ]),
             Withdrawal.countDocuments({ status: 'pending' }),
+            Withdrawal.aggregate([
+                { $match: { status: 'pending' } },
+                { $group: { _id: null, totalRequested: { $sum: '$requestedAmount' }, totalPayable: { $sum: '$payableAmount' } } }
+            ]),
             Withdrawal.aggregate([
                 { $match: { status: 'completed' } },
                 { $group: { _id: null, total: { $sum: '$payableAmount' } } }
@@ -90,8 +122,9 @@ export const getAdminWallet = async (req, res) => {
             ])
         ]);
 
-        const totalPlatformFeesCollected = totalPayments[0]?.total || 0;
         const totalWithdrawnAmount = totalWithdrawalsAmount[0]?.total || 0;
+        const totalPendingWithdrawalsAmount = pendingWithdrawalsAmountResult[0]?.totalRequested || 0;
+        const totalPendingWithdrawalsPayable = pendingWithdrawalsAmountResult[0]?.totalPayable || 0;
 
         // Get recent transactions
         const recentTransactions = await Payment.find({ paymentStatus: 'completed' })
@@ -176,27 +209,22 @@ export const getAdminWallet = async (req, res) => {
             new ApiResponse(200, {
                 wallet: {
                     balance: adminWallet.balance,
-                    totalEarnings: adminWallet.totalEarnings,
-                    totalPlatformFees: adminWallet.totalPlatformFees,
+                    totalEarnings: adminNetEarning, // Platform fees from payments + withdrawals
+                    totalPlatformFees,
+                    withdrawnPlatformFees,
+                    totalProviderWithdrawals,
                     totalWithdrawn: adminWallet.totalWithdrawn,
-                    isActive: adminWallet.isActive
                 },
-                statistics: {
-                    totalJobs,
-                    completedJobs,
-                    pendingJobs,
-                    completionRate: totalJobs > 0 ? ((completedJobs / totalJobs) * 100).toFixed(2) : 0,
-                    totalPlatformFeesCollected,
-                    totalWithdrawnAmount,
-                    netBalance: adminWallet.balance,
-                    pendingWithdrawals: pendingWithdrawalsList.length,
-                    pendingWithdrawalsAmount: pendingWithdrawalsList.reduce((sum, w) => sum + w.requestedAmount, 0)
+                pendingWithdrawals: {
+                    count: pendingWithdrawalsCount,
+                    totalRequested: totalPendingWithdrawalsAmount,
+                    totalPayable: totalPendingWithdrawalsPayable,
+                    list: pendingWithdrawalsList
                 },
                 breakdown: {
                     byService: platformFeeBreakdown,
                     monthlyData: chartData,
-                    recentTransactions,
-                    pendingWithdrawals: pendingWithdrawalsList
+                    recentTransactions
                 }
             }, 'Admin wallet details retrieved successfully')
         );

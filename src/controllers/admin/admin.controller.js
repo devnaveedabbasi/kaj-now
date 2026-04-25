@@ -21,15 +21,15 @@ export const getAllUsers = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    const { isActive, search } = req.query;
+    const { status, search } = req.query;
 
     let query = {
       role: { $ne: "admin" } // ❌ exclude admins
     };
 
-    if (isActive !== undefined) {
-      query.isActive = isActive === "true";
-    }
+    if (status !== undefined) {
+        query.status = status;
+      }
 
     if (search) {
       query.$or = [
@@ -356,6 +356,67 @@ export const getAllProviders = async (req, res) => {
         console.error('Error getting providers:', error);
         res.status(500).json(new ApiResponse(500, null, error.message));
     }
+};
+
+export const getProviderStats = async (req, res) => {
+  try {
+    const stats = await Provider.aggregate([
+      {
+        $group: {
+          _id: null,
+
+          totalProviders: { $sum: 1 },
+
+          pendingKyc: {
+            $sum: {
+              $cond: [{ $eq: ["$kycStatus", "pending"] }, 1, 0],
+            },
+          },
+
+          approvedKyc: {
+            $sum: {
+              $cond: [{ $eq: ["$kycStatus", "approved"] }, 1, 0],
+            },
+          },
+
+          rejectedKyc: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ["$kycStatus", "rejected"] },
+                    { $eq: ["$kycStatus", "suspended"] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const result = stats[0] || {
+      totalProviders: 0,
+      pendingKyc: 0,
+      approvedKyc: 0,
+      rejectedKyc: 0,
+    };
+
+    res.status(200).json({
+      success: true,
+      message: "Provider stats fetched successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error getting provider stats:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message,
+    });
+  }
 };
 
 // Get provider by ID with full details

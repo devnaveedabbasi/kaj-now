@@ -9,6 +9,7 @@ router.get('/all-assigns', asyncHandler(serviceRequest.getAllServiceAssignments)
 
 // Service Requests - Admin views
 router.get('/', asyncHandler(serviceRequest.getAllServiceRequests));
+router.get('/stats', asyncHandler(serviceRequest.getServiceRequestStats));
 router.get('/:id', asyncHandler(serviceRequest.getServiceRequestById));
 router.patch('/:id/approve', asyncHandler(serviceRequest.approveServiceRequest));
 router.patch('/:id/reject', asyncHandler(serviceRequest.rejectServiceRequest));
