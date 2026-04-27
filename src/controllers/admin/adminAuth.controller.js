@@ -42,6 +42,7 @@ export async function register(req, res) {
   if (!emailRegex.test(email)) {
     throw new ApiError(400, 'Invalid email address.');
   }
+
   if (password.length < 8) {
     throw new ApiError(400, 'Password must be at least 8 characters.');
   }
@@ -50,6 +51,17 @@ export async function register(req, res) {
     throw new ApiError(400, 'Only Bangladesh phone numbers is allowed.');
   }
 
+  // 🔥 CHECK IF ADMIN ALREADY EXISTS
+  const existingAdmin = await User.findOne({ role: "admin" });
+
+  if (existingAdmin) {
+    throw new ApiError(
+      403,
+      "Admin account already exists. Only one admin is allowed."
+    );
+  }
+
+  // existing user check
   const existing = await User.findOne({
     $or: [{ email }, { phone }],
   }).select('_id email phone isEmailVerified');
@@ -94,7 +106,7 @@ export async function register(req, res) {
         email: user.email,
         expiresInMinutes: Math.round(OTP_TTL_MS / 60000),
       },
-      'Account created. Enter the OTP sent to your email.'
+      'Admin account created successfully. OTP sent to email.'
     )
   );
 }

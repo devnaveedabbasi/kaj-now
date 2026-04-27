@@ -25,10 +25,10 @@ const walletSchema = new mongoose.Schema(
       min: 0,
     },
     totalWithdrawn: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+  type: Number,
+  default: 0,
+  set: v => Number(v)
+},
     totalPlatformFees: {
       type: Number,
       default: 0,

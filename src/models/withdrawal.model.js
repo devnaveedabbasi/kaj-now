@@ -14,20 +14,7 @@ const withdrawalSchema = new mongoose.Schema(
       required: true,
       min: 1,
     },
-    platformFeePercentage: {
-      type: Number,
-      required: true,
-    },
-    platformFee: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
-    payableAmount: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
+
 
     bankDetails: {
       bankName: { type: String, required: true, trim: true },
@@ -54,6 +41,11 @@ const withdrawalSchema = new mongoose.Schema(
     },
     
     transactionId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    invoiceUrl: {
       type: String,
       trim: true,
       default: null,

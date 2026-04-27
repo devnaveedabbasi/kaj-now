@@ -55,9 +55,9 @@ export const getAdminWallet = async (req, res) => {
         const withdrawnPlatformFees = withdrawnPlatformFeesResult[0]?.total || 0;
         const totalProviderWithdrawals = totalProviderWithdrawalsResult[0]?.total || 0;
         
-        // ✅ FIXED: Admin earns fees from BOTH payment AND withdrawal
+        //  FIXED: Admin earns fees from BOTH payment AND withdrawal
         // adminNetEarning = platform fees from payments + platform fees from withdrawals
-        const adminNetEarning =   withdrawnPlatformFees;
+        const adminNetEarning =   totalPlatformFees;
 
         // --- Existing Stats ---
         const [

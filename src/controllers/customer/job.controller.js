@@ -472,6 +472,23 @@ export async function confirmCompletionByCustomer(req, res) {
 
     session.startTransaction();
 
+const existingJob = await Job.findById(jobId);
+if (!existingJob) {
+  throw new ApiError(404, 'Job not found');
+}
+
+if (existingJob.customer.toString() !== customerId.toString()) {
+  throw new ApiError(403, 'Not authorized');
+}
+
+//  IMPORTANT: idempotent guard
+if (existingJob.status === 'confirmed_by_user') {
+  return res.status(200).json({
+    success: true,
+    message: 'Job already confirmed',
+  });
+}
+
     // primary STEP 1: Atomic job update (prevents race condition)
     const job = await Job.findOneAndUpdate(
       {
@@ -570,6 +587,7 @@ export async function confirmCompletionByCustomer(req, res) {
 
     providerWallet.balance += payment.providerAmount;
     providerWallet.totalEarnings += payment.providerAmount;
+    providerWallet.totalPlatformFees += payment.platformFee;
     providerWallet.transactionHistory.push(payment._id);
     await providerWallet.save({ session });
 

@@ -6,18 +6,16 @@ console.log("Config Check:", config.email);
 const transporter = nodemailer.createTransport({
     host: config.email.host,
     port: config.email.port,
-    secure: config.email.secure, // false for 587, true for 465
+    secure: config.email.secure,
     auth: {
         user: config.email.user,
         pass: config.email.password,
     },
 });
 
-/**
- * Verification Email bhejny ka function
- * @param {string} to - User ka email
- * @param {string} token - Verification token
- */
+// =========================
+// 📧 VERIFY EMAIL
+// =========================
 export const sendVerificationEmail = async (to, token) => {
     const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${token}`;
 
@@ -51,11 +49,10 @@ export const sendVerificationEmail = async (to, token) => {
     }
 };
 
-/**
- * Email OTP (mobile app — user enters code in app)
- * @param {string} to
- * @param {string} otp
- */
+
+// =========================
+// 📧 OTP EMAIL
+// =========================
 export const sendOtpEmail = async (to, otp) => {
     const mailOptions = {
         from: `"Kaj Now" <${config.email.user}>`,
@@ -76,5 +73,87 @@ export const sendOtpEmail = async (to, otp) => {
     } catch (error) {
         console.error('OTP email failed:', error);
         throw new Error('Could not send verification email.');
+    }
+};
+
+
+// =========================
+// 💰 WITHDRAWAL APPROVED EMAIL
+// =========================
+export const sendWithdrawalApprovedEmail = async (to, data) => {
+    const { amount, transactionId, fileName, filePath } = data;
+
+    const mailOptions = {
+        from: `"Kaj Now" <${config.email.user}>`,
+        to,
+        subject: 'Withdrawal Approved',
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; padding: 20px;">
+                <h2 style="color: green;">Withdrawal Approved </h2>
+
+                <p>Your withdrawal has been successfully processed.</p>
+
+                <p><strong>Amount:</strong> ${amount}</p>
+                <p><strong>Transaction ID:</strong> ${transactionId || 'N/A'}</p>
+
+                <p style="margin-top:20px;">
+                    Please find your invoice attached.
+                </p>
+
+                <hr />
+                <p style="font-size: 12px; color: #888;">Thank you for using our platform.</p>
+            </div>
+        `,
+        attachments: [
+            {
+                filename: fileName,
+                path: filePath,
+            },
+        ],
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+    } catch (error) {
+        console.error('Withdrawal approved email failed:', error);
+        throw new Error('Could not send email.');
+    }
+};
+
+
+// =========================
+//  WITHDRAWAL REJECTED EMAIL
+// =========================
+export const sendWithdrawalRejectedEmail = async (to, data) => {
+    const { amount, reason } = data;
+
+    const mailOptions = {
+        from: `"Kaj Now" <${config.email.user}>`,
+        to,
+        subject: 'Withdrawal Rejected',
+        html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; padding: 20px;">
+                <h2 style="color: red;">Withdrawal Rejected </h2>
+
+                <p>Your withdrawal request has been rejected.</p>
+
+                <p><strong>Amount:</strong> ${amount}</p>
+                <p><strong>Reason:</strong> ${reason}</p>
+
+                <p style="margin-top:20px;">
+                    Amount has been refunded to your wallet.
+                </p>
+
+                <hr />
+                <p style="font-size: 12px; color: #888;">Contact support if you need help.</p>
+            </div>
+        `,
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+    } catch (error) {
+        console.error('Withdrawal rejected email failed:', error);
+        throw new Error('Could not send email.');
     }
 };

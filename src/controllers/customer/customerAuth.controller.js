@@ -211,7 +211,7 @@ export async function login(req, res) {
   const user = await User.findOne({ email, role: 'customer' }).select('+password');
 
   if (!user) {
-    throw new ApiError(401, 'Invalid email or password.');
+    throw new ApiError(402, 'Invalid email or password.');
   }
 
   if (!user.isEmailVerified) {

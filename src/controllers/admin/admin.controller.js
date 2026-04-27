@@ -21,20 +21,26 @@ export const getAllUsers = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    const { status, search } = req.query;
+
+    const { status, search, role } = req.query;
 
     let query = {
-      role: { $ne: "admin" } // ❌ exclude admins
+      role: { $ne: "admin" }, // default: admin exclude
     };
 
+    // ✅ role filter fix
+    if (role && role !== "all") {
+      query.role = role;
+    }
+
     if (status !== undefined) {
-        query.status = status;
-      }
+      query.status = status;
+    }
 
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } }
+        { email: { $regex: search, $options: "i" } },
       ];
     }
 
@@ -45,12 +51,12 @@ export const getAllUsers = async (req, res) => {
         .skip(skip)
         .limit(limit),
 
-      User.countDocuments(query)
+      User.countDocuments(query),
     ]);
 
     const totalPages = Math.ceil(totalCount / limit);
 
-    res.status(200).json(
+    return res.status(200).json(
       new ApiResponse(
         200,
         {
@@ -59,15 +65,15 @@ export const getAllUsers = async (req, res) => {
             currentPage: page,
             totalPages,
             totalItems: totalCount,
-            itemsPerPage: limit
-          }
+            itemsPerPage: limit,
+          },
         },
         "Users retrieved successfully"
       )
     );
   } catch (error) {
     console.error("Error getting users:", error);
-    res.status(500).json(new ApiResponse(500, null, error.message));
+    return res.status(500).json(new ApiResponse(500, null, error.message));
   }
 };
 export const getUserStats= async (req, res) => {
