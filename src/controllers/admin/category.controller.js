@@ -257,16 +257,16 @@ export const toggleCategoryActive = async (req, res) => {
         { isActive: newStatus }
     );
 
-    // 3. update requests
-    if (!newStatus) {
-        await ServiceRequest.updateMany(
-            { categoryId: id, status: "pending" },
-            {
-                status: "admin_deactivated",
-                notes: "Category deactivated",
-            }
-        );
-    }
+    // 3. update service requests
+    await ServiceRequest.updateMany(
+        { categoryId: id, status: "pending" },
+        {
+            status: newStatus ? "pending" : "admin_deactivated",
+            notes: newStatus
+                ? "Category activated"
+                : "Category deactivated",
+        }
+    );
 
     res.json({ success: true });
 };

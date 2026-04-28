@@ -437,28 +437,65 @@ export const toggleServiceActive = async (req, res) => {
         const { id } = req.params;
         const userId = req.user._id;
 
+        // 1. Find service
         const serviceData = await Service.findOne({ _id: id, userId });
 
         if (!serviceData) {
-            throw new ApiError(404, 'Service not found');
+            throw new ApiError(404, "Service not found");
         }
 
+        // 2. Check category status
+        const category = await Category.findById(serviceData.categoryId);
+
+        if (!category || !category.isActive) {
+            throw new ApiError(
+                400,
+                "Cannot activate service. Category is inactive"
+            );
+        }
+
+        // 3. Toggle service
         serviceData.isActive = !serviceData.isActive;
         await serviceData.save();
 
+        // 4. If service deactivated → disable related requests
+        if (!serviceData.isActive) {
+            await ServiceRequest.updateMany(
+                { serviceId: serviceData._id, status: "pending" },
+                {
+                    status: "admin_deactivated",
+                    notes: "Service deactivated by admin",
+                }
+            );
+        }
+
         res.status(200).json(
-            new ApiResponse(200, { 
-                _id: serviceData._id, 
-                isActive: serviceData.isActive,
-                status: serviceData.isActive ? 'activated' : 'deactivated'
-            }, `Service ${serviceData.isActive ? 'activated' : 'deactivated'} successfully`)
+            new ApiResponse(
+                200,
+                {
+                    _id: serviceData._id,
+                    isActive: serviceData.isActive,
+                    status: serviceData.isActive ? "activated" : "deactivated",
+                },
+                `Service ${
+                    serviceData.isActive ? "activated" : "deactivated"
+                } successfully`
+            )
         );
     } catch (error) {
         if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+            res
+                .status(error.statusCode)
+                .json(
+                    new ApiResponse(error.statusCode, null, error.message)
+                );
         } else {
-            console.error('Error toggling service:', error);
-            res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
+            console.error("Error toggling service:", error);
+            res
+                .status(500)
+                .json(
+                    new ApiResponse(500, null, "Internal server error")
+                );
         }
     }
 };
