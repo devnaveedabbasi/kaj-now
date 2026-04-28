@@ -14,7 +14,7 @@ const app = express();
 const server = createServer(app);
 
 const corsOptions = {
-  origin: '*',
+  origin: ['https://kaj-now.vercel.app','http://localhost:3000'],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: false,
