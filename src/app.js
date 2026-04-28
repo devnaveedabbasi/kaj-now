@@ -9,18 +9,38 @@ import { ApiError } from "./utils/errorHandler.js";
 import errorHandler from "./middleware/errorHandler.js";
 
 const app = express();
-
-
 const server = createServer(app);
 
+//  Sabhi allowed origins add kar do
+const allowedOrigins = [
+  'https://kaj-now.vercel.app',
+  'http://localhost:3000',
+  'http://103.132.96.120:3000',
+  'http://192.168.1.46:3000',
+  'http://103.132.96.120:5000',
+];
+
 const corsOptions = {
-  origin: ['https://kaj-now.vercel.app','http://localhost:3000'],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log(' Blocked origin:', origin);
+      callback(null, true); // For testing, allow all - production mein hata dena
+    }
+  },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: false,
+  allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+  credentials: true,
+  optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
@@ -32,9 +52,7 @@ app.get('/', (req, res) => {
 
 app.use("/api", routes);
 app.use(errorHandler);
-/**
- * 404 Not Found Handler
- */
+
 app.use((req, res, next) => {
   const error = new ApiError(
     404,
@@ -44,11 +62,9 @@ app.use((req, res, next) => {
   next(error);
 });
 
-
 app.use((err, req, res, next) => {
   let error = err;
 
-  // Handle non-ApiError instances
   if (!(error instanceof ApiError)) {
     const statusCode = error.statusCode || error.status || 500;
     const message = error.message || "Internal Server Error";
@@ -56,9 +72,8 @@ app.use((err, req, res, next) => {
     error = new ApiError(statusCode, message, error.errors || []);
   }
 
-  // Log error for debugging (but don't expose in production)
   const errorResponse = {
-    code: error.statusCode, //  statusCode ki jagah code
+    code: error.statusCode,
     message: error.message,
     success: error.success,
     ...(process.env.NODE_ENV === 'development' && {
@@ -66,6 +81,7 @@ app.use((err, req, res, next) => {
       errors: error.errors
     }),
   };
+  
   if (process.env.NODE_ENV !== 'production') {
     console.error('Error:', {
       statusCode: error.statusCode,
