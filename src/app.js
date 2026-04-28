@@ -20,16 +20,28 @@ const allowedOrigins = [
 ];
 
 // CORS config (SAFE MODE)
+const allowedOrigins = [
+  "https://kaj-now.vercel.app",
+  "http://localhost:3000",
+  "http://103.132.96.120:3000",
+  "http://192.168.1.46:3000",
+];
+
 const corsOptions = {
   origin: function (origin, callback) {
+    // Allow requests with no origin (server-to-server, mobile apps, curl)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.log("Blocked origin:", origin);
-      return callback(null, false); // block unknown origins in production
+    // Allow all Vercel preview deployments too
+    if (
+      allowedOrigins.includes(origin) ||
+      origin.endsWith(".vercel.app")       
+    ) {
+      return callback(null, true);
     }
+
+    console.log("Blocked origin:", origin);
+    return callback(new Error("Not allowed by CORS")); // send actual error
   },
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: ["Content-Type", "Authorization", "Accept"],
