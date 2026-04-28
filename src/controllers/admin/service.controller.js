@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import Review from '../../models/reviews.model.js';
 // Helper function to delete old image
 const deleteOldImage = (imagePath) => {
