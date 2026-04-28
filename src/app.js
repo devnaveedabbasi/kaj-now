@@ -19,13 +19,6 @@ const allowedOrigins = [
   "http://192.168.1.46:3000",
 ];
 
-// CORS config (SAFE MODE)
-const allowedOrigins = [
-  "https://kaj-now.vercel.app",
-  "http://localhost:3000",
-  "http://103.132.96.120:3000",
-  "http://192.168.1.46:3000",
-];
 
 const corsOptions = {
   origin: function (origin, callback) {
