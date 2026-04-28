@@ -435,38 +435,42 @@ export const getProviderById = async (req, res) => {
         }
         
         const provider = await Provider.findById(providerId)
-  .populate('userId', '-password')
-  .populate('Category', 'name icon description')
-  .populate({
-    path: 'services',
-    populate: {
-      path: 'serviceId',
-      select: 'name icon price description averageRating'
-    }
-  })
-  .populate({
-    path: 'approvedServices',  
-    select: 'name icon price description averageRating'
-  })
-  .lean();
+            .populate('userId', '-password')
+            .populate('Category', 'name icon description')
+            .populate({
+                path: 'services',
+                populate: {
+                    path: 'serviceId',
+                    select: 'name icon price description averageRating'
+                }
+            })
+            .populate({
+                path: 'approvedServices',
+                select: 'name icon price description averageRating'
+            })
+            .lean();
         
         if (!provider) {
             throw new ApiError(404, 'Provider not found');
         }
         
-        // Get service request statistics
+        // Get service request statistics (unwind serviceId array to count services not requests)
         const serviceStats = await ServiceRequest.aggregate([
             { $match: { providerId: provider._id } },
+            { $unwind: '$serviceId' },          // ← yeh sirf change hua
             { $group: {
                 _id: '$status',
                 count: { $sum: 1 }
             }}
         ]);
-        
-        const stats = { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
-        serviceStats.forEach(stat => {
-            if (stats[stat._id] !== undefined) stats[stat._id] = stat.count;
-        });
+const stats = { pending: 0, approved: 0, rejected: 0, cancelled: 0 };
+serviceStats.forEach(stat => {
+    if (stats[stat._id] !== undefined) stats[stat._id] = stat.count;
+});
+
+// ✅ approved = actual approvedServices array length
+stats.approved = provider.approvedServices?.length ?? 0;
+stats.total = stats.approved + stats.pending + stats.rejected + stats.cancelled;
         
         const jobs = await Job.find({ provider: provider._id })
             .populate('customer', 'name email')

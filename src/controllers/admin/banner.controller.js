@@ -48,13 +48,16 @@ export const getBanners = asyncHandler(async (req, res) => {
     total: banners.length,
     active: banners.filter((b) => b.isActive).length,
     inactive: banners.filter((b) => !b.isActive).length,
-    remainingSlots: MAX_BANNERS - banners.length,
   };
 
+  // Response mein banners aur summary dono bhejo
   return res.status(200).json(
     new ApiResponse(
       200,
-      { banners, summary },
+      { 
+        banners: banners,  // Sab banners (active + inactive)
+        summary 
+      },
       "Banners fetched successfully"
     )
   );

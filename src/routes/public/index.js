@@ -8,7 +8,8 @@ const router = Router();
 
 router.use('/categories', categoryRoute);
 router.get('/banner', asyncHandler(async (req, res) => {
-  const banners = await Banner.find({ isDeleted: false }).sort({
+    
+  const banners = await Banner.find({isActive: true, isDeleted: false }).sort({
     createdAt: -1,
   });
 

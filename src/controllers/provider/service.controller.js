@@ -246,81 +246,71 @@ export const getMyServices = async (req, res) => {
 
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
 
-    const { status } = req.query;
+    const { status = "approved" } = req.query; //  default approved
 
     const provider = await Provider.findOne({ userId })
-      .populate({
-        path: 'userId',
-        select: 'name email profilePicture'
-      })
-      .populate({
-        path: 'approvedServices',
-        select: 'name icon price description averageRating'
-      });
+      .populate("userId", "name email profilePicture")
+      .populate("approvedServices", "name icon price description averageRating");
 
     if (!provider) {
-      throw new ApiError(404, 'Provider profile not found');
+      throw new ApiError(404, "Provider profile not found");
     }
 
-    // 🔥 GET SERVICE REQUESTS ONLY FOR STATUS FILTER
-    let query = { providerId: provider._id };
-    if (status) query.status = status;
+    //  STEP 1: GET SERVICE REQUESTS BY STATUS
+    const serviceRequests = await ServiceRequest.find({
+      providerId: provider._id,
+      status,
+    }).select("serviceId status");
 
-    const [requests, totalCount] = await Promise.all([
-      ServiceRequest.find(query)
-        .select('status serviceId')
-        .lean(),
+    //  STEP 2: EXTRACT SERVICE IDS
+    const serviceIds = serviceRequests.flatMap((req) =>
+      req.serviceId.map((id) => id.toString())
+    );
 
-      ServiceRequest.countDocuments(query)
-    ]);
+    //  STEP 3: FILTER APPROVED SERVICES ONLY
+    let services = [];
 
-    const totalPages = Math.ceil(totalCount / limit);
+    if (status === "approved") {
+      services = (provider.approvedServices || []).filter((service) =>
+        serviceIds.includes(service._id.toString())
+      );
+    } else {
+      services = []; // other statuses → empty as per requirement
+    }
 
-    // 🔥 GET ALL APPROVED SERVICES FROM PROVIDER
-    const approvedServices = (provider.approvedServices || []).map(service => ({
-      _id: service._id,
-      name: service.name,
-      icon: service.icon,
-      price: service.price,
-      description: service.description,
-      averageRating: service.averageRating
-    }));
-
-    // 🔥 FINAL SINGLE OBJECT RESPONSE
+    //  RESPONSE
     const result = {
       _id: provider._id,
-      providerName: provider.userId?.name || 'Unknown Provider',
-      providerEmail: provider.userId?.email || 'Unknown Email',
+      providerName: provider.userId?.name || "Unknown Provider",
+      providerEmail: provider.userId?.email || "Unknown Email",
       profilePicture: provider.userId?.profilePicture || null,
 
-      services: approvedServices, // 👈 ONLY THIS YOU WANT
-
-      pagination: {
-        currentPage: page,
-        totalPages,
-        totalItems: totalCount,
-        itemsPerPage: limit
-      }
+      services: services.map((s) => ({
+        _id: s._id,
+        name: s.name,
+        icon: s.icon,
+        price: s.price,
+        description: s.description,
+        averageRating: s.averageRating,
+      })),
     };
 
-    return res.status(200).json(
-      new ApiResponse(200, result, 'Services retrieved successfully')
-    );
-
+    return res
+      .status(200)
+      .json(new ApiResponse(200, result, "Services retrieved successfully"));
   } catch (error) {
-    console.error('Error getting services:', error);
+    console.error("Error getting services:", error);
 
     if (error instanceof ApiError) {
-      return res.status(error.statusCode).json(
-        new ApiResponse(error.statusCode, null, error.message)
-      );
+      return res
+        .status(error.statusCode)
+        .json(new ApiResponse(error.statusCode, null, error.message));
     }
 
-    return res.status(500).json(
-      new ApiResponse(500, null, 'Internal server error')
-    );
+    return res
+      .status(500)
+      .json(new ApiResponse(500, null, "Internal server error"));
   }
 };
 
