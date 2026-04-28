@@ -1,8 +1,12 @@
-import fs from 'fs';
-import admin from 'firebase-admin';
+import fs from "fs";
+import path from "path";
+import admin from "firebase-admin";
 
 const serviceAccount = JSON.parse(
-  fs.readFileSync(new URL('../firebase/firebase-service-account.json', import.meta.url))
+  fs.readFileSync(
+    path.join(process.cwd(), "src/config/firebase/firebase-service-account.json"),
+    "utf8"
+  )
 );
 
 if (!admin.apps.length) {
