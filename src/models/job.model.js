@@ -63,7 +63,17 @@ const jobSchema = new mongoose.Schema(
       ],
       default: 'pending',
     },
-
+     schedule: {
+      date: {
+        type: Date,
+        default: null,
+      },
+      time: {
+        type: String,
+        trim: true,
+        default: null,
+      },
+    },
     acceptedAt: { type: Date, default: null },
     rejectedAt: { type: Date, default: null },
     startedAt: { type: Date, default: null },

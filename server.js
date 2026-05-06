@@ -4,8 +4,9 @@ dotenv.config();
 import os from 'os';
 import config from './src/config/index.js';
 import { server } from './src/app.js';
+import './src/queues/jobScheduleWorker.js'
+import './src/queues/jobAutoCancelWorker.js'
 
-// Bind to 0.0.0.0 for Render deployment
 server.listen(config.port, '0.0.0.0', () => {
   console.log(` Server running on port ${config.port}`);
   if (process.env.NODE_ENV !== 'production') {

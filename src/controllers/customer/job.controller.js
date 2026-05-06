@@ -11,6 +11,8 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 import { processSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
+import { scheduleJobNotification } from '../../queues/jobScheduleQueue.js';
+import { scheduleAutoCancelJob, cancelAutoCancelJob, schedulePostAcceptanceReminders } from '../../queues/jobAutoCancel.js';
 
 
 async function generateOrderId() {
@@ -195,21 +197,24 @@ const validateCardDetails = (cardDetails) => {
 };
 
 
-
-
-
 export async function bookJob(req, res) {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const userId = req.user._id;
-    const { serviceId, providerId, cardDetails } = req.body;
+    const { serviceId, providerId, cardDetails,schedule  } = req.body;
 
     // ── Validation ──────────────────────────────────────────────────────────
     if (!serviceId || !providerId) {
       throw new ApiError(400, 'serviceId & providerId required');
     }
+
+     if (!schedule?.date || !schedule?.time) {
+      throw new ApiError(400, 'Schedule date and time required');
+    }
+
+
 
     if (
       !cardDetails?.cardNumber ||
@@ -222,13 +227,78 @@ export async function bookJob(req, res) {
 
     const validatedCard = validateCardDetails(cardDetails);
 
+     // Schedule datetime combine karo
+   if (!schedule?.date || !schedule?.time) {
+      throw new ApiError(400, 'Schedule date and time required');
+    }
+
+    // Schedule datetime combine karo
+    const scheduleDateTime = new Date(`${schedule.date}T${schedule.time}`);
+    if (isNaN(scheduleDateTime.getTime())) {
+      throw new ApiError(400, 'Invalid schedule date or time format');
+    }
+
+    //  Validation: Only allow booking from tomorrow onwards
+  const today = new Date();
+today.setHours(0, 0, 0, 0);
+const scheduleDateOnly = new Date(scheduleDateTime);
+scheduleDateOnly.setHours(0, 0, 0, 0);
+
+if (scheduleDateOnly <= today) {
+  throw new ApiError(400, 'Can only book services from tomorrow onwards. Today is no longer available.');
+}
+
+if (scheduleDateTime <= new Date()) {
+  throw new ApiError(400, 'Schedule time must be in the future');
+}
+
+//  Parse requested time — e.g. "05:00 PM" → 17:00
+const parseTimeToMinutes = (timeStr) => {
+  const [time, modifier] = timeStr.trim().split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+  if (modifier?.toUpperCase() === 'PM' && hours !== 12) hours += 12;
+  if (modifier?.toUpperCase() === 'AM' && hours === 12) hours = 0;
+  return hours * 60 + minutes;
+};
+
+const requestedMinutes = parseTimeToMinutes(schedule.time);
+
+//  Check: same date pr same provider ke uss time slot pr koi job hai?
+const samedayJobs = await Job.find({
+  provider: providerId,
+  status: { $in: ['pending', 'accepted', 'in_progress'] },
+  'schedule.date': {
+    $gte: scheduleDateOnly,
+    $lt: new Date(scheduleDateOnly.getTime() + 24 * 60 * 60 * 1000),
+  },
+}).select('schedule.time').session(session).lean();
+
+//  Validation: 1 ghante ka buffer (60 minutes pehlay ya baad)
+const conflictingJob = samedayJobs.find((job) => {
+  const existingMinutes = parseTimeToMinutes(job.schedule.time);
+  const diff = Math.abs(requestedMinutes - existingMinutes);
+  return diff < 60; // 60 minutes = 1 ghanta minimum gap
+});
+
+if (conflictingJob) {
+  const existingMinutes = parseTimeToMinutes(conflictingJob.schedule.time);
+  const suggestedTime1 = new Date(0, 0, 0, Math.floor(existingMinutes / 60), (existingMinutes % 60) + 60);
+  const suggestedTime2 = new Date(0, 0, 0, Math.floor(existingMinutes / 60), (existingMinutes % 60) - 60);
+  
+  throw new ApiError(409, 'Provider is busy at this time. Same day requires 1 hour gap between jobs. Please choose 1 hour before or after.');
+}
 
     // ── Fetch documents ─────────────────────────────────────────────────────
     const user = await User.findById(userId).session(session);
     if (!user) throw new ApiError(404, 'User not found');
-
+console.log(serviceId, providerId);
     const service = await Service.findById(serviceId).session(session);
     if (!service || !service.isActive) throw new ApiError(404, 'Service not available');
+
+    //  CHECK: Category must be active
+    const Category = mongoose.model('Category');
+    const category = await Category.findById(service.categoryId).session(session);
+    if (!category || !category.isActive) throw new ApiError(404, 'Service category is inactive');
 
     const provider = await Provider.findById(providerId).session(session);
     if (!provider) throw new ApiError(404, 'Provider not found');
@@ -271,6 +341,10 @@ export async function bookJob(req, res) {
           amount: servicePrice,
           status: 'pending',
           paymentStatus: 'pending',
+           schedule: {                         
+            date: scheduleDateTime,
+            time: schedule.time,
+          },
         },
       ],
       { session }
@@ -344,7 +418,6 @@ export async function bookJob(req, res) {
           balance: 0,
           totalEarnings: 0,
           totalPlatformFees: 0,
-          totalHeld: 0,  // NEW: Track held amount
           isActive: true
         }],
         { session }
@@ -352,12 +425,33 @@ export async function bookJob(req, res) {
     }
 
     // ONLY HOLD the amount, NOT add to earnings
-    adminWallet.balance += servicePrice;  // Held in escrow
+    adminWallet.balance += servicePrice; 
+    adminWallet.totalEarnings += platformFee; 
+    adminWallet.totalPlatformFees += platformFee;  // Held in escrow
+     // Held in escrow
+   // Held in escrow
     adminWallet.totalHeld = (adminWallet.totalHeld || 0) + servicePrice;  // Track held amount
     adminWallet.transactionHistory.push(payment[0]._id);
     await adminWallet.save({ session });
 
     await session.commitTransaction();
+
+    // 🔔 Schedule notifications
+    // schedule.date already has the complete datetime, use it directly!
+    if (job[0]?.schedule?.date) {
+      console.log(` Scheduling notifications for job ${job[0]._id}`);
+      console.log(`   Stored schedule.date: ${job[0].schedule.date}`);
+      console.log(`   Type: ${typeof job[0].schedule.date}`);
+      
+      await scheduleJobNotification(job[0]._id, job[0].schedule.date);
+    }
+
+    // ⏱️ Schedule auto-cancel if provider doesn't accept within 8 hours
+    try {
+      await scheduleAutoCancelJob(job[0]._id);
+    } catch (error) {
+      console.error('Warning: Could not schedule auto-cancel:', error.message);
+    }
 
     // Activity Log
     await createActivityLog({
@@ -438,7 +532,20 @@ export async function acceptJob(req, res) {
 
     await session.commitTransaction();
 
-    // ── Notifications ────────────────────────────────────────────────────────
+    // Cancel auto-cancel since provider has accepted
+    try {
+      await cancelAutoCancelJob(job._id);
+    } catch (error) {
+      console.error('Warning: Could not cancel auto-cancel:', error.message);
+    }
+
+    // Schedule post-acceptance reminders and job-start timeout
+    try {
+      await schedulePostAcceptanceReminders(job._id, job.schedule.date);
+    } catch (error) {
+      console.error('Warning: Could not schedule post-acceptance reminders:', error.message);
+    }
+
     // Notify customer
     await createNotification({
       userId: job.customer,

@@ -11,6 +11,7 @@ import ActivityLog from "../../models/activityLog.model.js";
 import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
 import { createNotification } from "../../utils/notification.js";
+import Payment from '../../models/payment.model.js';
 import mongoose from "mongoose";
 
 // ==================== USER MANAGEMENT ====================
@@ -28,7 +29,7 @@ export const getAllUsers = async (req, res) => {
       role: { $ne: "admin" }, // default: admin exclude
     };
 
-    // ✅ role filter fix
+    //  role filter fix
     if (role && role !== "all") {
       query.role = role;
     }
@@ -468,7 +469,7 @@ serviceStats.forEach(stat => {
     if (stats[stat._id] !== undefined) stats[stat._id] = stat.count;
 });
 
-// ✅ approved = actual approvedServices array length
+//  approved = actual approvedServices array length
 stats.approved = provider.approvedServices?.length ?? 0;
 stats.total = stats.approved + stats.pending + stats.rejected + stats.cancelled;
         
@@ -674,17 +675,14 @@ export const getAdminDashboardStats = async (req, res) => {
         startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         endDate = new Date(now.getFullYear(), now.getMonth(), 0);
         break;
-
       case 'thisMonth':
         startDate = new Date(now.getFullYear(), now.getMonth(), 1);
         endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
         break;
-
       case 'lastYear':
         startDate = new Date(now.getFullYear() - 1, 0, 1);
         endDate = new Date(now.getFullYear() - 1, 11, 31);
         break;
-
       default:
         startDate = new Date(now.getFullYear(), now.getMonth(), 1);
         endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
@@ -697,72 +695,68 @@ export const getAdminDashboardStats = async (req, res) => {
     };
 
     // ===============================
-    // 🔥 MAIN STATS (CARDS)
+    //  ADMIN WALLET
+    // ===============================
+    const adminWallet = await Wallet.findOne({ role: 'admin' });
+
+    const adminBalance = adminWallet?.balance || 0;
+    const adminEarnings = adminWallet?.totalEarnings || 0;
+    const adminPlatformFees = adminWallet?.totalPlatformFees || 0;
+
+    // ===============================
+    // OTHER COUNTS
     // ===============================
     const [
       totalCustomers,
       totalProviders,
-      totalJobs,
-      totalRevenueAgg
+      totalJobs
     ] = await Promise.all([
       User.countDocuments({ role: 'customer' }),
       User.countDocuments({ role: 'provider' }),
-      Job.countDocuments(),
-      Job.aggregate([
-        {
-          $match: { paymentStatus: 'released_to_provider' }
-        },
-        {
-          $group: {
-            _id: null,
-            totalRevenue: { $sum: '$amount' }
-          }
-        }
-      ])
+      Job.countDocuments()
     ]);
 
-    const totalRevenue = totalRevenueAgg[0]?.totalRevenue || 0;
+    const totalUsers = totalCustomers + totalProviders; //  total users
 
     // ===============================
-    // 📊 REVENUE CHART
+    // 📊 EARNINGS CHART — from Payment, grouped by date, platformFee as earnings
     // ===============================
-    const revenueChartRaw = await Job.aggregate([
+    const earningsChartRaw = await Payment.aggregate([
       {
         $match: {
           ...dateFilter,
-          paymentStatus: 'released_to_provider'
+          paymentStatus: 'completed'
         }
       },
       {
         $group: {
           _id: {
+            date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
             year: { $year: '$createdAt' },
             month: { $month: '$createdAt' }
           },
-          revenue: { $sum: '$amount' },
+          //  Admin earns platformFee from each payment
+          dailyEarnings: { $sum: '$platformFee' },
           jobs: { $sum: 1 }
         }
       },
-      {
-        $sort: { '_id.year': 1, '_id.month': 1 }
-      }
+      { $sort: { '_id.date': 1 } }
     ]);
 
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-    const revenueChart = revenueChartRaw.map(item => ({
-      month: `${monthNames[item._id.month - 1]} ${item._id.year}`,
-      revenue: item.revenue,
-      jobs: item.jobs
-    }));
+ const earningsChart = earningsChartRaw.map(item => ({
+  date: item._id.date,
+  month: `${monthNames[item._id.month - 1]} ${item._id.year}`,
+  revenue: item.dailyEarnings,   //  "earnings" se "revenue" kiya
+  jobs: item.jobs
+}));
 
     // ===============================
-    // 🍩 DONUT CHART (JOB STATUS)
+    // 🍩 JOB STATUS CHART
     // ===============================
     const jobStatusRaw = await Job.aggregate([
-      {
-        $match: dateFilter
-      },
+      { $match: dateFilter },
       {
         $group: {
           _id: '$status',
@@ -804,22 +798,25 @@ export const getAdminDashboardStats = async (req, res) => {
     }));
 
     // ===============================
-    // 🚀 FINAL RESPONSE
+    // 🚀 RESPONSE
     // ===============================
     return res.status(200).json(
       new ApiResponse(200, {
         filterApplied: filter,
 
         mainStats: {
-          totalRevenue,
+          totalBalance: adminBalance,
+          totalEarnings: adminEarnings,       //  from admin wallet
+          totalPlatformFees: adminPlatformFees,
           totalJobs,
           totalProviders,
-          totalCustomers
+          totalCustomers,
+          totalUsers,                          //  NEW: providers + customers
         },
 
         charts: {
-          revenueChart,      // line chart
-          jobStatusChart     // donut chart
+          earningsChart,   //  has { date, month, earnings, jobs } per day
+          jobStatusChart
         },
 
         recentJobs
@@ -829,13 +826,11 @@ export const getAdminDashboardStats = async (req, res) => {
 
   } catch (error) {
     console.error('Dashboard Error:', error);
-
     return res.status(500).json(
       new ApiResponse(500, null, error.message)
     );
   }
 };
-
 // Get all activity logs
 export const getActivityLogs = async (req, res) => {
     try {

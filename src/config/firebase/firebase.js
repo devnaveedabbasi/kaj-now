@@ -1,24 +1,16 @@
-import fs from "fs";
-import path from "path";
 import admin from "firebase-admin";
+import dotenv from 'dotenv';
+dotenv.config();
 
-const serviceAccount = JSON.parse(
-  fs.readFileSync(
-    path.join(
-      process.cwd(),
-      "src/config/firebase/firebase-service-account.json"
-    ),
-    "utf8"
-  )
-);
+const serviceAccount = {
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+  privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+};
 
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert({
-      project_id: serviceAccount.project_id,
-      client_email: serviceAccount.client_email,
-      private_key: serviceAccount.private_key.replace(/\\n/g, "\n"),
-    }),
+    credential: admin.credential.cert(serviceAccount),
   });
 }
 

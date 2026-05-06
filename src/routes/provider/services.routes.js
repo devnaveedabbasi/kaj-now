@@ -10,4 +10,5 @@ router.get('/all-categories', asyncHandler(provider.getAllCategories));
 router.get('/by-category/:categoryId', asyncHandler(provider.getServicesByCategory));
 router.post('/request', asyncHandler(provider.requestService));
 router.get('/:serviceId', asyncHandler(provider.getServiceById));
+router.delete('/:serviceId', asyncHandler(provider.deleteService));
 export default router;

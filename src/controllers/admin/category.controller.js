@@ -68,16 +68,24 @@ export const getAllCategories = async (req, res) => {
 
     let query = { userId };
 
+    // 🔍 Search filter
     if (search) {
         query.name = { $regex: search, $options: 'i' };
     }
 
-    if (isActive !== undefined && isActive !== '') {
-        query.isActive = isActive == true;
+    //  FIX: Proper boolean parsing
+    if (isActive !== undefined) {
+        query.isActive = isActive === 'true';
     }
 
-    query.isDeleted = { $ne: true };
+    if (isDeleted !== undefined) {
+        query.isDeleted = isDeleted === 'true';
+    } else {
+        // default: hide deleted
+        query.isDeleted = false;
+    }
 
+    // 🔽 Sorting
     const sortField = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortField]: sortOrder };
@@ -91,7 +99,7 @@ export const getAllCategories = async (req, res) => {
         Category.countDocuments(query)
     ]);
 
-    // Summary counters (GLOBAL)
+    // 📊 Summary
     const [totalCategories, activeCategories, totalServices] =
         await Promise.all([
             Category.countDocuments({ userId, isDeleted: false }),
@@ -104,19 +112,21 @@ export const getAllCategories = async (req, res) => {
         isDeleted: true
     });
 
+    // ⚡ Optimized (avoid N+1 queries)
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
-            const serviceCount = await Service.countDocuments({
-                userId,
-                categoryId: category._id
-            });
-
-            const activeServiceCount = await Service.countDocuments({
-                userId,
-                categoryId: category._id,
-                isActive: true,
-                isDeleted: false
-            });
+            const [serviceCount, activeServiceCount] = await Promise.all([
+                Service.countDocuments({
+                    userId,
+                    categoryId: category._id
+                }),
+                Service.countDocuments({
+                    userId,
+                    categoryId: category._id,
+                    isActive: true,
+                    isDeleted: false
+                })
+            ]);
 
             return {
                 ...category,
@@ -150,8 +160,8 @@ export const getAllCategories = async (req, res) => {
 
             filters: {
                 search: search || null,
-                isActive: isActive || null,
-                isDeleted: isDeleted || null,
+                isActive: isActive ?? null,
+                isDeleted: isDeleted ?? null,
                 sortBy: sortField,
                 sortOrder: req.query.sortOrder || 'desc'
             }

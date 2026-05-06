@@ -17,9 +17,9 @@ export const getAllCategories = async (req, res) => {
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
         const sort = { [sortField]: sortOrder };
 
-        // Sirf approved service requests ki saari categories
+        // Get only ACTIVE and NON-DELETED categories from approved service requests
         const aggregationPipeline = [
-            { $match: { status: 'approved' } },  // Sirf approved
+            { $match: { status: 'approved' } },
             {
                 $lookup: {
                     from: 'categories',
@@ -29,6 +29,13 @@ export const getAllCategories = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
+            //  FILTER: Only active and non-deleted categories
+            {
+                $match: {
+                    'category.isActive': true,
+                    'category.isDeleted': false
+                }
+            },
             ...(search ? [{ $match: { 'category.name': { $regex: search, $options: 'i' } } }] : []),
             {
                 $group: {
@@ -69,13 +76,21 @@ export const getServicesByCategory = async (req, res) => {
             throw new ApiError(400, 'Invalid category ID format');
         }
 
+        const category = await Category.findOne({ 
+            _id: categoryId, 
+            isActive: true,
+            isDeleted: false 
+        });
+
+        if (!category) {
+            throw new ApiError(404, 'Category is inactive or deleted.');
+        }
+
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        const search = req.query.search || '';
-
-        // Simple pipeline - sirf serviceRequest aur service
+        // Build aggregation pipeline for accurate counting and filtering
         let pipeline = [
             {
                 $match: {
@@ -83,6 +98,9 @@ export const getServicesByCategory = async (req, res) => {
                     status: 'approved'
                 }
             },
+            // Unwind serviceId array
+            { $unwind: '$serviceId' },
+            // Lookup service
             {
                 $lookup: {
                     from: 'services',
@@ -91,30 +109,42 @@ export const getServicesByCategory = async (req, res) => {
                     as: 'service'
                 }
             },
-            { $unwind: '$service' }
-        ];
-
-        // Search filter agar hai
-        if (search) {
-            pipeline.push({
+            { $unwind: '$service' },
+            // Filter active and non-deleted services
+            {
                 $match: {
-                    'service.name': { $regex: search, $options: 'i' }
+                    'service.isActive': true,
+                    'service.isDeleted': false
                 }
-            });
-        }
-
-        // Count total
-        const countPipeline = [...pipeline];
-        countPipeline.push({ $count: 'total' });
-
-        // Add sorting and pagination
-        const sortField = req.query.sortBy || 'requestedAt';
-        const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-
-        pipeline.push(
-            { $sort: { [sortField]: sortOrder } },
-            { $skip: skip },
-            { $limit: limit },
+            },
+            // Lookup provider
+            {
+                $lookup: {
+                    from: 'providers',
+                    localField: 'providerId',
+                    foreignField: '_id',
+                    as: 'provider'
+                }
+            },
+            { $unwind: '$provider' },
+            // Lookup provider user
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'provider.userId',
+                    foreignField: '_id',
+                    as: 'providerUser'
+                }
+            },
+            { $unwind: '$providerUser' },
+            // Filter active providers only
+            {
+                $match: {
+                    'providerUser.isActive': true,
+                    'providerUser.status': 'approved'
+                }
+            },
+            // Project final shape
             {
                 $project: {
                     _id: '$service._id',
@@ -123,22 +153,34 @@ export const getServicesByCategory = async (req, res) => {
                     price: '$service.price',
                     description: '$service.description',
                     averageRating: '$service.averageRating',
-                    requestStatus: '$status',
+                    provider: {
+                        _id: '$provider._id',
+                        name: '$providerUser.name',
+                        email: '$providerUser.email',
+                        phone: '$providerUser.phone',
+                        profilePicture: '$providerUser.profilePicture',
+                        location: '$provider.location'
+                    },
+                    requestId: '$_id',
                     requestedAt: '$requestedAt'
                 }
             }
+        ];
+
+        // Get count
+        const countPipeline = [...pipeline, { $count: 'total' }];
+        const totalCountResult = await ServiceRequest.aggregate(countPipeline);
+        const totalCount = totalCountResult[0]?.total || 0;
+
+        // Add pagination to main pipeline
+        pipeline.push(
+            { $skip: skip },
+            { $limit: limit }
         );
 
-        const [services, totalCountResult] = await Promise.all([
-            ServiceRequest.aggregate(pipeline),
-            ServiceRequest.aggregate(countPipeline)
-        ]);
+        const services = await ServiceRequest.aggregate(pipeline);
 
-        const totalCount = totalCountResult[0]?.total || 0;
         const totalPages = Math.ceil(totalCount / limit);
-
-        // Category details lelo
-        const category = await Category.findById(categoryId);
 
         res.status(200).json(
             new ApiResponse(200, {
@@ -148,7 +190,7 @@ export const getServicesByCategory = async (req, res) => {
                     icon: category.icon,
                     description: category.description
                 },
-                services: services,
+                services,
                 pagination: {
                     currentPage: page,
                     totalPages,
@@ -159,8 +201,9 @@ export const getServicesByCategory = async (req, res) => {
                 }
             }, 'Services retrieved successfully')
         );
+
     } catch (error) {
-        console.error('Error:', error);
+        console.error(error);
         if (error instanceof ApiError) {
             res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
         } else {
@@ -200,6 +243,15 @@ export const getAllApprovedServices = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
+            //  FILTER: Only active and non-deleted categories and services
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false,
+                    'category.isActive': true,
+                    'category.isDeleted': false
+                }
+            },
             {
                 $lookup: {
                     from: 'providers',
@@ -301,7 +353,16 @@ export const getAllApprovedServices = async (req, res) => {
                     as: 'category'
                 }
             },
-            { $unwind: '$category' }
+            { $unwind: '$category' },
+            //  FILTER: Only active and non-deleted categories and services
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false,
+                    'category.isActive': true,
+                    'category.isDeleted': false
+                }
+            }
         ];
 
         if (Object.keys(matchConditions).length > 0) {
@@ -380,6 +441,15 @@ export const getApprovedServiceById = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
+            //  FILTER: Only active and non-deleted categories and services
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false,
+                    'category.isActive': true,
+                    'category.isDeleted': false
+                }
+            },
             {
                 $lookup: {
                     from: 'providers',
@@ -468,6 +538,13 @@ export const getApprovedServiceById = async (req, res) => {
                 }
             },
             { $unwind: '$service' },
+            //  FILTER: Only active and non-deleted services
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false
+                }
+            },
             { $limit: 5 },
             {
                 $project: {
@@ -585,6 +662,15 @@ export const getRecommendedServices = async (req, res) => {
                 },
             },
             { $unwind: "$category" },
+            //  FILTER: Only active and non-deleted categories and services
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false,
+                    'category.isActive': true,
+                    'category.isDeleted': false
+                }
+            },
 
             {
                 $lookup: {
@@ -715,11 +801,6 @@ export const getTopRatedServices = async (req, res) => {
             },
             { $unwind: "$service" },
 
-            // =========================
-            // 🧠 IMPORTANT FIX
-            // include even low ratings (NO FILTER)
-            // =========================
-
             {
                 $lookup: {
                     from: "categories",
@@ -729,6 +810,15 @@ export const getTopRatedServices = async (req, res) => {
                 },
             },
             { $unwind: "$category" },
+            //  FILTER: Only active and non-deleted categories and services
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false,
+                    'category.isActive': true,
+                    'category.isDeleted': false
+                }
+            },
 
             {
                 $lookup: {
@@ -866,6 +956,15 @@ export const quickSearch = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
+            //  FILTER: Only active and non-deleted categories and services
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false,
+                    'category.isActive': true,
+                    'category.isDeleted': false
+                }
+            },
 
             // Get provider details
             {

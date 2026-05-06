@@ -38,7 +38,10 @@ const userSchema = new mongoose.Schema({
   },
   locationName: { type: String, trim: true, default: '' },
 },
-
+isActive: {
+  type: Boolean,
+  default: true,
+},
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
 fcmToken: { type: String, default: null }}, {

@@ -5,6 +5,9 @@ import Category from '../../models/admin/category.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import Job from '../../models/job.model.js';
+
+
 export const getAllCategories = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -138,6 +141,7 @@ export const requestService = async (req, res) => {
         const userId = req.user._id;
         let { serviceId } = req.body; // serviceId will be an array
         
+        console.log('Received service request with serviceId:', serviceId, 'from user:', userId);
         // Handle serviceId as array
         let finalServiceIds = [];
         
@@ -177,7 +181,7 @@ export const requestService = async (req, res) => {
             const alreadyApprovedIds = provider.approvedServices.map(id => id.toString());
             const duplicateIds = finalServiceIds.filter(id => alreadyApprovedIds.includes(id));
             if(duplicateIds.length > 0){
-                throw new ApiError(409, `Already have approved requests for services: ${duplicateIds.join(', ')}`);
+                throw new ApiError(409, `Already have approved requests for service`);
             }
         }
 
@@ -243,74 +247,55 @@ export const requestService = async (req, res) => {
 export const getMyServices = async (req, res) => {
   try {
     const userId = req.user._id;
-
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-
-    const { status = "approved" } = req.query; //  default approved
+    const { status } = req.query; // optional filter
 
     const provider = await Provider.findOne({ userId })
       .populate("userId", "name email profilePicture")
-      .populate("approvedServices", "name icon price description averageRating");
+      .populate("approvedServices", "name icon price description averageRating isActive isDeleted");
 
-    if (!provider) {
-      throw new ApiError(404, "Provider profile not found");
-    }
+    if (!provider) throw new ApiError(404, "Provider profile not found");
 
-    //  STEP 1: GET SERVICE REQUESTS BY STATUS
-    const serviceRequests = await ServiceRequest.find({
-      providerId: provider._id,
-      status,
-    }).select("serviceId status");
+    // Build query — status filter ho to use karo, warna sab fetch karo
+    const query = { providerId: provider._id };
+    if (status) query.status = status;
 
-    //  STEP 2: EXTRACT SERVICE IDS
-    const serviceIds = serviceRequests.flatMap((req) =>
-      req.serviceId.map((id) => id.toString())
+    const serviceRequests = await ServiceRequest.find(query)
+      .populate("serviceId", "name icon price description averageRating isActive isDeleted")
+      .lean();
+
+    // Har request ko format karo with its services
+    const services = serviceRequests.flatMap((request) =>
+      (request.serviceId || []).map((service) => ({
+        _id: service._id,
+        name: service.name,
+        icon: service.icon,
+        price: service.price,
+        description: service.description,
+        averageRating: service.averageRating || 0,
+        status: request.status,           // pending / approved / rejected
+        requestId: request._id,
+        rejectionReason: request.rejectionReason || null,
+        notes: request.notes || null,
+        requestedAt: request.requestedAt,
+        reviewedAt: request.reviewedAt || null,
+      }))
     );
 
-    //  STEP 3: FILTER APPROVED SERVICES ONLY
-    let services = [];
-
-    if (status === "approved") {
-      services = (provider.approvedServices || []).filter((service) =>
-        serviceIds.includes(service._id.toString())
-      );
-    } else {
-      services = []; // other statuses → empty as per requirement
-    }
-
-    //  RESPONSE
-    const result = {
+    return res.status(200).json(new ApiResponse(200, {
       _id: provider._id,
-      providerName: provider.userId?.name || "Unknown Provider",
-      providerEmail: provider.userId?.email || "Unknown Email",
+      providerName: provider.userId?.name || "Unknown",
+      providerEmail: provider.userId?.email || "Unknown",
       profilePicture: provider.userId?.profilePicture || null,
+      totalServices: services.length,
+      services,
+    }, "Services retrieved successfully"));
 
-      services: services.map((s) => ({
-        _id: s._id,
-        name: s.name,
-        icon: s.icon,
-        price: s.price,
-        description: s.description,
-        averageRating: s.averageRating,
-      })),
-    };
-
-    return res
-      .status(200)
-      .json(new ApiResponse(200, result, "Services retrieved successfully"));
   } catch (error) {
     console.error("Error getting services:", error);
-
     if (error instanceof ApiError) {
-      return res
-        .status(error.statusCode)
-        .json(new ApiResponse(error.statusCode, null, error.message));
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
     }
-
-    return res
-      .status(500)
-      .json(new ApiResponse(500, null, "Internal server error"));
+    return res.status(500).json(new ApiResponse(500, null, "Internal server error"));
   }
 };
 
@@ -434,4 +419,69 @@ console.log('Fetching service request with ID:', serviceId);
             new ApiResponse(500, null, 'Internal server error')
         );
     }
+};
+
+
+
+export const deleteService = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { serviceId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+      throw new ApiError(400, 'Invalid service ID');
+    }
+
+    // 1. Provider
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+      throw new ApiError(404, 'Provider not found');
+    }
+
+    // 2. Service Request
+    const serviceRequest = await ServiceRequest.findOne({
+      providerId: provider._id,
+      serviceId: { $in: [serviceId] }
+    });
+
+    if (!serviceRequest) {
+      throw new ApiError(404, 'Service request not found');
+    }
+
+    // 3. CHECK: koi bhi non-completed job ho to block
+    const blockingJob = await Job.findOne({
+      provider: provider._id,
+      service: serviceId,
+      status: { $ne: 'confirmed_by_user' } //  IMPORTANT
+    });
+
+    if (blockingJob) {
+      throw new ApiError(
+        400,
+        'Service cannot be deleted. Job is still in progress or not completed.'
+      );
+    }
+
+    // 4. DELETE SERVICE REQUEST 
+    await ServiceRequest.deleteOne({ _id: serviceRequest._id });
+
+    // 5. REMOVE FROM PROVIDER APPROVED SERVICES 
+    await Provider.updateOne(
+      { _id: provider._id },
+      {
+        $pull: { approvedServices: serviceId }
+      }
+    );
+
+    return res.status(200).json(
+      new ApiResponse(200, null, 'Service deleted successfully')
+    );
+
+  } catch (error) {
+    console.error('Delete Service Error:', error);
+
+    return res.status(error.statusCode || 500).json(
+      new ApiResponse(error.statusCode || 500, null, error.message)
+    );
+  }
 };

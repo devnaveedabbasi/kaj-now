@@ -11,6 +11,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { processSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
+import { cancelScheduledJob } from '../../queues/jobScheduleQueue.js';
 
 
 export async function rejectJob(req, res) {
@@ -43,6 +44,8 @@ export async function rejectJob(req, res) {
     if (!payment) throw new ApiError(404, 'Payment record not found');
 
     // ── Refund Logic ────────────────────────────────────────────────────────
+    // When job is rejected, return full amount to customer
+    // Admin also refunds the platform fee they earned
     const adminUser = await User.findOne({ role: 'admin' }).session(session);
     const adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
 
@@ -61,8 +64,9 @@ export async function rejectJob(req, res) {
     }
 
     // Move money from admin escrow back to customer wallet
-    adminWallet.balance -= payment.totalAmount;
-    adminWallet.totalHeld = (adminWallet.totalHeld || 0) - payment.totalAmount;
+    adminWallet.balance -= payment.totalAmount;  // Return full amount from escrow
+    adminWallet.totalEarnings -= payment.platformFee;  // Refund the platform fee earned
+    adminWallet.totalPlatformFees -= payment.platformFee;  // Refund platform fee count
     await adminWallet.save({ session });
 
     customerWallet.balance += payment.totalAmount;
@@ -461,6 +465,38 @@ export async function startJob(req, res) {
       throw new ApiError(400, `Job must be accepted first. Current: ${job.status}`);
     }
 
+
+     // ── Schedule check — 1 ghante ka rule ──────────────────
+    if (job.schedule?.date) {
+      const now = new Date();
+      const scheduledTime = new Date(job.schedule.date);
+      const diffMs = scheduledTime.getTime() - now.getTime();
+      const diffMinutes = diffMs / (1000 * 60);
+
+      // Agar scheduled time se 60 min se zyada pehle hai
+      if (diffMinutes > 60) {
+        const hoursLeft = Math.floor(diffMinutes / 60);
+        const minsLeft = Math.floor(diffMinutes % 60);
+        throw new ApiError(
+          400,
+          `Job cannot be started. You can start it 1 hour before the scheduled time. There are still ${hoursLeft}h ${minsLeft}m remaining.`
+        );
+      }
+
+      // Agar scheduled time bilkul abhi se pehle (2 ghante tak grace period)
+      // Provider 2 ghante baad bhi start kar sakta hai schedule ke baad
+      const twoHoursAfter = scheduledTime.getTime() + 2 * 60 * 60 * 1000;
+      if (now.getTime() > twoHoursAfter) {
+        throw new ApiError(
+          400,
+          'Scheduled time 2 ghante se zyada pehle guzar gayi. Please customer se contact karein.'
+        );
+      }
+    }
+
+await cancelScheduledJob(job._id);
+
+
     job.status = 'in_progress';
     job.startedAt = new Date();
     await job.save({ session });
@@ -527,14 +563,13 @@ export async function markCompletedByProvider(req, res) {
       throw new ApiError(403, 'Not authorized to update this job');
     }
 
-    if ('completed_by_provider'.includes(job.status)) {
-      throw new ApiError(400, `Job already completed. Current: ${job.status}`);
-    }
+if (job.status === 'completed_by_provider') {
+  throw new ApiError(400, 'Job already completed');
+}
 
-    if (!['accepted', 'in_progress'].includes(job.status)) {
-      throw new ApiError(400, `Job must be accepted or in progress. Current: ${job.status}`);
-    }
-
+if (job.status !== 'in_progress') {
+  throw new ApiError(400, `Job must be in progress. Current: ${job.status}`);
+}
     job.status = 'completed_by_provider';
     job.completedByProviderAt = new Date();
     await job.save({ session });
