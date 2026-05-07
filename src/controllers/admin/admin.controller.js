@@ -802,7 +802,7 @@ export const getAdminDashboardStats = async (req, res) => {
     }));
 
     // ===============================
-    // 🚀 RESPONSE
+    // RESPONSE
     // ===============================
     return res.status(200).json(
       new ApiResponse(200, {

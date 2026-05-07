@@ -3,7 +3,7 @@ import redis from '../config/redis.js';
 import Job from '../models/job.model.js';
 import { createNotification } from '../utils/notification.js';
 
-console.log("🚀 Job Schedule Worker Started");
+console.log("Job Schedule Worker Started");
 redis.ping().then(console.log);
 const worker = new Worker(
   'job-schedule',
@@ -93,12 +93,12 @@ const worker = new Worker(
         return;
       }
 
-      console.log(`   🚀 EXACT TIME REACHED - Sending final notification`);
+      console.log(`   EXACT TIME REACHED - Sending final notification`);
 
       try {
         await createNotification({
           userId: jobDoc.provider?.userId,
-          title: '🚀 Start Job Now',
+          title: 'Start Job Now',
           message: `Time reached for ${jobDoc.service?.name}`,
           type: 'job',
           referenceId: jobDoc._id,

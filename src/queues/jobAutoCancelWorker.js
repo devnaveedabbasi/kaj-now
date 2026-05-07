@@ -7,7 +7,7 @@ import User from '../models/User.model.js';
 import { createNotification } from '../utils/notification.js';
 import { createActivityLog } from '../utils/createActivityLog.js';
 import mongoose from 'mongoose';
-import admin from '../config/firebase/firebase.js';
+// import admin from '../config/firebase/firebase.js';
 
 console.log("Job Auto-Cancel & Reminder Worker Started");
 
