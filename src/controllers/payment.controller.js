@@ -41,6 +41,34 @@ export async function paymentSuccess(req, res) {
       await job.save({ session });
     }
 
+    // ✅ SYNC ADMIN WALLET WITH PLATFORM FEE EARNINGS
+    const adminUser = await User.findOne({ role: 'admin' }).session(session);
+    if (adminUser) {
+      let adminWallet = await Wallet.findOne({ 
+        userId: adminUser._id, 
+        role: 'admin' 
+      }).session(session);
+
+      if (!adminWallet) {
+        [adminWallet] = await Wallet.create([{
+          userId: adminUser._id,
+          role: 'admin',
+          balance: 0,
+          totalEarnings: 0,
+          totalWithdrawn: 0,
+          totalPlatformFees: 0,
+          isActive: true
+        }], { session });
+      }
+
+      // Add platform fee to admin wallet
+      adminWallet.balance += payment.platformFee;
+      adminWallet.totalEarnings += payment.platformFee;
+      adminWallet.totalPlatformFees += payment.platformFee;
+      adminWallet.transactionHistory.push(payment._id);
+      await adminWallet.save({ session });
+    }
+
     await session.commitTransaction();
 
     // Redirect to success page

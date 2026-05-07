@@ -7,6 +7,7 @@ const router = Router();
 
 router.get('/', asyncHandler(walletController.getAdminWallet));
 router.get('/transactions', asyncHandler(walletController.getAllTransactions));
+router.get('/wallet-transactions', asyncHandler(walletController.getAdminWalletTransactions));
 router.get('/platform-fees', asyncHandler(walletController.getPlatformFeeStats));
 router.get('/withdrawal-stats', asyncHandler(walletController.getWithdrawalStats));
 router.get('/earnings-overview', asyncHandler(walletController.getAdminEarningsOverview));

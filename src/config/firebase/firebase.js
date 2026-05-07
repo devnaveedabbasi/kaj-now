@@ -14,7 +14,7 @@ const serviceAccount = {
   clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
   privateKey,
 };
-
+console.log("Service Account:", serviceAccount.projectId);
 if (!admin.apps.length) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -22,7 +22,7 @@ if (!admin.apps.length) {
 
   console.log("Firebase Admin SDK initialized successfully.");
 } else {
-  console.log("Firebase Admin SDK already initialized.");
+  console.log("Firebase Admin SDK already initialized");
 }
 
 export default admin;

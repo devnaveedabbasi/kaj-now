@@ -100,6 +100,7 @@ export async function rejectJob(req, res) {
     });
 
     // ── Notifications ────────────────────────────────────────────────────────
+    const customerUser = await User.findById(job.customer);
     await createNotification({
       userId: job.customer,
       title: 'Booking Rejected & Refunded',
@@ -108,6 +109,30 @@ export async function rejectJob(req, res) {
       referenceId: job._id,
       metadata: { reason, orderId: job.orderId }
     });
+
+    // ✅ NOTIFY ADMIN ABOUT PROVIDER REJECTION AND REFUND
+    const adminUser2 = await User.findOne({ role: 'admin' });
+    if (adminUser2) {
+      const providerUser = await User.findById(userId);
+      await createNotification({
+        userId: adminUser2._id,
+        title: 'Job Rejected by Provider - Customer Refunded',
+        message: `Order #${job.orderId} from customer "${customerUser?.name}" was rejected by provider "${providerUser?.name}". Reason: ${reason}. Refunded: ${payment.totalAmount} BDT to customer. Platform fee reversed: ${payment.platformFee} BDT.`,
+        type: 'admin',
+        referenceId: job._id,
+        metadata: { 
+          orderId: job.orderId, 
+          customerId: job.customer,
+          customerName: customerUser?.name,
+          providerId: provider._id,
+          providerName: providerUser?.name,
+          refundAmount: payment.totalAmount, 
+          platformFee: payment.platformFee,
+          reason: reason,
+          jobId: job._id
+        },
+      });
+    }
 
     return res.status(200).json({ success: true, message: 'Job rejected and funds refunded to customer wallet.' });
   } catch (error) {
@@ -467,32 +492,49 @@ export async function startJob(req, res) {
 
 
      // ── Schedule check — 1 ghante ka rule ──────────────────
-    if (job.schedule?.date) {
-      const now = new Date();
-      const scheduledTime = new Date(job.schedule.date);
-      const diffMs = scheduledTime.getTime() - now.getTime();
-      const diffMinutes = diffMs / (1000 * 60);
+  if (job.schedule?.date) {
+  // Current UTC timestamp
+  const now = Date.now();
 
-      // Agar scheduled time se 60 min se zyada pehle hai
-      if (diffMinutes > 60) {
-        const hoursLeft = Math.floor(diffMinutes / 60);
-        const minsLeft = Math.floor(diffMinutes % 60);
-        throw new ApiError(
-          400,
-          `Job cannot be started. You can start it 1 hour before the scheduled time. There are still ${hoursLeft}h ${minsLeft}m remaining.`
-        );
-      }
+  // Scheduled UTC timestamp
+  const scheduledTime = new Date(job.schedule.date).getTime();
 
-      // Agar scheduled time bilkul abhi se pehle (2 ghante tak grace period)
-      // Provider 2 ghante baad bhi start kar sakta hai schedule ke baad
-      const twoHoursAfter = scheduledTime.getTime() + 2 * 60 * 60 * 1000;
-      if (now.getTime() > twoHoursAfter) {
-        throw new ApiError(
-          400,
-          'Scheduled time 2 ghante se zyada pehle guzar gayi. Please customer se contact karein.'
-        );
-      }
-    }
+  // Difference in minutes
+  const diffMinutes = (scheduledTime - now) / (1000 * 60);
+
+  // Debugging
+  console.log("==================================");
+  console.log("NOW UTC:", new Date(now).toISOString());
+  console.log(
+    "SCHEDULE UTC:",
+    new Date(scheduledTime).toISOString()
+  );
+  console.log("DIFF MINUTES:", diffMinutes);
+  console.log("==================================");
+
+  // User can only start within 1 hour before schedule
+  if (diffMinutes > 60) {
+    const hoursLeft = Math.floor(diffMinutes / 60);
+    const minsLeft = Math.floor(diffMinutes % 60);
+
+    throw new ApiError(
+      400,
+      `Job cannot be started. You can start it 1 hour before the scheduled time. There are still ${hoursLeft}h ${minsLeft}m remaining.`
+    );
+  }
+
+  // Allow start up to 2 hours after scheduled time
+  const twoHoursAfter = scheduledTime + 2 * 60 * 60 * 1000;
+
+  if (now > twoHoursAfter) {
+    throw new ApiError(
+      400,
+      "Scheduled time expired more than 2 hours ago."
+    );
+  }
+
+  console.log("JOB START ALLOWED");
+}
 
 await cancelScheduledJob(job._id);
 

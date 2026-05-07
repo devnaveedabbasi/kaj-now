@@ -126,18 +126,25 @@ export const getAdminWallet = async (req, res) => {
         const totalPendingWithdrawalsAmount = pendingWithdrawalsAmountResult[0]?.totalRequested || 0;
         const totalPendingWithdrawalsPayable = pendingWithdrawalsAmountResult[0]?.totalPayable || 0;
 
-        // Get recent transactions
-        const recentTransactions = await Payment.find({ paymentStatus: 'completed' })
-            .populate('customerId', 'name email')
-            .populate('providerId', 'name email')
-            .populate('jobId', 'orderId')
+        // Get recent transactions with full details
+        const recentTransactions = await Payment.find()
+            .populate('customerId', 'name email phone')
+            .populate('providerId', 'name email phone')
+            .populate('jobId', 'orderId amount status')
             .sort({ createdAt: -1 })
             .limit(10)
             .lean();
-
+console.log('Recent transactions:', recentTransactions);
         // Get pending withdrawals with provider details
         const pendingWithdrawalsList = await Withdrawal.find({ status: 'pending' })
-            .populate('providerId', 'name email phone bankDetails')
+            .populate({
+                path: 'providerId',
+                select: 'userId bankDetails',
+                populate: {
+                    path: 'userId',
+                    select: 'name email phone'
+                }
+            })
             .sort({ createdAt: -1 })
             .limit(10)
             .lean();
@@ -205,6 +212,14 @@ export const getAdminWallet = async (req, res) => {
             count: stat.count
         })).reverse();
 
+        // ✅ SYNC WALLET WITH ACTUAL DATA
+        // Update wallet totalEarnings to match actual platform fees earned
+        if (adminWallet.totalEarnings !== adminNetEarning) {
+            adminWallet.totalEarnings = adminNetEarning;
+            adminWallet.totalPlatformFees = totalPlatformFees;
+            await adminWallet.save();
+        }
+
         return res.status(200).json(
             new ApiResponse(200, {
                 wallet: {
@@ -245,7 +260,7 @@ export const getAllTransactions = async (req, res) => {
         const skip = (page - 1) * limit;
         const { type, startDate, endDate } = req.query;
 
-        let query = { paymentStatus: 'completed' };
+        // let query = { paymentStatus: 'completed' };
         
         if (type === 'withdrawal') {
             // Get withdrawals instead of payments
@@ -280,7 +295,7 @@ export const getAllTransactions = async (req, res) => {
         }
 
         const [transactions, total] = await Promise.all([
-            Payment.find(query)
+            Payment.find()
                 .populate('customerId', 'name email')
                 .populate('providerId', 'name email')
                 .populate('jobId', 'orderId service')
@@ -288,7 +303,7 @@ export const getAllTransactions = async (req, res) => {
                 .skip(skip)
                 .limit(limit)
                 .lean(),
-            Payment.countDocuments(query)
+            Payment.countDocuments()
         ]);
 
         const totalPages = Math.ceil(total / limit);
@@ -612,6 +627,94 @@ export const getAdminEarningsOverview = async (req, res) => {
         );
     } catch (error) {
         console.error('Error getting admin earnings overview:', error);
+        return res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+};
+
+// Get admin wallet transactions with full details (populated)
+export const getAdminWalletTransactions = async (req, res) => {
+    try {
+        const adminUser = await User.findOne({ role: 'admin' });
+        if (!adminUser) {
+            throw new ApiError(404, 'Admin user not found');
+        }
+
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 20;
+        const skip = (page - 1) * limit;
+
+        // Get wallet with transaction history
+        const adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' });
+        
+        if (!adminWallet) {
+            return res.status(200).json(
+                new ApiResponse(200, {
+                    transactions: [],
+                    pagination: {
+                        currentPage: page,
+                        totalPages: 0,
+                        totalItems: 0,
+                        itemsPerPage: limit
+                    }
+                }, 'Admin wallet transactions retrieved successfully')
+            );
+        }
+
+        // Get all completed payments (actual transactions)
+        const [transactions, total] = await Promise.all([
+            Payment.find()
+                .populate('customerId', 'name email phone')
+                .populate('providerId', 'name email phone')
+                .populate('jobId', 'orderId amount status service')
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Payment.countDocuments()
+        ]);
+
+        const totalPages = Math.ceil(total / limit);
+
+        // Format transactions to show admin earnings breakdown
+        const formattedTransactions = transactions.map(tx => ({
+            _id: tx._id,
+            orderId: tx.jobId?.orderId || 'N/A',
+            customer: tx.customerId?.name || 'Unknown',
+            provider: tx.providerId?.name || 'Unknown',
+            totalAmount: tx.totalAmount,
+            platformFee: tx.platformFee,  // Admin earning
+            providerAmount: tx.providerAmount,
+            paymentStatus: tx.paymentStatus,
+            escrowStatus: tx.escrowStatus,
+            createdAt: tx.createdAt,
+            adminEarning: tx.platformFee,  // Admin's profit from this transaction
+            // Refund status
+            isRefunded: tx.paymentStatus === 'refunded',
+            refundedAt: tx.refundedAt,
+            refundReason: tx.refundReason
+        }));
+
+        return res.status(200).json(
+            new ApiResponse(200, {
+                transactions: formattedTransactions,
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalItems: total,
+                    itemsPerPage: limit
+                },
+                summary: {
+                    totalTransactions: total,
+                    totalAdminEarning: transactions.reduce((sum, tx) => sum + (tx.platformFee || 0), 0),
+                    averageAdminEarning: total > 0 ? (transactions.reduce((sum, tx) => sum + (tx.platformFee || 0), 0) / total).toFixed(2) : 0
+                }
+            }, 'Admin wallet transactions retrieved successfully')
+        );
+    } catch (error) {
+        console.error('Error getting admin wallet transactions:', error);
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        }
         return res.status(500).json(new ApiResponse(500, null, error.message));
     }
 };

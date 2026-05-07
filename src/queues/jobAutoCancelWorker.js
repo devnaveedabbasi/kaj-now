@@ -83,7 +83,7 @@ const worker = new Worker(
           throw new Error('Payment record not found');
         }
 
-        const refundAmount = payment.totalAmount - payment.platformFee;
+        const refundAmount = payment.totalAmount;
 
         jobDoc.status = 'cancelled';
         jobDoc.cancelledAt = new Date();
@@ -150,6 +150,26 @@ const worker = new Worker(
           referenceId: jobDoc._id,
           metadata: { orderId: jobDoc.orderId, refundAmount, reason: 'provider_timeout_8hours' },
         });
+
+        // ✅ NOTIFY ADMIN ABOUT CANCELLATION AND REFUND
+        if (adminUser) {
+          await createNotification({
+            userId: adminUser._id,
+            title: 'Job Cancelled - Customer Refunded',
+            message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled. Reason: Provider timeout (8 hours). Refunded: ${refundAmount} BDT back to customer. Platform fee retained: ${payment.platformFee} BDT.`,
+            type: 'admin',
+            referenceId: jobDoc._id,
+            metadata: { 
+              orderId: jobDoc.orderId, 
+              customerId: customerUser._id,
+              customerName: customerUser.name,
+              refundAmount, 
+              platformFee: payment.platformFee,
+              reason: 'provider_timeout_8hours',
+              jobId: jobDoc._id
+            },
+          });
+        }
 
         const providerUser = await User.findById(jobDoc.provider?.userId);
         if (providerUser) {
