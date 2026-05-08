@@ -76,10 +76,10 @@ export const getServicesByCategory = async (req, res) => {
             throw new ApiError(400, 'Invalid category ID format');
         }
 
-        const category = await Category.findOne({ 
-            _id: categoryId, 
+        const category = await Category.findOne({
+            _id: categoryId,
             isActive: true,
-            isDeleted: false 
+            isDeleted: false
         });
 
         if (!category) {
@@ -651,7 +651,20 @@ export const getRecommendedServices = async (req, res) => {
                     as: "service",
                 },
             },
+
             { $unwind: "$service" },
+
+            {
+                $group: {
+                    _id: "$service._id",
+                    data: { $first: "$$ROOT" }
+                }
+            },
+            {
+                $replaceRoot: {
+                    newRoot: "$data"
+                }
+            },
 
             {
                 $lookup: {
@@ -661,8 +674,9 @@ export const getRecommendedServices = async (req, res) => {
                     as: "category",
                 },
             },
+
             { $unwind: "$category" },
-            //  FILTER: Only active and non-deleted categories and services
+
             {
                 $match: {
                     'service.isActive': true,
@@ -680,6 +694,7 @@ export const getRecommendedServices = async (req, res) => {
                     as: "provider",
                 },
             },
+
             { $unwind: "$provider" },
 
             {
@@ -690,6 +705,7 @@ export const getRecommendedServices = async (req, res) => {
                     as: "user",
                 },
             },
+
             { $unwind: "$user" },
         ];
 
@@ -697,7 +713,7 @@ export const getRecommendedServices = async (req, res) => {
 
         let results = [];
 
-      
+
         for (let radius of RADII) {
             results = serviceRequests
                 .map((req) => {
@@ -751,18 +767,56 @@ export const getRecommendedServices = async (req, res) => {
             if (results.length > 0) break;
         }
 
+        // STEP 1: sort
         results.sort((a, b) => {
-            // priority 1: distance
             if (a.distance !== null && b.distance !== null) {
-                return a.distance - b.distance;
+                if (a.distance !== b.distance) {
+                    return a.distance - b.distance;
+                }
             }
-
-            // priority 2: rating
             return b.averageRating - a.averageRating;
         });
 
+        // STEP 2: BALANCED PICK
+        const final = [];
+        const providerMap = new Map();
+        const serviceSet = new Set();
 
-        const topServices = results.slice(0, 6);
+        const MAX_PER_PROVIDER = 2; // 👈 key fix
+
+        for (const item of results) {
+
+            const providerId = item.provider._id.toString();
+            const serviceId = item._id.toString();
+
+            // skip duplicate service
+            if (serviceSet.has(serviceId)) continue;
+
+            // provider limit
+            const count = providerMap.get(providerId) || 0;
+            if (count >= MAX_PER_PROVIDER) continue;
+
+            providerMap.set(providerId, count + 1);
+            serviceSet.add(serviceId);
+
+            final.push(item);
+
+            if (final.length === 6) break;
+        }
+
+        // fallback fill
+        if (final.length < 6) {
+            for (const item of results) {
+                if (final.length === 6) break;
+
+                if (!serviceSet.has(item._id.toString())) {
+                    final.push(item);
+                }
+            }
+        }
+
+        const topServices = final;
+
 
         return res.status(200).json(
             new ApiResponse(
@@ -783,6 +837,7 @@ export const getRecommendedServices = async (req, res) => {
             .json(new ApiResponse(500, null, error.message));
     }
 };
+
 // Get top rated services from ServiceRequest only
 export const getTopRatedServices = async (req, res) => {
     try {
@@ -799,7 +854,21 @@ export const getTopRatedServices = async (req, res) => {
                     as: "service",
                 },
             },
+
             { $unwind: "$service" },
+
+            // ✅ REMOVE DUPLICATE SERVICES
+            {
+                $group: {
+                    _id: "$service._id",
+                    data: { $first: "$$ROOT" }
+                }
+            },
+            {
+                $replaceRoot: {
+                    newRoot: "$data"
+                }
+            },
 
             {
                 $lookup: {
@@ -809,8 +878,9 @@ export const getTopRatedServices = async (req, res) => {
                     as: "category",
                 },
             },
+
             { $unwind: "$category" },
-            //  FILTER: Only active and non-deleted categories and services
+
             {
                 $match: {
                     'service.isActive': true,
@@ -828,6 +898,7 @@ export const getTopRatedServices = async (req, res) => {
                     as: "provider",
                 },
             },
+
             { $unwind: "$provider" },
 
             {
@@ -838,11 +909,9 @@ export const getTopRatedServices = async (req, res) => {
                     as: "user",
                 },
             },
+
             { $unwind: "$user" },
 
-            // =========================
-            // 🧠 SORTING (MOST IMPORTANT)
-            // =========================
             {
                 $addFields: {
                     rating: { $ifNull: ["$service.averageRating", 0] },
@@ -854,9 +923,9 @@ export const getTopRatedServices = async (req, res) => {
 
             {
                 $sort: {
-                    rating: -1,        // highest rating first
-                    reviewsCount: -1,  // more reviews next
-                    createdAt: -1,     // fallback latest
+                    rating: -1,
+                    reviewsCount: -1,
+                    createdAt: -1,
                 },
             },
 
@@ -889,7 +958,6 @@ export const getTopRatedServices = async (req, res) => {
                 },
             },
         ];
-
         const services = await ServiceRequest.aggregate(pipeline);
 
         // =========================
