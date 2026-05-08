@@ -12,10 +12,10 @@ import { processSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import { cancelScheduledJob } from '../../queues/jobScheduleQueue.js';
-import { 
-  cancelAutoCancelJob, 
-  schedulePostAcceptanceReminders 
-} from '../../queues/jobAutoCancel.queue.js'; // 
+import {
+  cancelAutoCancelJob,
+  schedulePostAcceptanceReminders
+} from '../../queues/jobAutoCancel.js';
 
 export async function rejectJob(req, res) {
   const session = await mongoose.startSession();
@@ -123,13 +123,13 @@ export async function rejectJob(req, res) {
         message: `Order #${job.orderId} from customer "${customerUser?.name}" was rejected by provider "${providerUser?.name}". Reason: ${reason}. Refunded: ${payment.totalAmount} BDT to customer. Platform fee reversed: ${payment.platformFee} BDT.`,
         type: 'admin',
         referenceId: job._id,
-        metadata: { 
-          orderId: job.orderId, 
+        metadata: {
+          orderId: job.orderId,
           customerId: job.customer,
           customerName: customerUser?.name,
           providerId: provider._id,
           providerName: providerUser?.name,
-          refundAmount: payment.totalAmount, 
+          refundAmount: payment.totalAmount,
           platformFee: payment.platformFee,
           reason: reason,
           jobId: job._id
@@ -400,8 +400,8 @@ export async function acceptJob(req, res) {
     await job.save({ session });
 
     await session.commitTransaction();
-await cancelAutoCancelJob(jobId);  // 8hr auto-cancel hatao
-await schedulePostAcceptanceReminders(jobId, job.schedule.date); 
+    await cancelAutoCancelJob(jobId);  // 8hr auto-cancel hatao
+    await schedulePostAcceptanceReminders(jobId, job.schedule.date);
     // Activity Log
     await createActivityLog({
       userId,
@@ -495,52 +495,52 @@ export async function startJob(req, res) {
     }
 
 
-     // ── Schedule check — 1 ghante ka rule ──────────────────
-  if (job.schedule?.date) {
-  // Current UTC timestamp
-  const now = Date.now();
+    // ── Schedule check — 1 ghante ka rule ──────────────────
+    if (job.schedule?.date) {
+      // Current UTC timestamp
+      const now = Date.now();
 
-  // Scheduled UTC timestamp
-  const scheduledTime = new Date(job.schedule.date).getTime();
+      // Scheduled UTC timestamp
+      const scheduledTime = new Date(job.schedule.date).getTime();
 
-  // Difference in minutes
-  const diffMinutes = (scheduledTime - now) / (1000 * 60);
+      // Difference in minutes
+      const diffMinutes = (scheduledTime - now) / (1000 * 60);
 
-  // Debugging
-  console.log("==================================");
-  console.log("NOW UTC:", new Date(now).toISOString());
-  console.log(
-    "SCHEDULE UTC:",
-    new Date(scheduledTime).toISOString()
-  );
-  console.log("DIFF MINUTES:", diffMinutes);
-  console.log("==================================");
+      // Debugging
+      console.log("==================================");
+      console.log("NOW UTC:", new Date(now).toISOString());
+      console.log(
+        "SCHEDULE UTC:",
+        new Date(scheduledTime).toISOString()
+      );
+      console.log("DIFF MINUTES:", diffMinutes);
+      console.log("==================================");
 
-  // User can only start within 1 hour before schedule
-  if (diffMinutes > 60) {
-    const hoursLeft = Math.floor(diffMinutes / 60);
-    const minsLeft = Math.floor(diffMinutes % 60);
+      // User can only start within 1 hour before schedule
+      if (diffMinutes > 60) {
+        const hoursLeft = Math.floor(diffMinutes / 60);
+        const minsLeft = Math.floor(diffMinutes % 60);
 
-    throw new ApiError(
-      400,
-      `Job cannot be started. You can start it 1 hour before the scheduled time. There are still ${hoursLeft}h ${minsLeft}m remaining.`
-    );
-  }
+        throw new ApiError(
+          400,
+          `Job cannot be started. You can start it 1 hour before the scheduled time. There are still ${hoursLeft}h ${minsLeft}m remaining.`
+        );
+      }
 
-  // Allow start up to 2 hours after scheduled time
-  const twoHoursAfter = scheduledTime + 2 * 60 * 60 * 1000;
+      // Allow start up to 2 hours after scheduled time
+      const twoHoursAfter = scheduledTime + 2 * 60 * 60 * 1000;
 
-  if (now > twoHoursAfter) {
-    throw new ApiError(
-      400,
-      "Scheduled time expired more than 2 hours ago."
-    );
-  }
+      if (now > twoHoursAfter) {
+        throw new ApiError(
+          400,
+          "Scheduled time expired more than 2 hours ago."
+        );
+      }
 
-  console.log("JOB START ALLOWED");
-}
+      console.log("JOB START ALLOWED");
+    }
 
-await cancelScheduledJob(job._id);
+    await cancelScheduledJob(job._id);
 
 
     job.status = 'in_progress';
@@ -609,13 +609,13 @@ export async function markCompletedByProvider(req, res) {
       throw new ApiError(403, 'Not authorized to update this job');
     }
 
-if (job.status === 'completed_by_provider') {
-  throw new ApiError(400, 'Job already completed');
-}
+    if (job.status === 'completed_by_provider') {
+      throw new ApiError(400, 'Job already completed');
+    }
 
-if (job.status !== 'in_progress') {
-  throw new ApiError(400, `Job must be in progress. Current: ${job.status}`);
-}
+    if (job.status !== 'in_progress') {
+      throw new ApiError(400, `Job must be in progress. Current: ${job.status}`);
+    }
     job.status = 'completed_by_provider';
     job.completedByProviderAt = new Date();
     await job.save({ session });
