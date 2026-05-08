@@ -230,11 +230,13 @@ const worker = new Worker(
     // JOB REMINDERS (2 hours, 1 hour, 30 mins, 5 mins before start time)
     // ════════════════════════════════════════════════════════════════════════
     const reminderMap = {
-      'job-reminder-2hours': { time: '2 hours', label: 'Job starting in 2 hours' },
-      'job-reminder-1hour': { time: '1 hour', label: 'Job starting in 1 hour' },
-      'job-reminder-30min': { time: '30 minutes', label: 'Job starting in 30 minutes' },
-      'job-reminder-5min-final': { time: '5 minutes', label: 'Job starting in 5 minutes. Please be ready or it will be cancelled' },
-    };
+  'job-reminder-2hours':     { time: '2 hours',    label: 'Job starting in 2 hours' },
+  'job-reminder-1hour':      { time: '1 hour',     label: 'Job starting in 1 hour' },
+  'job-reminder-30min':      { time: '30 minutes', label: 'Job starting in 30 minutes' },
+  'job-reminder-15min':      { time: '15 minutes', label: 'Job starting in 15 minutes' }, 
+  'job-reminder-10min':      { time: '10 minutes', label: 'Job starting in 10 minutes' },
+  'job-reminder-5min-final': { time: '5 minutes',  label: 'Job starting in 5 minutes' },
+};
 
     if (reminderMap[jobType]) {
       const reminderInfo = reminderMap[jobType];

@@ -8,13 +8,13 @@ const jobScheduleQueue = new Queue('job-schedule', {
 export async function scheduleJobNotification(jobId, scheduleDateTime) {
   try {
     const now = Date.now();
-    
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(` SCHEDULING NOTIFICATIONS FOR JOB: ${jobId}`);
     console.log(`${'='.repeat(60)}`);
     console.log(`Input scheduleDateTime:`, scheduleDateTime);
     console.log(`Input type:`, typeof scheduleDateTime);
-    
+
     // Handle both string and Date formats
     let scheduleTime;
     if (scheduleDateTime instanceof Date) {
@@ -34,10 +34,10 @@ export async function scheduleJobNotification(jobId, scheduleDateTime) {
 
     const scheduleDate = new Date(scheduleTime);
     const currentDate = new Date(now);
-    
-    console.log(`   Scheduled time: ${scheduleDate.toISOString()}`);
-    console.log(`   Current time:   ${currentDate.toISOString()}`);
-    console.log(`   Delay:          ${(scheduleTime - now) / 1000 / 60} minutes`);
+
+    console.log(`Scheduled time: ${scheduleDate.toISOString()}`);
+    console.log(`Current time:   ${currentDate.toISOString()}`);
+    console.log(`Delay:          ${(scheduleTime - now) / 1000 / 60} minutes`);
 
     if (scheduleTime < now) {
       const pastMinutes = (now - scheduleTime) / 1000 / 60;
@@ -49,6 +49,7 @@ export async function scheduleJobNotification(jobId, scheduleDateTime) {
       { key: '30min', offset: 30 },
       { key: '15min', offset: 15 },
       { key: '10min', offset: 10 },
+      { key: '5min', offset: 5 },  
     ];
 
     for (const r of reminders) {

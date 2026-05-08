@@ -40,12 +40,14 @@ const worker = new Worker(
       }
 
       const messages = {
-        '5min': '⏰ Job starting in 5 minutes',
-        '4min': '⏰ Job starting in 4 minutes',
-        '3min': '⏰ Job starting in 3 minutes',
-        '2min': ' Job starting in 2 minutes',
-        '1min': ' Job starting in 1 minute',
-      };
+  '60min': ' Job starting in 60 minutes',
+  '30min': ' Job starting in 30 minutes',
+  '15min': ' Job starting in 15 minutes',
+  '10min': ' Job starting in 10 minutes',
+  '5min':  ' Job starting in 5 minutes',
+  '3min':  ' Job starting in 3 minutes',
+  '1min':  ' Job starting in 1 minute',
+};
 
       const msg = messages[reminderType];
       if (!msg) {

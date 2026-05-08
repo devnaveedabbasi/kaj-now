@@ -12,7 +12,10 @@ import { processSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import { cancelScheduledJob } from '../../queues/jobScheduleQueue.js';
-
+import { 
+  cancelAutoCancelJob, 
+  schedulePostAcceptanceReminders 
+} from '../../queues/jobAutoCancel.queue.js'; // 
 
 export async function rejectJob(req, res) {
   const session = await mongoose.startSession();
@@ -397,7 +400,8 @@ export async function acceptJob(req, res) {
     await job.save({ session });
 
     await session.commitTransaction();
-
+await cancelAutoCancelJob(jobId);  // 8hr auto-cancel hatao
+await schedulePostAcceptanceReminders(jobId, job.schedule.date); 
     // Activity Log
     await createActivityLog({
       userId,
