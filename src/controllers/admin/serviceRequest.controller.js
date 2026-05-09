@@ -124,7 +124,6 @@ export const getServiceRequestById = async (req, res) => {
 export const approveServiceRequest = async (req, res) => {
     const { id } = req.params;
     const userId = req.user._id;
-console.log(`Approving service request with ID: ${id} by admin user ID: ${userId}`);
     const request = await ServiceRequest.findById(id);
     if (!request) {
         throw new ApiError(404, 'Service request not found');
@@ -215,7 +214,6 @@ export const rejectServiceRequest = async (req, res) => {
 
 // Get all approved/active service assignments (from approved requests)
 export const getAllServiceAssignments = async (req, res) => {
-    console.log('Fetching all service assignments with query params:', req.query);
 
     const [assignments, totalCount] = await Promise.all([
         ServiceRequest.find({ status: 'approved' })

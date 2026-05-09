@@ -10,7 +10,6 @@ const migrateApprovedServices = async () => {
         await mongoose.connect(process.env.MONGODB_URI);
         console.log('Connected.');
 
-        console.log('Fetching all approved service requests...');
         const approvedRequests = await ServiceRequest.find({ status: 'approved' }).lean();
         
         console.log(`Found ${approvedRequests.length} approved requests.`);
@@ -44,7 +43,6 @@ const migrateApprovedServices = async () => {
             );
         }
 
-        console.log('Migration completed successfully.');
         process.exit(0);
     } catch (error) {
         console.error('Migration failed:', error);

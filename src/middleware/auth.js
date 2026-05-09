@@ -60,7 +60,6 @@ const authMiddleware = async (req, res, next) => {
     //  YAHI PE PROVIDER KA KYC CHECK KAR DO 
     if (user.role === 'provider') {
       const provider = await Provider.findOne({ userId: user._id });
-      console.log('Provider profile:', provider);
       if (!provider) {
         return res.status(403).json({
           success: false,

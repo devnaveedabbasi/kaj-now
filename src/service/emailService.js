@@ -1,7 +1,6 @@
 import nodemailer from 'nodemailer';
 import config from '../config/index.js';
 
-console.log("Config Check:", config.email);
 
 const transporter = nodemailer.createTransport({
     host: config.email.host,

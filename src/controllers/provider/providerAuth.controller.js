@@ -651,7 +651,6 @@ export const updateProfile = async (req, res) => {
       }
       
       const otp = generateNumericOtp(4);
-      console.log('Generated OTP for email update:', otp); // Debug log
       user.pendingNewEmail = email.toLowerCase();
       user.emailUpdateOTP = otp;
       user.emailUpdateOtpExpiry = new Date(Date.now() + OTP_TTL_MS);

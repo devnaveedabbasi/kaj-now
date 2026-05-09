@@ -71,7 +71,6 @@ export const getAllCategories = async (req, res) => {
 
 export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
-    console.log('Fetching services for category ID:', categoryId);
     
     // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
@@ -141,7 +140,6 @@ export const requestService = async (req, res) => {
         const userId = req.user._id;
         let { serviceId } = req.body; // serviceId will be an array
         
-        console.log('Received service request with serviceId:', serviceId, 'from user:', userId);
         // Handle serviceId as array
         let finalServiceIds = [];
         
@@ -154,7 +152,6 @@ export const requestService = async (req, res) => {
             throw new ApiError(400, 'Service ID array is required');
         }
         
-        console.log('Requesting services with IDs:', finalServiceIds, 'by user:', userId);
         
         // Get provider
         const provider = await Provider.findOne({ userId });
@@ -174,8 +171,6 @@ export const requestService = async (req, res) => {
             const missingIds = finalServiceIds.filter(id => !foundIds.includes(id));
             throw new ApiError(404, `Services not found: ${missingIds.join(', ')}`);
         }
-        console.log('All requested services are valid:', services.map(s => s._id));
-        console.log(finalServiceIds,"service id array");
 
         if(provider.approvedServices && provider.approvedServices.length > 0){
             const alreadyApprovedIds = provider.approvedServices.map(id => id.toString());
@@ -202,7 +197,6 @@ export const requestService = async (req, res) => {
             
             // Only process new service IDs
             finalServiceIds = newServiceIds;
-            console.log('Processing only new service IDs:', finalServiceIds);
         }
         
         // Create multiple requests
@@ -305,7 +299,6 @@ export const getMyServices = async (req, res) => {
 export const getServiceById = async (req, res) => {
     try {
         const { serviceId } = req.params;
-console.log('Fetching service request with ID:', serviceId);
         if (!mongoose.Types.ObjectId.isValid(serviceId)) {
             throw new ApiError(400, 'Invalid service ID format');
         }

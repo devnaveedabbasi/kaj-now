@@ -148,7 +148,6 @@ export async function verifyEmail(req, res) {
   await user.save();
 
   const token = signToken(user._id, user.role);
-  console.log('Generated JWT token:', token); 
   user.token=token;
   await user.save();
   const fresh = await User.findById(user._id);
@@ -430,7 +429,6 @@ export async function me(req, res) {
 }
 export const updateMyLocation = async (req, res) => {
   const userId = req.user.id || req.user._id;
-  console.log('Updating location for user ID:', userId);
   const { latitude, longitude, locationName } = req.body;
 
   if (!latitude || !longitude) {
@@ -470,7 +468,6 @@ export const updateProfile = async (req, res) => {
       }
       
       const otp = generateNumericOtp(4);
-      console.log('Generated OTP for email update:', otp); // Debug log
       user.pendingNewEmail = email.toLowerCase();
       user.emailUpdateOTP = otp;
       user.emailUpdateOtpExpiry = new Date(Date.now() + OTP_TTL_MS);

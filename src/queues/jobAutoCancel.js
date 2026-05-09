@@ -16,12 +16,9 @@ const jobAutoCancelQueue = new Queue('job-auto-cancel', {
  */
 export async function scheduleAutoCancelJob(jobId) {
   try {
-// TODO: TESTING VALUES - Change back to 8 hours in production
 const eightHoursInMs = 8 * 60 * 60 * 1000;
 const oneHourInMs = 60 * 60 * 1000;
-// const eightHoursInMs = 5 * 60 * 1000;   // 5 minutes (was 8 hours)
-// const oneHourInMs = 1 * 60 * 1000;      // 1 minute  (was 1 hour)
-    
+
     console.log(`\n${'='.repeat(60)}`);
     console.log(`AUTO-CANCEL SCHEDULING FOR JOB: ${jobId}`);
     console.log(`   Provider must accept within 8 hours`);

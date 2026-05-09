@@ -22,7 +22,6 @@ export const sendPushNotification = async (token, { title, message, data = {} })
       data: safeData,
     });
 
-    console.log("FCM sent:", response);
     return response;
 
   } catch (error) {

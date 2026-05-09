@@ -111,7 +111,6 @@ export const getProviderEarningsChart = async (req, res) => {
 const wallet = await Wallet.findOne({ userId: provider._id, role: 'provider' })
   .populate('transactionHistory')
       .lean();
-console.log('Wallet with transactions:', wallet);
     // Date range
     const now = new Date();
     let startDate = new Date();
