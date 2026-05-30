@@ -14,8 +14,8 @@ router.get('/all-categories', asyncHandler(serviceController.getAllCategories));
 router.get('/search', asyncHandler(serviceController.quickSearch))
 router.get('/featured', asyncHandler(getFeaturedServiceRequests));
 
-// router.get('/recommended', asyncHandler(serviceController.getRecommendedServices));
-// router.get('/top-rated', asyncHandler(serviceController.getTopRatedServices));
+router.get('/recommended', asyncHandler(serviceController.getRecommendedServices));
+router.get('/top-rated', asyncHandler(serviceController.getTopRatedServices));
 router.get('/services-by-cat/:categoryId', asyncHandler(serviceController.getServicesByCategory));
 router.get('/', asyncHandler(serviceController.getAllApprovedServices));
 router.get('/:serviceId', asyncHandler(serviceController.getApprovedServiceById));
