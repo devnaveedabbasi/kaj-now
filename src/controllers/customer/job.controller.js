@@ -11,8 +11,6 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 import { processSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
-import { scheduleJobNotification } from '../../queues/jobScheduleQueue.js';
-import { scheduleAutoCancelJob, cancelAutoCancelJob, schedulePostAcceptanceReminders } from '../../queues/jobAutoCancel.js';
 
 
 async function generateOrderId() {
@@ -436,23 +434,6 @@ console.log(serviceId, providerId);
 
     await session.commitTransaction();
 
-    // 🔔 Schedule notifications
-    // schedule.date already has the complete datetime, use it directly!
-    if (job[0]?.schedule?.date) {
-      console.log(` Scheduling notifications for job ${job[0]._id}`);
-      console.log(`   Stored schedule.date: ${job[0].schedule.date}`);
-      console.log(`   Type: ${typeof job[0].schedule.date}`);
-      
-      await scheduleJobNotification(job[0]._id, job[0].schedule.date);
-    }
-
-    // ⏱️ Schedule auto-cancel if provider doesn't accept within 8 hours
-    try {
-      await scheduleAutoCancelJob(job[0]._id);
-    } catch (error) {
-      console.error('Warning: Could not schedule auto-cancel:', error.message);
-    }
-
     // Activity Log
     await createActivityLog({
       userId,
@@ -526,25 +507,9 @@ export async function acceptJob(req, res) {
       throw new ApiError(400, `Job status must be pending. Current: ${job.status}`);
     }
 
-    job.status = 'accepted';
-    job.acceptedAt = new Date();
     await job.save({ session });
 
     await session.commitTransaction();
-
-    // Cancel auto-cancel since provider has accepted
-    try {
-      await cancelAutoCancelJob(job._id);
-    } catch (error) {
-      console.error('Warning: Could not cancel auto-cancel:', error.message);
-    }
-
-    // Schedule post-acceptance reminders and job-start timeout
-    try {
-      await schedulePostAcceptanceReminders(job._id, job.schedule.date);
-    } catch (error) {
-      console.error('Warning: Could not schedule post-acceptance reminders:', error.message);
-    }
 
     // Notify customer
     await createNotification({

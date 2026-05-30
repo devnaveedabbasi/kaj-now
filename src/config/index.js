@@ -14,10 +14,6 @@ export default {
         secret: process.env.JWT_SECRET,
         expiresIn: '7d'
     },
-    redis: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: process.env.REDIS_PORT || 6379
-    },
 
     email: {
         host: process.env.EMAIL_HOST || 'smtp.gmail.com',

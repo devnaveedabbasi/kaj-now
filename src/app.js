@@ -7,8 +7,6 @@ import cors from "cors";
 import requestLogger from "./middleware/requestLogger.js";
 import { ApiError } from "./utils/errorHandler.js";
 import errorHandler from "./middleware/errorHandler.js";
-import './queues/jobScheduleWorker.js'
-import './queues/jobAutoCancelWorker.js'
 
 const app = express();
 const server = createServer(app);

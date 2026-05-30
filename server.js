@@ -4,8 +4,10 @@ dotenv.config();
 import os from 'os';
 import config from './src/config/index.js';
 import { server } from './src/app.js';
-import './src/queues/jobScheduleWorker.js'
-import './src/queues/jobAutoCancelWorker.js'
+import jobSchedulerService from './src/services/jobScheduler.service.js';
+
+// Initialize background jobs
+jobSchedulerService.init();
 
 server.listen(config.port, '0.0.0.0', () => {
   console.log(` Server running on port ${config.port}`);

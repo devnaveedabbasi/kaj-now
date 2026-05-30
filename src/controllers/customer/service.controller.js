@@ -6,6 +6,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import User from '../../models/User.model.js';
 import Provider from '../../models/provider/Provider.model.js';
+import { tryCatch } from 'bullmq';
 
 export const getAllCategories = async (req, res) => {
     try {
@@ -67,6 +68,62 @@ export const getAllCategories = async (req, res) => {
     }
 };
 
+
+
+// export const getServicesByCategory = async (req, res) => {
+//     try {
+//         const { categoryId } = req.params;
+
+//         if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+//             throw new ApiError(400, 'Invalid category ID format');
+//         }
+
+//         const category = await Category.findOne({
+//             _id: categoryId,
+//             isActive: true,
+//             isDeleted: false
+//         });
+
+
+//         const services = await Service.find({
+//             categoryId: categoryId,
+//             isActive: true,
+//             isDeleted: false
+//         }).select('name icon price description averageRating');
+
+
+//         const serviceResults = await ServiceRequest.aggregate([
+//             { $match: { categoryId: new mongoose.Types.ObjectId(categoryId), status: 'approved' } },
+//             {
+//                 $lookup: {
+//                     from: 'services',
+//                     localField: 'serviceId',
+//                     foreignField: '_id',
+//                     as: 'service'
+//                 }
+//             },
+//             { $unwind: '$service' }
+//         ]);
+
+
+//         res.status(200).json({
+//             success: true, category: {
+
+//             }, services: serviceResults.map(sr => ({
+//                 _id: sr.service._id,
+//                 name: sr.service.name,
+//                 icon: sr.service.icon,
+//                 price: sr.service.price,
+//                 description: sr.service.description,
+//                 averageRating: sr.service.averageRating
+//             }))
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// }
+
 // Get services by category from ServiceRequest only
 export const getServicesByCategory = async (req, res) => {
     try {
@@ -83,24 +140,23 @@ export const getServicesByCategory = async (req, res) => {
         });
 
         if (!category) {
-            throw new ApiError(404, 'Category is inactive or deleted.');
+            throw new ApiError(404, 'Category not found');
         }
 
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
-        const skip = (page - 1) * limit;
-
-        // Build aggregation pipeline for accurate counting and filtering
-        let pipeline = [
+        const services = await ServiceRequest.aggregate([
             {
                 $match: {
                     categoryId: new mongoose.Types.ObjectId(categoryId),
                     status: 'approved'
                 }
             },
-            // Unwind serviceId array
-            { $unwind: '$serviceId' },
-            // Lookup service
+
+            // serviceId array unwind
+            {
+                $unwind: '$serviceId'
+            },
+
+            // get service
             {
                 $lookup: {
                     from: 'services',
@@ -109,15 +165,19 @@ export const getServicesByCategory = async (req, res) => {
                     as: 'service'
                 }
             },
-            { $unwind: '$service' },
-            // Filter active and non-deleted services
+            {
+                $unwind: '$service'
+            },
+
+            // active services only
             {
                 $match: {
                     'service.isActive': true,
                     'service.isDeleted': false
                 }
             },
-            // Lookup provider
+
+            // get provider
             {
                 $lookup: {
                     from: 'providers',
@@ -126,8 +186,11 @@ export const getServicesByCategory = async (req, res) => {
                     as: 'provider'
                 }
             },
-            { $unwind: '$provider' },
-            // Lookup provider user
+            {
+                $unwind: '$provider'
+            },
+
+            // get provider user
             {
                 $lookup: {
                     from: 'users',
@@ -136,79 +199,102 @@ export const getServicesByCategory = async (req, res) => {
                     as: 'providerUser'
                 }
             },
-            { $unwind: '$providerUser' },
-            // Filter active providers only
+            {
+                $unwind: '$providerUser'
+            },
+
+            // active provider only
             {
                 $match: {
                     'providerUser.isActive': true,
                     'providerUser.status': 'approved'
                 }
             },
-            // Project final shape
+
+            // GROUP BY SERVICE
             {
-                $project: {
+                $group: {
                     _id: '$service._id',
-                    name: '$service.name',
-                    icon: '$service.icon',
-                    price: '$service.price',
-                    description: '$service.description',
-                    averageRating: '$service.averageRating',
-                    provider: {
-                        _id: '$provider._id',
-                        name: '$providerUser.name',
-                        email: '$providerUser.email',
-                        phone: '$providerUser.phone',
-                        profilePicture: '$providerUser.profilePicture',
-                        location: '$provider.location'
+
+                    name: {
+                        $first: '$service.name'
                     },
-                    requestId: '$_id',
-                    requestedAt: '$requestedAt'
+
+                    icon: {
+                        $first: '$service.icon'
+                    },
+
+                    price: {
+                        $first: '$service.price'
+                    },
+
+                    description: {
+                        $first: '$service.description'
+                    },
+
+                    averageRating: {
+                        $first: '$service.averageRating'
+                    },
+
+                    providers: {
+                        $push: {
+                            _id: '$provider._id',
+                            name: '$providerUser.name',
+                            email: '$providerUser.email',
+                            phone: '$providerUser.phone',
+                            profilePicture: '$providerUser.profilePicture',
+                            location: '$provider.location'
+                        }
+                    }
+                }
+            },
+
+            {
+                $sort: {
+                    createdAt: -1
                 }
             }
-        ];
-
-        // Get count
-        const countPipeline = [...pipeline, { $count: 'total' }];
-        const totalCountResult = await ServiceRequest.aggregate(countPipeline);
-        const totalCount = totalCountResult[0]?.total || 0;
-
-        // Add pagination to main pipeline
-        pipeline.push(
-            { $skip: skip },
-            { $limit: limit }
-        );
-
-        const services = await ServiceRequest.aggregate(pipeline);
-
-        const totalPages = Math.ceil(totalCount / limit);
+        ]);
 
         res.status(200).json(
-            new ApiResponse(200, {
-                category: {
-                    _id: category._id,
-                    name: category.name,
-                    icon: category.icon,
-                    description: category.description
+            new ApiResponse(
+                200,
+                {
+                    category: {
+                        _id: category._id,
+                        name: category.name,
+                        icon: category.icon,
+                        description: category.description
+                    },
+
+                    services
                 },
-                services,
-                pagination: {
-                    currentPage: page,
-                    totalPages,
-                    totalItems: totalCount,
-                    itemsPerPage: limit,
-                    hasNextPage: page < totalPages,
-                    hasPrevPage: page > 1
-                }
-            }, 'Services retrieved successfully')
+                'Services fetched successfully'
+            )
         );
 
     } catch (error) {
         console.error(error);
+
         if (error instanceof ApiError) {
-            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        } else {
-            res.status(500).json(new ApiResponse(500, null, error.message));
+            return res
+                .status(error.statusCode)
+                .json(
+                    new ApiResponse(
+                        error.statusCode,
+                        null,
+                        error.message
+                    )
+                );
         }
+
+        res.status(500).json(
+            new ApiResponse(
+                500,
+                null,
+                error.message
+            )
+        );
     }
 };
 

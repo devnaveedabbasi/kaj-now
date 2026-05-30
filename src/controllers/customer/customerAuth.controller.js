@@ -54,7 +54,7 @@ export async function register(req, res) {
   }
 
   if (!phoneRegex.test(phone)) {
-    throw new ApiError(400, 'Only Bangladesh phone numbers is allowed.');
+    throw new ApiError(400, 'Only Bangladesh phone number is allowed.');
   }
 
   const existing = await User.findOne({
@@ -227,7 +227,7 @@ export async function login(req, res) {
 
   const match = await bcrypt.compare(password, user.password);
   if (!match) {
-    throw new ApiError(401, 'Invalid email or password.');
+    throw new ApiError(400, 'Invalid email or password.');
   }
 
   const token = signToken(user._id, user.role);

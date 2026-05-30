@@ -1,6 +1,6 @@
 ﻿import bcrypt from 'bcryptjs';
 import User from '../../models/User.model.js';
-import Provider  from '../../models/provider/Provider.model.js';
+import Provider from '../../models/provider/Provider.model.js';
 import { sendOtpEmail } from '../../service/emailService.js';
 import { signToken } from '../../utils/jwt.js';
 import { generateNumericOtp } from '../../utils/otp.js';
@@ -63,7 +63,7 @@ export async function register(req, res) {
   }
 
   if (!phoneRegex.test(phone)) {
-    throw new ApiError(400, 'Only Bangladesh phone numbers is allowed.');
+    throw new ApiError(400, 'Only Bangladesh phone number is allowed.');
   }
 
   const existing = await User.findOne({
@@ -159,8 +159,8 @@ export async function verifyEmail(req, res) {
   await user.save();
 
   const token = signToken(user._id, user.role);
-  user.token=token;
-await user.save();
+  user.token = token;
+  await user.save();
   const fresh = await User.findById(user._id);
   res.status(200).json(
     new ApiResponse(
@@ -245,8 +245,8 @@ export async function login(req, res) {
 
 
   const token = signToken(user._id, user.role);
-  user.token=token;
-await user.save();
+  user.token = token;
+  await user.save();
   res.status(200).json(
     new ApiResponse(
       200,
@@ -608,7 +608,7 @@ export async function me(req, res) {
         email: user.email,
         role: user.role,
         phone: user.phone,
-        profilePicture:user.profilePicture,
+        profilePicture: user.profilePicture,
         status: user.status,
         providerId: provider._id,
         dob: provider.dob,
@@ -642,26 +642,26 @@ export const updateProfile = async (req, res) => {
 
     // Update User fields (jo bhi aayega update karo)
     if (name) user.name = name.trim();
-    
+
     // Handle email update with OTP
     if (email && email !== user.email) {
       const existingUser = await User.findOne({ email, _id: { $ne: userId } });
       if (existingUser) {
         throw new ApiError(409, 'Email already registered');
       }
-      
+
       const otp = generateNumericOtp(4);
       user.pendingNewEmail = email.toLowerCase();
       user.emailUpdateOTP = otp;
       user.emailUpdateOtpExpiry = new Date(Date.now() + OTP_TTL_MS);
       user.emailUpdateOtpAttempts = 0;
       user.isEmailChanged = false;
-      
+
       await sendOtpEmail(email, otp);
-      
+
       await user.save();
       await provider.save();
-      
+
       return res.status(202).json(
         new ApiResponse(202, {
           message: `OTP sent to ${email}. Please verify to complete email update.`,
@@ -706,9 +706,10 @@ export const updateProfile = async (req, res) => {
       if (isNaN(parsedDob.getTime())) {
         throw new ApiError(400, 'Invalid date');
       }
-      if(dob==!provider.dob){
-      provider.dob = parsedDob;
-    }}
+      if (dob == !provider.dob) {
+        provider.dob = parsedDob;
+      }
+    }
 
     if (permanentAddress) {
       provider.permanentAddress = permanentAddress;
@@ -746,7 +747,7 @@ export const updateProfile = async (req, res) => {
     if (req.files?.profilePicture) {
       deleteFile(req.files.profilePicture[0].path);
     }
-    
+
     if (error instanceof ApiError) {
       return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
     }
