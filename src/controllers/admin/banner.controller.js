@@ -6,11 +6,11 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 const MAX_BANNERS = 5;
 
 export const createBanner = asyncHandler(async (req, res) => {
-  const { title, description } = req.body;
+    // const { title, description } = req.body;
 
-  if (!title?.trim()) {
-    throw new ApiError(400, "Banner title is required");
-  }
+  // if (!title?.trim()) {
+  //   throw new ApiError(400, "Banner title is required");
+  // }
 
   if (!req.file) {
     throw new ApiError(400, "Banner image is required");
@@ -26,8 +26,8 @@ export const createBanner = asyncHandler(async (req, res) => {
   }
 
   const banner = await Banner.create({
-    title: title.trim(),
-    description: description?.trim() || "",
+      // title: title.trim(),
+      // description: description?.trim() || "",
     image: `/uploads/banners/${req.file.filename}`,
     isActive: true,
     isDeleted: false,
@@ -76,7 +76,7 @@ export const getActiveBanners = asyncHandler(async (req, res) => {
 
 export const updateBanner = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { title, description } = req.body;
+  // const { title, description } = req.body;
 
   const banner = await Banner.findById(id);
 
@@ -84,10 +84,10 @@ export const updateBanner = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Banner not found");
   }
 
-  if (title) banner.title = title.trim();
-  if (description !== undefined) {
-    banner.description = description.trim();
-  }
+  // if (title) banner.title = title.trim();
+  // if (description !== undefined) {
+  //   banner.description = description.trim();
+  // }
 
   // IMAGE UPDATE
   if (req.file) {

@@ -1071,6 +1071,7 @@ export const getTopRatedServices = async (req, res) => {
 
 
 
+
 export const quickSearch = async (req, res) => {
     try {
         const { q } = req.query;
