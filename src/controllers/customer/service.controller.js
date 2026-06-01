@@ -68,6 +68,280 @@ export const getAllCategories = async (req, res) => {
     }
 };
 
+export const getServiceById = async (req, res) => {
+    try {
+        const { serviceId } = req.params;
+        
+        if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+            return res.status(400).json(new ApiResponse(400, null, 'Invalid service ID format'));
+        }
+
+        const service = await Service.findOne({
+            _id: serviceId,
+            isActive: true,
+            isDeleted: false
+        });
+
+        if (!service) {
+            return res.status(404).json(new ApiResponse(404, null, 'Service not found'));
+        }
+
+        const category = await Category.findOne({
+            _id: service.categoryId,
+            isActive: true,
+            isDeleted: false
+        });
+
+        // Get all related services from same category
+        // Method 1: Try getting from ServiceRequest (approved services)
+        let relatedServices = await ServiceRequest.aggregate([
+            {
+                $match: {
+                    categoryId: new mongoose.Types.ObjectId(service.categoryId),
+                    status: 'approved'
+                }
+            },
+
+            // serviceId array unwind
+            {
+                $unwind: '$serviceId'
+            },
+
+            // get service
+            {
+                $lookup: {
+                    from: 'services',
+                    localField: 'serviceId',
+                    foreignField: '_id',
+                    as: 'service'
+                }
+            },
+            {
+                $unwind: '$service'
+            },
+
+            // active services only
+            {
+                $match: {
+                    'service.isActive': true,
+                    'service.isDeleted': false,
+                    'serviceId': { $ne: new mongoose.Types.ObjectId(serviceId) } // Exclude current service
+                }
+            },
+
+            // get provider
+            {
+                $lookup: {
+                    from: 'providers',
+                    localField: 'providerId',
+                    foreignField: '_id',
+                    as: 'provider'
+                }
+            },
+            {
+                $unwind: '$provider'
+            },
+
+            // get provider user
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'provider.userId',
+                    foreignField: '_id',
+                    as: 'providerUser'
+                }
+            },
+            {
+                $unwind: '$providerUser'
+            },
+
+            // active provider only
+            {
+                $match: {
+                    'providerUser.isActive': true,
+                    'providerUser.status': 'approved'
+                }
+            },
+
+            // GROUP BY SERVICE to get unique services
+            {
+                $group: {
+                    _id: '$service._id',
+
+                    name: {
+                        $first: '$service.name'
+                    },
+
+                    icon: {
+                        $first: '$service.icon'
+                    },
+
+                    price: {
+                        $first: '$service.price'
+                    },
+
+                    description: {
+                        $first: '$service.description'
+                    },
+
+                    averageRating: {
+                        $first: '$service.averageRating'
+                    },
+
+                    providers: {
+                        $push: {
+                            _id: '$provider._id',
+                            name: '$providerUser.name',
+                            email: '$providerUser.email',
+                            phone: '$providerUser.phone',
+                            profilePicture: '$providerUser.profilePicture',
+                            location: '$provider.location'
+                        }
+                    }
+                }
+            },
+
+            {
+                $sort: {
+                    averageRating: -1,
+                    _id: -1
+                }
+            }
+        ]);
+
+        // Method 2: Fallback - if no results with active provider, get services with all providers
+        if (relatedServices.length === 0) {
+            relatedServices = await ServiceRequest.aggregate([
+                {
+                    $match: {
+                        categoryId: new mongoose.Types.ObjectId(service.categoryId),
+                        status: 'approved'
+                    }
+                },
+
+                // serviceId array unwind
+                {
+                    $unwind: '$serviceId'
+                },
+
+                // get service
+                {
+                    $lookup: {
+                        from: 'services',
+                        localField: 'serviceId',
+                        foreignField: '_id',
+                        as: 'service'
+                    }
+                },
+                {
+                    $unwind: '$service'
+                },
+
+                // active services only
+                {
+                    $match: {
+                        'service.isActive': true,
+                        'service.isDeleted': false,
+                        'serviceId': { $ne: new mongoose.Types.ObjectId(serviceId) }
+                    }
+                },
+
+                // get provider
+                {
+                    $lookup: {
+                        from: 'providers',
+                        localField: 'providerId',
+                        foreignField: '_id',
+                        as: 'provider'
+                    }
+                },
+                {
+                    $unwind: '$provider'
+                },
+
+                // get provider user (without active filter in fallback)
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'provider.userId',
+                        foreignField: '_id',
+                        as: 'providerUser'
+                    }
+                },
+                {
+                    $unwind: '$providerUser'
+                },
+
+                // GROUP BY SERVICE to get unique services
+                {
+                    $group: {
+                        _id: '$service._id',
+
+                        name: {
+                            $first: '$service.name'
+                        },
+
+                        icon: {
+                            $first: '$service.icon'
+                        },
+
+                        price: {
+                            $first: '$service.price'
+                        },
+
+                        description: {
+                            $first: '$service.description'
+                        },
+
+                        averageRating: {
+                            $first: '$service.averageRating'
+                        },
+
+                        providers: {
+                            $push: {
+                                _id: '$provider._id',
+                                name: '$providerUser.name',
+                                email: '$providerUser.email',
+                                phone: '$providerUser.phone',
+                                profilePicture: '$providerUser.profilePicture',
+                                location: '$provider.location'
+                            }
+                        }
+                    }
+                },
+
+                {
+                    $sort: {
+                        averageRating: -1,
+                        _id: -1
+                    }
+                }
+            ]);
+        }
+
+        console.log('Related services found:', relatedServices);
+        console.log('Service found:', service);
+        res.status(200).json(
+            new ApiResponse(
+                200,
+                {
+                    ...service._doc,
+                    relatedServices,
+                    category: category ? {
+                        _id: category._id,
+                        name: category.name,
+                        icon: category.icon,
+                        description: category.description
+                    } : null
+                },
+                'Service details retrieved successfully'
+            )
+        );
+    } catch (error) {
+        console.error('Error getting service by ID:', error);
+        res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+};
 
 
 // export const getServicesByCategory = async (req, res) => {

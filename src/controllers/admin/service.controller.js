@@ -40,7 +40,7 @@ export const createService = async (req, res) => {
         const userId = req.user._id;
 
         const iconFile = req.files?.icon?.[0];
-
+        const serviceImageFile = req.files?.serviceImage?.[0];
         // Validation
         if (!name || !categoryId || !price) {
             cleanupFiles(req.files);
@@ -78,14 +78,20 @@ export const createService = async (req, res) => {
             throw new ApiError(400, 'Service icon is required');
         }
 
+        if(!serviceImageFile) {
+            cleanupFiles(req.files);
+            throw new ApiError(400, 'Service image is required');
+        }
+
         const iconPath = `/uploads/services/icons/${iconFile.filename}`;
-        
+        const serviceImagePath = `/uploads/services/images/${serviceImageFile.filename}`;
 
         const newServiceData = {
             userId,
             categoryId,
             name,
             icon: iconPath,
+            serviceImage: serviceImagePath,
             price: Number(price),
             description: description || ''
         };

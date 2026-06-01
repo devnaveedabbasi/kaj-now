@@ -8,6 +8,10 @@ const serviceSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
+    serviceImage: {
+        type: String,
+        required: true,
+    },
     price: { type: Number, required: true },
     description: { type: String, trim: true, minlength: 10, maxlength: 1000 },
     isActive: { type: Boolean, default: true },

@@ -18,6 +18,6 @@ router.get('/recommended', asyncHandler(serviceController.getRecommendedServices
 router.get('/top-rated', asyncHandler(serviceController.getTopRatedServices));
 router.get('/services-by-cat/:categoryId', asyncHandler(serviceController.getServicesByCategory));
 router.get('/', asyncHandler(serviceController.getAllApprovedServices));
-router.get('/:serviceId', asyncHandler(serviceController.getApprovedServiceById));
+router.get('/:serviceId', asyncHandler(serviceController.getServiceById));
 
 export default router;
