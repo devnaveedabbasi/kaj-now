@@ -1,7 +1,7 @@
 import Notification from '../models/notification.model.js';
 import { ApiResponse } from '../utils/apiResponse.js';
 import { ApiError } from '../utils/errorHandler.js';
-import {  getUnreadCount } from '../utils/notification.js';
+import {  getUnreadCount, sendPushNotification } from '../utils/notification.js';
 import admin from '../config/firebase/firebase.js';
 import User from '../models/User.model.js';
 export const getUserNotifications = async (req, res) => {
@@ -80,11 +80,26 @@ export const saveFcmToken = async (req, res) => {
       throw new ApiError(400, 'FCM token is required');
     }
 
-    const user = await User.findById(userId);
-    if (!user) throw new ApiError(404, 'User not found');
+    const trimmedToken = fcmToken.trim();
 
-    user.fcmToken = fcmToken.trim(); // simple string save
-    await user.save();
+    // 1. Remove this token from any other users who might have registered it
+    await User.updateMany(
+      { fcmTokens: trimmedToken },
+      { $pull: { fcmTokens: trimmedToken } }
+    );
+
+    // 2. Add the token to the current user's fcmTokens array avoiding duplicates
+    //    Also update the legacy fcmToken field for backward compatibility
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { 
+        $addToSet: { fcmTokens: trimmedToken },
+        $set: { fcmToken: trimmedToken }
+      },
+      { new: true }
+    );
+
+    if (!user) throw new ApiError(404, 'User not found');
 
     return res.status(200).json(
       new ApiResponse(200, null, 'FCM token saved')
@@ -119,19 +134,28 @@ export const sendTestNotification = async (req, res) => {
       type: 'system'
     });
 
-  if (user?.fcmToken) {
-  await admin.messaging().send({
-    token: user.fcmToken,
-    notification: {
-      title,
-      body: message
-    },
-    data: {
-      type: 'test',
-      notificationId: notification._id.toString()
+    let tokens = [];
+    if (user?.fcmTokens && Array.isArray(user.fcmTokens)) {
+      tokens = [...user.fcmTokens];
     }
-  });
-}
+    if (user?.fcmToken && typeof user.fcmToken === 'string' && user.fcmToken.trim() !== '') {
+      const singleToken = user.fcmToken.trim();
+      if (!tokens.includes(singleToken)) {
+        tokens.push(singleToken);
+        await User.updateOne({ _id: userId }, { $addToSet: { fcmTokens: singleToken } });
+      }
+    }
+
+    if (tokens.length > 0) {
+      await sendPushNotification(tokens, {
+        title,
+        message,
+        data: {
+          type: 'test',
+          notificationId: notification._id.toString()
+        }
+      }, userId);
+    }
 
     return res.status(200).json({
       success: true,
