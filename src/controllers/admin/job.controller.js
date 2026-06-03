@@ -7,7 +7,7 @@ import User from '../../models/User.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/notification.js';
-
+import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 const ACTIVE_JOB_STATUSES = ['pending', 'accepted', 'in_progress'];
 
 function parseTimeToMinutes(timeValue) {
@@ -129,7 +129,13 @@ export const getAllJobs = async (req, res) => {
         const { status, search, providerId, customerId } = req.query;
 
         let query = {};
-        if (status) query.status = status;
+        if (status) {
+            if (status === 'confirmed_by_user') {
+                query.status = { $in: ['confirmed_by_user', 'confirmed_by_admin'] };
+            } else {
+                query.status = status;
+            }
+        }
         if (providerId) query.provider = providerId;
         if (customerId) query.customer = customerId;
 
@@ -173,60 +179,112 @@ export const getAllJobs = async (req, res) => {
 };
 
 export const getAvailableProviders = async (req, res) => {
-    const { jobId } = req.params;
+    try {
+        const { jobId } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(jobId)) {
-        throw new ApiError(400, 'Invalid job ID format');
-    }
+        if (!mongoose.Types.ObjectId.isValid(jobId)) {
+            throw new ApiError(400, 'Invalid job ID format');
+        }
 
-    const job = await Job.findById(jobId)
-        .populate('service', 'name price icon description')
-        .populate('customer', 'name email phoneNumber')
-        .lean();
+        // Step 1: Job fetch karo with service
+        const job = await Job.findById(jobId)
+            .populate('service', 'name price icon description')
+            .populate('customer', 'name email phoneNumber')
+            .lean();
 
-    if (!job) {
-        throw new ApiError(404, 'Job not found');
-    }
+        if (!job) throw new ApiError(404, 'Job not found');
+        if (!job.service) throw new ApiError(400, 'Job service is missing');
 
-    if (!job.service) {
-        throw new ApiError(400, 'Job service is missing');
-    }
+        const serviceId = job.service._id;
 
-    const providers = await Provider.find({
-        approvedServices: job.service._id || job.service,
-        kycStatus: 'approved',
-    })
-        .populate({
-            path: 'userId',
-            select: 'name email phoneNumber profilePicture status',
-            match: { status: 'approved' },
+        // Step 2: Providers jo is service ko approvedServices mein rakhte hain
+        // aur jinki KYC approved hai aur user account bhi approved hai
+        const providers = await Provider.find({
+            approvedServices: serviceId,
+            kycStatus: 'approved',
         })
-        .lean();
+            .populate({
+                path: 'userId',
+                select: 'name email phoneNumber profilePicture status',
+                match: { status: 'approved' }, // sirf active users
+            })
+            .lean();
 
-    const availability = await getProviderAvailability(providers.filter((provider) => provider.userId), job);
-    const availableProviders = availability
-        .filter((item) => item.isAvailable && item.matchesService)
-        .map(({ provider }) => ({
-            _id: provider._id,
-            userId: provider.userId,
-            location: provider.location || null,
-            gender: provider.gender || '',
-            kycStatus: provider.kycStatus,
-            approvedServices: provider.approvedServices || [],
-        }));
+        // Step 3: userId null wale filter out karo (jo match nahi hue)
+        const activeProviders = providers.filter((p) => p.userId !== null);
 
-    return res.status(200).json(
-        new ApiResponse(200, {
-            job: {
-                _id: job._id,
-                orderId: job.orderId,
-                status: job.status,
-                schedule: job.schedule,
-                service: job.service,
-            },
-            availableProviders,
-        }, 'Available providers retrieved successfully')
-    );
+        // Step 4: ServiceRequest model se double check — provider ka service
+        // request approved hona chahiye is serviceId ke liye
+        const approvedRequests = await ServiceRequest.find({
+            providerId: { $in: activeProviders.map((p) => p._id) },
+            serviceId: serviceId,
+            status: 'approved',
+        }).lean();
+
+        const approvedProviderIds = new Set(
+            approvedRequests.map((r) => r.providerId.toString())
+        );
+
+        const verifiedProviders = activeProviders.filter((p) =>
+            approvedProviderIds.has(p._id.toString())
+        );
+
+        // Step 5: Schedule conflict check — koi active job nahi honi chahiye
+        // same time slot mein
+        const scheduleDate = job.schedule?.date;
+        const scheduleTime = job.schedule?.time;
+
+        if (!scheduleDate || !scheduleTime) {
+            throw new ApiError(400, 'Job schedule is missing');
+        }
+
+        const availabilityResults = await Promise.all(
+            verifiedProviders.map(async (provider) => {
+                const busy = await hasProviderConflict(
+                    provider._id,
+                    scheduleDate,
+                    scheduleTime,
+                    null,       // session nahi chahiye yahan
+                    job._id     // current job exclude karo
+                );
+                return { provider, isAvailable: !busy };
+            })
+        );
+
+        const availableProviders = availabilityResults
+            .filter((item) => item.isAvailable)
+            .map(({ provider }) => ({
+                _id: provider._id,
+                userId: provider.userId,
+                location: provider.location || null,
+                gender: provider.gender || '',
+                kycStatus: provider.kycStatus,
+                approvedServices: provider.approvedServices || [],
+            }));
+
+        return res.status(200).json(
+            new ApiResponse(200, {
+                job: {
+                    _id: job._id,
+                    orderId: job.orderId,
+                    status: job.status,
+                    schedule: job.schedule,
+                    service: job.service,
+                },
+                availableProviders,
+                total: availableProviders.length,
+            }, 'Available providers retrieved successfully')
+        );
+
+    } catch (error) {
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode).json(
+                new ApiResponse(error.statusCode, null, error.message)
+            );
+        }
+        console.error('Error getting available providers:', error);
+        return res.status(500).json(new ApiResponse(500, null, error.message));
+    }
 };
 
 // Get job details by ID
@@ -298,6 +356,170 @@ export const updateJobStatus = async (req, res) => {
     }
 };
 
+export const markJobAsCompleted = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const { jobId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(jobId)) {
+            throw new ApiError(400, 'Invalid job ID format');
+        }
+
+   const job = await Job.findOneAndUpdate(
+    {
+        _id: jobId,
+        status: {
+            $nin: [
+                'confirmed_by_admin',
+                'confirmed_by_user',
+                'cancelled'
+            ]
+        },
+    },
+    {
+        $set: {
+            status: 'confirmed_by_admin',
+            confirmedByAdminAt: new Date(),
+            paymentStatus: 'released_to_provider',
+        },
+    },
+    { new: true, session }
+);
+
+        const blockedStatuses = [
+            'confirmed_by_admin',
+            'confirmed_by_user',
+            'cancelled'
+        ];
+
+        if (!job) {
+            const existingJob = await Job.findById(jobId);
+
+            if (!existingJob) {
+                throw new ApiError(404, 'Job not found');
+            }
+
+            if (blockedStatuses.includes(existingJob.status)) {
+                throw new ApiError(
+                    400,
+                    `Job cannot be completed. Current status: ${existingJob.status}`
+                );
+            }
+
+            throw new ApiError(
+                400,
+                `Job is not eligible for completion. Current status: ${existingJob.status}`
+            );
+        }
+
+        // primary STEP 2: Payment validation
+        const payment = await Payment.findOne({ jobId }).session(session);
+        if (!payment) throw new ApiError(404, 'Payment record not found');
+
+        if (payment.escrowStatus !== 'held_in_admin_wallet') {
+            throw new ApiError(400, 'Payment is not in escrow');
+        }
+
+        // primary STEP 3: Admin wallet
+        const adminUser = await User.findOne({ role: 'admin' }).session(session);
+        if (!adminUser) throw new ApiError(500, 'Admin not found');
+
+        const adminWallet = await Wallet.findOne({
+            userId: adminUser._id,
+            role: 'admin',
+        }).session(session);
+
+        if (!adminWallet) throw new ApiError(500, 'Admin wallet not found');
+
+        // primary FIXED: correct balance check
+        if (adminWallet.balance < payment.providerAmount) {
+            throw new ApiError(400, 'Insufficient admin balance');
+        }
+
+        // primary STEP 4: Provider wallet
+        let providerWallet = await Wallet.findOne({
+            userId: payment.providerId,
+            role: 'provider',
+        }).session(session);
+
+        if (!providerWallet) {
+            [providerWallet] = await Wallet.create(
+                [{
+                    userId: payment.providerId,
+                    role: 'provider',
+                    balance: 0,
+                    totalEarnings: 0,
+                    totalWithdrawn: 0,
+                    totalPlatformFees: 0,
+                    isActive: true,
+                }],
+                { session }
+            );
+        }
+
+        // primary STEP 5: Wallet transactions
+        adminWallet.balance -= payment.providerAmount;
+        adminWallet.totalHeld = (adminWallet.totalHeld || 0) - payment.totalAmount;
+        adminWallet.totalPlatformFees += payment.platformFee;
+        await adminWallet.save({ session });
+
+        providerWallet.balance += payment.providerAmount;
+        providerWallet.totalEarnings += payment.providerAmount;
+        providerWallet.totalPlatformFees += payment.platformFee;
+        providerWallet.transactionHistory.push(payment._id);
+        await providerWallet.save({ session });
+
+        // primary STEP 6: Update payment
+        payment.escrowStatus = 'released_to_provider';
+        payment.releasedAt = new Date();
+        await payment.save({ session });
+
+        // primary STEP 7: Provider stats
+        const provider = await Provider.findById(job.provider).session(session);
+        if (provider) {
+            await provider.incrementServiceOrderCount(job.service);
+        }
+
+        await session.commitTransaction();
+        session.endSession();
+
+        // Activity log and Notifications (non-blocking)
+        try {
+            await createNotification({
+                userId: payment.providerId,
+                title: 'Payment Released & Order Completed',
+                message: `Order #${job.orderId} confirmed by Admin. Amount credited.`,
+                type: 'payment',
+                referenceId: job._id,
+            });
+            await createNotification({
+                userId: job.customer,
+                title: 'Job Completed',
+                message: `Order #${job.orderId} confirmed and completed successfully.`,
+                type: 'job',
+                referenceId: job._id,
+            });
+        } catch (e) {
+            console.error('Notification failed:', e.message);
+        }
+
+        res.status(200).json(
+            new ApiResponse(200, job, 'Job marked as completed successfully, payment released to provider')
+        );
+    } catch (error) {
+        await session.abortTransaction();
+        session.endSession();
+        console.error('Error marking job as completed:', error);
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        } else {
+            res.status(500).json(new ApiResponse(500, null, error.message));
+        }
+    }
+};
+
 async function performJobCancellation(job, session) {
     if (job.status === 'cancelled') {
         return { transferAmount: 0 };
@@ -319,7 +541,7 @@ async function performJobCancellation(job, session) {
 
         const payment = await Payment.findOne({ jobId: job._id }).session(session);
         adminWallet = await ensureWallet(session, adminUser._id, 'admin');
-        
+
         // Ensure we handle provider as ObjectId or populated object
         const providerId = job.provider._id || job.provider;
         providerWallet = await ensureWallet(session, providerId, 'provider');
@@ -347,10 +569,10 @@ async function performJobCancellation(job, session) {
     job.cancelledAt = new Date();
     await job.save({ session });
 
-    return { 
-        transferAmount, 
-        adminBalance: adminWallet?.balance || 0, 
-        providerBalance: providerWallet?.balance || 0 
+    return {
+        transferAmount,
+        adminBalance: adminWallet?.balance || 0,
+        providerBalance: providerWallet?.balance || 0
     };
 }
 
@@ -519,14 +741,14 @@ export const assignProvider = async (req, res) => {
         if (provider.userId) {
             const assignedProviderUserId = getUserIdValue(provider.userId);
             if (assignedProviderUserId) {
-            await createNotification({
-                userId: assignedProviderUserId,
-                title: 'New Job Assigned',
-                message: `A new job ${job.orderId ? `#${job.orderId}` : ''} has been assigned to you.`,
-                type: 'job',
-                referenceId: job._id,
-                metadata: { action: 'job_assigned', orderId: job.orderId }
-            });
+                await createNotification({
+                    userId: assignedProviderUserId,
+                    title: 'New Job Assigned',
+                    message: `A new job ${job.orderId ? `#${job.orderId}` : ''} has been assigned to you.`,
+                    type: 'job',
+                    referenceId: job._id,
+                    metadata: { action: 'job_assigned', orderId: job.orderId }
+                });
             }
         }
 

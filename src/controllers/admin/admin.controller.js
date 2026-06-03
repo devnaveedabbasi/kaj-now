@@ -181,7 +181,7 @@ export const getUserById = async (req, res) => {
     jobStats.forEach(stat => {
       stats.total += stat.count;
       if (['pending', 'accepted', 'in_progress'].includes(stat._id)) stats.active += stat.count;
-      if (stat._id === 'confirmed_by_user') stats.completed += stat.count;
+      if (stat._id === 'confirmed_by_user' || stat._id === 'confirmed_by_admin') stats.completed += stat.count;
       if (stat._id === 'cancelled') stats.cancelled += stat.count;
     });
 

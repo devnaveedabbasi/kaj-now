@@ -193,7 +193,25 @@ export const getAllEligibleRequests = async (req, res) => {
                     as: 'userArr'
                 }
             },
-            { $unwind: { path: '$userArr', preserveNullAndEmptyArrays: false } }
+            { $unwind: { path: '$userArr', preserveNullAndEmptyArrays: false } },
+            // Check if popular
+            {
+                $lookup: {
+                    from: 'popularservices',
+                    localField: '_id',
+                    foreignField: 'serviceRequestId',
+                    as: 'popularCheck'
+                }
+            },
+            // Check if recommended
+            {
+                $lookup: {
+                    from: 'recommendedservices',
+                    localField: '_id',
+                    foreignField: 'serviceRequestId',
+                    as: 'recommendedCheck'
+                }
+            }
         ];
 
         // Optional search
@@ -215,6 +233,8 @@ export const getAllEligibleRequests = async (req, res) => {
                 _id: 1,
                 status: 1,
                 createdAt: 1,
+                isPopular: { $gt: [{ $size: '$popularCheck' }, 0] },
+                isRecommended: { $gt: [{ $size: '$recommendedCheck' }, 0] },
                 categoryId: {
                     _id: '$categoryArr._id',
                     name: '$categoryArr.name',

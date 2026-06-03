@@ -220,7 +220,7 @@ export async function getProviderJobs(req, res) {
     const totalOrders = await Job.countDocuments({ provider: provider._id });
     const completedOrders = await Job.countDocuments({
       provider: provider._id,
-      status: 'confirmed_by_user'
+      status: { $in: ['confirmed_by_user', 'confirmed_by_admin'] }
     });
     const pendingOrders = await Job.countDocuments({
       provider: provider._id,

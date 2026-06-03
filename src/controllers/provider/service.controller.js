@@ -445,7 +445,7 @@ export const deleteService = async (req, res) => {
     const blockingJob = await Job.findOne({
       provider: provider._id,
       service: serviceId,
-      status: { $ne: 'confirmed_by_user' } //  IMPORTANT
+      status: { $nin: ['confirmed_by_user', 'confirmed_by_admin', 'cancelled'] } //  IMPORTANT
     });
 
     if (blockingJob) {

@@ -44,7 +44,7 @@ export const getProviderDashboardStats = async (req, res) => {
             _id: null,
             totalJobsCompleted: {
               $sum: {
-                $cond: [{ $eq: ["$status", "confirmed_by_user"] }, 1, 0],
+                $cond: [{ $in: ["$status", ["confirmed_by_user", "confirmed_by_admin"]] }, 1, 0],
               },
             },
           },

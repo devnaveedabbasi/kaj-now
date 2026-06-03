@@ -25,5 +25,5 @@ router.use('/withdrawals', withdrawalsRoutes);
 router.use('/jobs', jobRoutes);
 router.use('/banners', bannerRoutes);
 router.use('/payment-tracking', paymentTrackingRoutes);
-router.use('/featured-requests', featuredServiceRoutes);
+router.use('/featured-services', featuredServiceRoutes);
 export default router;

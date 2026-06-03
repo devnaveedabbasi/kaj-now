@@ -72,7 +72,7 @@ export const getAdminWallet = async (req, res) => {
             weeklyEarnings
         ] = await Promise.all([
             Job.countDocuments(),
-            Job.countDocuments({ status: 'confirmed_by_user' }),
+            Job.countDocuments({ status: { $in: ['confirmed_by_user', 'confirmed_by_admin'] } }),
             Job.countDocuments({ status: 'pending' }),
             Payment.aggregate([
                 { $match: { paymentStatus: 'completed' } },

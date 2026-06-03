@@ -45,6 +45,7 @@ const jobSchema = new mongoose.Schema(
         'in_progress',
         'completed_by_provider',
         'confirmed_by_user',
+        'confirmed_by_admin',
         'disputed',
         'cancelled',
       ],
@@ -79,6 +80,7 @@ const jobSchema = new mongoose.Schema(
     startedAt: { type: Date, default: null },
     completedByProviderAt: { type: Date, default: null },
     confirmedByUserAt: { type: Date, default: null },
+    confirmedByAdminAt: { type: Date, default: null },
     disputedAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
 
