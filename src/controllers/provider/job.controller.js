@@ -183,6 +183,8 @@ export async function getProviderJobs(req, res) {
       status: job.status,
       paymentStatus: job.paymentStatus,
       amount: job.amount,
+      schedule: job.schedule,
+      paymentMethod: job.paymentMethod,
       service: {
         _id: job.service?._id,
         name: job.service?.name,

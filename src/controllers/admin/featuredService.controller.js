@@ -93,7 +93,9 @@ export const getFeaturedServiceRequests = async (req, res) => {
                                 _id: '$$s._id',
                                 name: '$$s.name',
                                 price: '$$s.price',
-                                icon: '$$s.icon'
+                                icon: '$$s.icon',
+                                averageRating: '$$s.averageRating',
+                                description: '$$s.description'
                             }
                         }
                     }

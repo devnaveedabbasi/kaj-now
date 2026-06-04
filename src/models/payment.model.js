@@ -20,7 +20,7 @@ const paymentSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    
+
     // ====== AMOUNT BREAKDOWN (10% platform fee, 90% for provider) ======
     servicePrice: {
       type: Number,
@@ -46,14 +46,14 @@ const paymentSchema = new mongoose.Schema(
       min: 0,
       description: 'Amount provider will receive (90% of servicePrice)'
     },
-    
+
     // ====== PAYMENT GATEWAY ======
     paymentGateway: {
       type: String,
-      enum: ['sslcommerz', 'manual', 'wallet'],
+      enum: ['sslcommerz', 'cod'],
       default: 'sslcommerz',
     },
-    
+
     // ====== PAYMENT STATUS (gateway payment confirmation) ======
     // pending → completed (when payment gateway confirms)
     paymentStatus: {
@@ -62,17 +62,33 @@ const paymentSchema = new mongoose.Schema(
       default: 'pending',
       index: true,
     },
-    
+
+    // payment method is cod 
+    paymentMethod: {
+      type: String,
+      enum: ['card', 'cod'],
+      default: 'card',
+    },
+
+
+    returnToAdmin: {
+      type: Number,
+      default: 0,
+    },
+
+
     // ====== ESCROW STATUS (payment flow in our system) ======
     // pending → held_in_admin_wallet → released_to_provider OR refunded_to_customer
     escrowStatus: {
       type: String,
-      enum: ['pending', 'held_in_admin_wallet', 'released_to_provider', 'refunded_to_customer'],
+      enum: ['pending', 'held_in_admin_wallet', 'released_to_provider', 'refunded_to_customer', 'cod_pending', 'cod_completed'],
       default: 'pending',
       index: true,
       description: 'Tracks where the payment is held/moved'
     },
-    
+
+
+
     // ====== SSL COMMERZ INTEGRATION ======
     sslCommerzReference: {
       type: String,
@@ -98,13 +114,13 @@ const paymentSchema = new mongoose.Schema(
       trim: true,
       description: 'Reason for refund (provider_rejected, dispute_resolution, etc.)'
     },
-    
+
     // ====== PAYMENT RELEASE TO PROVIDER ======
     releasedAt: {
       type: Date,
       description: 'When payment was released to provider wallet'
     },
-    
+
   },
   { timestamps: true }
 );

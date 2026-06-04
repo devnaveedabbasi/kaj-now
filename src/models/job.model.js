@@ -64,6 +64,11 @@ const jobSchema = new mongoose.Schema(
       ],
       default: 'pending',
     },
+    paymentMethod: {
+      type: String,
+      enum: ['card','cod'],
+      required: true,
+    },
      schedule: {
       date: {
         type: Date,

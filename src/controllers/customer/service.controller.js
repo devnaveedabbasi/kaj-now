@@ -6,8 +6,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import User from '../../models/User.model.js';
 import Provider from '../../models/provider/Provider.model.js';
-import { tryCatch } from 'bullmq';
-
+import Job from '../../models/Job.model.js';
 export const getAllCategories = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -71,17 +70,36 @@ export const getAllCategories = async (req, res) => {
 export const getServiceById = async (req, res) => {
     try {
         const { serviceId } = req.params;
-        
+
         if (!mongoose.Types.ObjectId.isValid(serviceId)) {
             return res.status(400).json(new ApiResponse(400, null, 'Invalid service ID format'));
         }
 
-        const service = await Service.findOne({
-            _id: serviceId,
-            isActive: true,
-            isDeleted: false
-        });
+        const service = await ServiceRequest.findOne({
+            serviceId: { $in: [serviceId] },
+            status: 'approved'
+        })
+            .populate({
+                path: 'serviceId',
+                match: { _id: new mongoose.Types.ObjectId(serviceId) },  // sirf wahi service jo maangi hai
+                select: 'name price icon averageRating description reviews'
+            })
+            .populate({
+                path: 'providerId',
+                select: 'userId location',
+                populate: {
+                    path: 'userId',
+                    select: 'name email phone profilePicture'
+                }
+            })
+            .lean();
 
+        const jobCount = await Job.countDocuments({
+            service: new mongoose.Types.ObjectId(serviceId),
+            status: { $in: ['confirmed_by_admin', 'confirmed_by_user'] }
+        }); console.log('Job count for service:', jobCount);
+
+        console.log('Service found:', service);
         if (!service) {
             return res.status(404).json(new ApiResponse(404, null, 'Service not found'));
         }
@@ -92,250 +110,59 @@ export const getServiceById = async (req, res) => {
             isDeleted: false
         });
 
-        // Get all related services from same category
-        // Method 1: Try getting from ServiceRequest (approved services)
-        let relatedServices = await ServiceRequest.aggregate([
-            {
-                $match: {
-                    categoryId: new mongoose.Types.ObjectId(service.categoryId),
-                    status: 'approved'
-                }
-            },
 
-            // serviceId array unwind
-            {
-                $unwind: '$serviceId'
-            },
-
-            // get service
-            {
-                $lookup: {
-                    from: 'services',
-                    localField: 'serviceId',
-                    foreignField: '_id',
-                    as: 'service'
-                }
-            },
-            {
-                $unwind: '$service'
-            },
-
-            // active services only
-            {
-                $match: {
-                    'service.isActive': true,
-                    'service.isDeleted': false,
-                    'serviceId': { $ne: new mongoose.Types.ObjectId(serviceId) } // Exclude current service
-                }
-            },
-
-            // get provider
-            {
-                $lookup: {
-                    from: 'providers',
-                    localField: 'providerId',
-                    foreignField: '_id',
-                    as: 'provider'
-                }
-            },
-            {
-                $unwind: '$provider'
-            },
-
-            // get provider user
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'provider.userId',
-                    foreignField: '_id',
-                    as: 'providerUser'
-                }
-            },
-            {
-                $unwind: '$providerUser'
-            },
-
-            // active provider only
-            {
-                $match: {
-                    'providerUser.isActive': true,
-                    'providerUser.status': 'approved'
-                }
-            },
-
-            // GROUP BY SERVICE to get unique services
-            {
-                $group: {
-                    _id: '$service._id',
-
-                    name: {
-                        $first: '$service.name'
-                    },
-
-                    icon: {
-                        $first: '$service.icon'
-                    },
-
-                    price: {
-                        $first: '$service.price'
-                    },
-
-                    description: {
-                        $first: '$service.description'
-                    },
-
-                    averageRating: {
-                        $first: '$service.averageRating'
-                    },
-
-                    providers: {
-                        $push: {
-                            _id: '$provider._id',
-                            name: '$providerUser.name',
-                            email: '$providerUser.email',
-                            phone: '$providerUser.phone',
-                            profilePicture: '$providerUser.profilePicture',
-                            location: '$provider.location'
-                        }
-                    }
-                }
-            },
-
-            {
-                $sort: {
-                    averageRating: -1,
-                    _id: -1
-                }
-            }
-        ]);
-
-        // Method 2: Fallback - if no results with active provider, get services with all providers
-        if (relatedServices.length === 0) {
-            relatedServices = await ServiceRequest.aggregate([
-                {
-                    $match: {
-                        categoryId: new mongoose.Types.ObjectId(service.categoryId),
-                        status: 'approved'
-                    }
-                },
-
-                // serviceId array unwind
-                {
-                    $unwind: '$serviceId'
-                },
-
-                // get service
-                {
-                    $lookup: {
-                        from: 'services',
-                        localField: 'serviceId',
-                        foreignField: '_id',
-                        as: 'service'
-                    }
-                },
-                {
-                    $unwind: '$service'
-                },
-
-                // active services only
-                {
-                    $match: {
-                        'service.isActive': true,
-                        'service.isDeleted': false,
-                        'serviceId': { $ne: new mongoose.Types.ObjectId(serviceId) }
-                    }
-                },
-
-                // get provider
-                {
-                    $lookup: {
-                        from: 'providers',
-                        localField: 'providerId',
-                        foreignField: '_id',
-                        as: 'provider'
-                    }
-                },
-                {
-                    $unwind: '$provider'
-                },
-
-                // get provider user (without active filter in fallback)
-                {
-                    $lookup: {
-                        from: 'users',
-                        localField: 'provider.userId',
-                        foreignField: '_id',
-                        as: 'providerUser'
-                    }
-                },
-                {
-                    $unwind: '$providerUser'
-                },
-
-                // GROUP BY SERVICE to get unique services
-                {
-                    $group: {
-                        _id: '$service._id',
-
-                        name: {
-                            $first: '$service.name'
-                        },
-
-                        icon: {
-                            $first: '$service.icon'
-                        },
-
-                        price: {
-                            $first: '$service.price'
-                        },
-
-                        description: {
-                            $first: '$service.description'
-                        },
-
-                        averageRating: {
-                            $first: '$service.averageRating'
-                        },
-
-                        providers: {
-                            $push: {
-                                _id: '$provider._id',
-                                name: '$providerUser.name',
-                                email: '$providerUser.email',
-                                phone: '$providerUser.phone',
-                                profilePicture: '$providerUser.profilePicture',
-                                location: '$provider.location'
-                            }
-                        }
-                    }
-                },
-
-                {
-                    $sort: {
-                        averageRating: -1,
-                        _id: -1
-                    }
-                }
-            ]);
-        }
-
+        const relatedServices = await ServiceRequest.find({
+  serviceId: serviceId,
+  status: 'approved',
+  _id: { $ne: service._id } // optional exclude current
+})
+.populate({
+  path: 'serviceId',
+  select: 'name price icon averageRating description'
+})
+.populate({
+  path: 'providerId',
+  select: 'userId location',
+  populate: {
+    path: 'userId',
+    select: 'name email phone profilePicture'
+  }
+})
+.lean();
         console.log('Related services found:', relatedServices);
         console.log('Service found:', service);
+        const targetService = service.serviceId.find(
+            s => s._id.toString() === serviceId
+        );
+
         res.status(200).json(
-            new ApiResponse(
-                200,
-                {
-                    ...service._doc,
-                    relatedServices,
-                    category: category ? {
-                        _id: category._id,
-                        name: category.name,
-                        icon: category.icon,
-                        description: category.description
-                    } : null
+            new ApiResponse(200, {
+                service: {
+                    _id: targetService._id,
+                    name: targetService.name,
+                    icon: targetService.icon,
+                    price: targetService.price,
+                    description: targetService.description,
+                    averageRating: targetService.averageRating,
+                    reviews: targetService.reviews || [],
+                    ordersCount: jobCount || 22,
+                    provider: {
+                        _id: service.providerId?._id,
+                        name: service.providerId?.userId?.name,
+                        email: service.providerId?.userId?.email,
+                        phone: service.providerId?.userId?.phone,
+                        profilePicture: service.providerId?.userId?.profilePicture,
+                        location: service.providerId?.location,
+                    }
                 },
-                'Service details retrieved successfully'
-            )
+                relatedServices,
+                category: category ? {
+                    _id: category._id,
+                    name: category.name,
+                    icon: category.icon,
+                    description: category.description
+                } : null
+            }, 'Service details retrieved successfully')
         );
     } catch (error) {
         console.error('Error getting service by ID:', error);

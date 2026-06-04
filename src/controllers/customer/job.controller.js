@@ -11,6 +11,7 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 import { processSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
+import { validateCardDetails } from '../../utils/validateCardDetails.js';
 
 
 async function generateOrderId() {
@@ -20,179 +21,7 @@ async function generateOrderId() {
 }
 
 
-// Card validation helper functions
-const validateCardNumber = (cardNumber) => {
-  // Remove spaces and dashes
-  const cleaned = cardNumber.replace(/[\s-]/g, '');
 
-  // Check length (13-19 digits)
-  if (cleaned.length < 13 || cleaned.length > 19) {
-    return { isValid: false, message: 'Card number must be between 13-19 digits' };
-  }
-
-  // Check if only numbers
-  if (!/^\d+$/.test(cleaned)) {
-    return { isValid: false, message: 'Card number must contain only digits' };
-  }
-
-  // Luhn algorithm (basic card validation)
-  let sum = 0;
-  let isEven = false;
-  for (let i = cleaned.length - 1; i >= 0; i--) {
-    let digit = parseInt(cleaned.charAt(i), 10);
-    if (isEven) {
-      digit *= 2;
-      if (digit > 9) digit -= 9;
-    }
-    sum += digit;
-    isEven = !isEven;
-  }
-
-  if (sum % 10 !== 0) {
-    return { isValid: false, message: 'Invalid card number' };
-  }
-
-  // Detect card type
-  let cardType = 'unknown';
-  if (/^4/.test(cleaned)) cardType = 'visa';
-  else if (/^5[1-5]/.test(cleaned)) cardType = 'mastercard';
-  else if (/^3[47]/.test(cleaned)) cardType = 'amex';
-  else if (/^6(?:011|5)/.test(cleaned)) cardType = 'discover';
-
-  return { isValid: true, cardType, cleaned };
-};
-
-const validateExpiryDate = (expiryDate) => {
-  // Check format MM/YY or MM/YYYY
-  const patterns = [
-    /^(0[1-9]|1[0-2])\/(\d{2})$/,
-    /^(0[1-9]|1[0-2])\/(\d{4})$/
-  ];
-
-  let match = null;
-  for (const pattern of patterns) {
-    match = expiryDate.match(pattern);
-    if (match) break;
-  }
-
-  if (!match) {
-    return { isValid: false, message: 'Invalid expiry date format. Use MM/YY or MM/YYYY' };
-  }
-
-  const month = parseInt(match[1], 10);
-  let year = parseInt(match[2], 10);
-
-  // Convert 2-digit year to 4-digit
-  if (year < 100) year += 2000;
-
-  // Check month range
-  if (month < 1 || month > 12) {
-    return { isValid: false, message: 'Invalid month' };
-  }
-
-  // Check if card is expired
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth() + 1;
-
-  if (year < currentYear || (year === currentYear && month < currentMonth)) {
-    return { isValid: false, message: 'Card has expired' };
-  }
-
-  // Check if expiry is too far (max 10 years)
-  if (year > currentYear + 10) {
-    return { isValid: false, message: 'Invalid expiry date' };
-  }
-
-  return { isValid: true, month, year };
-};
-
-const validateCVV = (cvv, cardType = null) => {
-  // Remove spaces
-  const cleaned = cvv.replace(/\s/g, '');
-
-  // Check if only numbers
-  if (!/^\d+$/.test(cleaned)) {
-    return { isValid: false, message: 'CVV must contain only digits' };
-  }
-
-  // Amex has 4-digit CVV, others have 3-digit
-  const expectedLength = cardType === 'amex' ? 4 : 3;
-
-  if (cleaned.length !== expectedLength) {
-    return {
-      isValid: false,
-      message: `CVV must be ${expectedLength} digits for ${cardType === 'amex' ? 'American Express' : 'this card type'}`
-    };
-  }
-
-  return { isValid: true, cvv: cleaned };
-};
-
-const validateCardHolderName = (name) => {
-  if (!name || name.trim().length < 3) {
-    return { isValid: false, message: 'Card holder name is required (min 3 characters)' };
-  }
-
-  if (name.trim().length > 50) {
-    return { isValid: false, message: 'Card holder name is too long' };
-  }
-
-  // Allow letters, spaces, dots, and hyphens
-  if (!/^[a-zA-Z\s\.\-]+$/.test(name.trim())) {
-    return { isValid: false, message: 'Invalid card holder name' };
-  }
-
-  return { isValid: true, name: name.trim() };
-};
-
-// Main validation function
-const validateCardDetails = (cardDetails) => {
-  const errors = [];
-
-  // Check if cardDetails exists
-  if (!cardDetails) {
-    throw new ApiError(400, 'Card details are required');
-  }
-
-  // Validate card number
-  const cardNumberValidation = validateCardNumber(cardDetails.cardNumber);
-  if (!cardNumberValidation.isValid) {
-    errors.push(cardNumberValidation.message);
-  }
-
-  // Validate expiry date
-  const expiryValidation = validateExpiryDate(cardDetails.expiryDate);
-  if (!expiryValidation.isValid) {
-    errors.push(expiryValidation.message);
-  }
-
-  // Validate CVV (with card type from card number validation)
-  const cvvValidation = validateCVV(cardDetails.cvv, cardNumberValidation.cardType);
-  if (!cvvValidation.isValid) {
-    errors.push(cvvValidation.message);
-  }
-
-  // Validate card holder name
-  const nameValidation = validateCardHolderName(cardDetails.cardHolderName);
-  if (!nameValidation.isValid) {
-    errors.push(nameValidation.message);
-  }
-
-  if (errors.length > 0) {
-    throw new ApiError(400, errors.join('. '));
-  }
-
-  return {
-    isValid: true,
-    cardNumber: cardNumberValidation.cleaned,
-    cardType: cardNumberValidation.cardType,
-    expiryMonth: expiryValidation.month,
-    expiryYear: expiryValidation.year,
-    cvv: cvvValidation.cvv,
-    cardHolderName: nameValidation.name
-  };
-};
 
 
 export async function bookJob(req, res) {
@@ -201,124 +30,174 @@ export async function bookJob(req, res) {
 
   try {
     const userId = req.user._id;
-    const { serviceId, providerId, cardDetails,schedule  } = req.body;
+    const { serviceId, providerId, cardDetails, schedule, paymentMethod } = req.body;
 
-    // ── Validation ──────────────────────────────────────────────────────────
-    if (!serviceId || !providerId) {
-      throw new ApiError(400, 'serviceId & providerId required');
+    // ── Basic Validation ────────────────────────────────────────────────────
+    if (!serviceId) {
+      throw new ApiError(400, 'serviceId required');
     }
 
-     if (!schedule?.date || !schedule?.time) {
+    if (!paymentMethod || !['card', 'cod'].includes(paymentMethod)) {
+      throw new ApiError(400, 'paymentMethod must be card or cod');
+    }
+
+    if (!schedule?.date || !schedule?.time) {
       throw new ApiError(400, 'Schedule date and time required');
     }
 
-
-
-    if (
-      !cardDetails?.cardNumber ||
-      !cardDetails?.expiryDate ||
-      !cardDetails?.cvv ||
-      !cardDetails?.cardHolderName
-    ) {
-      throw new ApiError(400, 'Complete card details required');
+    // ── Format Validation ───────────────────────────────────────────────────
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(schedule.date)) {
+      throw new ApiError(400, 'Invalid date format. Use YYYY-MM-DD (e.g. 2026-06-04)');
     }
 
-    const validatedCard = validateCardDetails(cardDetails);
-
-     // Schedule datetime combine karo
-   if (!schedule?.date || !schedule?.time) {
-      throw new ApiError(400, 'Schedule date and time required');
+    const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+    if (!timeRegex.test(schedule.time)) {
+      throw new ApiError(400, 'Invalid time format. Use HH:MM in 24-hour format (e.g. 16:10)');
     }
 
-    // Schedule datetime combine karo
-    const scheduleDateTime = new Date(`${schedule.date}T${schedule.time}`);
+    // ── Build scheduleDateTime ──────────────────────────────────────────────
+    const scheduleDateTime = new Date(`${schedule.date}T${schedule.time}:00`);
     if (isNaN(scheduleDateTime.getTime())) {
-      throw new ApiError(400, 'Invalid schedule date or time format');
+      throw new ApiError(400, 'Invalid schedule date or time');
     }
 
-    //  Validation: Only allow booking from tomorrow onwards
-  const today = new Date();
-today.setHours(0, 0, 0, 0);
-const scheduleDateOnly = new Date(scheduleDateTime);
-scheduleDateOnly.setHours(0, 0, 0, 0);
+    // ── Date/Time Rules ─────────────────────────────────────────────────────
+    const now = new Date();
+    const todayDateStr = now.toISOString().split('T')[0];
+    const isToday = schedule.date === todayDateStr;
 
-if (scheduleDateOnly <= today) {
-  throw new ApiError(400, 'Can only book services from tomorrow onwards. Today is no longer available.');
-}
+    const todayMidnight = new Date(todayDateStr + 'T00:00:00');
+    const scheduleMidnight = new Date(schedule.date + 'T00:00:00');
 
-if (scheduleDateTime <= new Date()) {
-  throw new ApiError(400, 'Schedule time must be in the future');
-}
+    if (scheduleMidnight < todayMidnight) {
+      throw new ApiError(400, 'Cannot book for a past date');
+    }
 
-//  Parse requested time — e.g. "05:00 PM" → 17:00
-const parseTimeToMinutes = (timeStr) => {
-  const [time, modifier] = timeStr.trim().split(' ');
-  let [hours, minutes] = time.split(':').map(Number);
-  if (modifier?.toUpperCase() === 'PM' && hours !== 12) hours += 12;
-  if (modifier?.toUpperCase() === 'AM' && hours === 12) hours = 0;
-  return hours * 60 + minutes;
-};
+    if (isToday) {
+      const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+      if (scheduleDateTime <= twoHoursLater) {
+        const hh = String(twoHoursLater.getHours()).padStart(2, '0');
+        const mm = String(twoHoursLater.getMinutes()).padStart(2, '0');
+        throw new ApiError(
+          400,
+          `For today's booking, time must be at least 2 hours from now. Earliest allowed: ${hh}:${mm}`
+        );
+      }
+    }
 
-const requestedMinutes = parseTimeToMinutes(schedule.time);
-
-//  Check: same date pr same provider ke uss time slot pr koi job hai?
-const samedayJobs = await Job.find({
-  provider: providerId,
-  status: { $in: ['pending', 'accepted', 'in_progress'] },
-  'schedule.date': {
-    $gte: scheduleDateOnly,
-    $lt: new Date(scheduleDateOnly.getTime() + 24 * 60 * 60 * 1000),
-  },
-}).select('schedule.time').session(session).lean();
-
-//  Validation: 1 ghante ka buffer (60 minutes pehlay ya baad)
-const conflictingJob = samedayJobs.find((job) => {
-  const existingMinutes = parseTimeToMinutes(job.schedule.time);
-  const diff = Math.abs(requestedMinutes - existingMinutes);
-  return diff < 60; // 60 minutes = 1 ghanta minimum gap
-});
-
-if (conflictingJob) {
-  const existingMinutes = parseTimeToMinutes(conflictingJob.schedule.time);
-  const suggestedTime1 = new Date(0, 0, 0, Math.floor(existingMinutes / 60), (existingMinutes % 60) + 60);
-  const suggestedTime2 = new Date(0, 0, 0, Math.floor(existingMinutes / 60), (existingMinutes % 60) - 60);
-  
-  throw new ApiError(409, 'Provider is busy at this time. Same day requires 1 hour gap between jobs. Please choose 1 hour before or after.');
-}
+    // ── Card validation ─────────────────────────────────────────────────────
+    if (paymentMethod === 'card') {
+      if (
+        !cardDetails?.cardNumber ||
+        !cardDetails?.expiryDate ||
+        !cardDetails?.cvv ||
+        !cardDetails?.cardHolderName
+      ) {
+        throw new ApiError(400, 'Complete card details required');
+      }
+      validateCardDetails(cardDetails);
+    }
 
     // ── Fetch documents ─────────────────────────────────────────────────────
     const user = await User.findById(userId).session(session);
     if (!user) throw new ApiError(404, 'User not found');
-console.log(serviceId, providerId);
+
     const service = await Service.findById(serviceId).session(session);
     if (!service || !service.isActive) throw new ApiError(404, 'Service not available');
 
-    //  CHECK: Category must be active
     const Category = mongoose.model('Category');
     const category = await Category.findById(service.categoryId).session(session);
     if (!category || !category.isActive) throw new ApiError(404, 'Service category is inactive');
 
-    const provider = await Provider.findById(providerId).session(session);
-    if (!provider) throw new ApiError(404, 'Provider not found');
-
+    // ── ServiceRequest se providerId lo ────────────────────────────────────
     const serviceRequest = await ServiceRequest.findOne({
-      serviceId,
-      providerId,
+      serviceId: serviceId,
+      providerId: providerId,
       status: 'approved',
     }).session(session);
 
-    if (!serviceRequest) throw new ApiError(400, 'Provider not approved for this service');
+    if (!serviceRequest) throw new ApiError(400, 'No approved provider found for this service');
 
-    // ── Duplicate check ─────────────────────────────────────────────────────
+    // ── Provider serviceRequest se nikalo ───────────────────────────────────
+    const provider = await Provider.findById(providerId).session(session);
+    if (!provider) throw new ApiError(404, 'Provider not found');
+
+
+    // ── parseTimeToMinutes helper ───────────────────────────────────────────
+    const parseTimeToMinutes = (timeStr) => {
+      const [hours, minutes] = timeStr.split(':').map(Number);
+      return hours * 60 + minutes;
+    };
+
+    const requestedMinutes = parseTimeToMinutes(schedule.time);
+
+    // ── Conflict check — same provider same day 1hr gap ─────────────────────
+    const scheduleDateOnly = new Date(schedule.date + 'T00:00:00');
+
+    const samedayJobs = await Job.find({
+      provider: providerId,
+      status: { $in: ['pending', 'accepted', 'in_progress'] },
+      'schedule.date': {
+        $gte: scheduleDateOnly,
+        $lt: new Date(scheduleDateOnly.getTime() + 24 * 60 * 60 * 1000),
+      },
+    })
+      .select('schedule.time')
+      .session(session)
+      .lean();
+
+    const conflictingJob = samedayJobs.find((job) => {
+      const existingMinutes = parseTimeToMinutes(job.schedule.time);
+      return Math.abs(requestedMinutes - existingMinutes) < 60;
+    });
+
+    if (conflictingJob) {
+      throw new ApiError(
+        409,
+        'Provider is busy at this time. Minimum 1 hour gap required between bookings. Please choose a different time.'
+      );
+    }
+
+    // ── Duplicate booking check ─────────────────────────────────────────────
     const existingJob = await Job.findOne({
       customer: userId,
       service: serviceId,
       provider: providerId,
       status: { $in: ['pending', 'accepted', 'in_progress'] },
+      'schedule.date': scheduleDateTime, // same date
+      'schedule.time': schedule.time,    // same time
     }).session(session);
 
-    if (existingJob) throw new ApiError(408, 'Already have an active booking for this service');
+    if (existingJob) throw new ApiError(408, 'Already have an active booking for this service at this time');
+    // ── Price calculation ke baad, COD limit check ──────────────────────────
+    if (paymentMethod === 'cod') {
+      const pendingDues = await Payment.aggregate([
+        {
+          $match: {
+            providerId: provider._id,
+            paymentMethod: 'cod',
+            escrowStatus: 'cod_pending',
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: '$returnToAdmin' }
+          }
+        }
+      ]);
 
+      const totalDues = pendingDues[0]?.total || 0;
+      const COD_LIMIT = parseFloat(process.env.COD_DUES_LIMIT || '2000');
+
+      if (totalDues >= COD_LIMIT) {
+        throw new ApiError(
+          400,
+          `Provider has pending dues of BDT ${totalDues}. Cannot accept new COD bookings until dues are cleared.`
+        );
+      }
+    }
     // ── Price calculation ───────────────────────────────────────────────────
     const servicePrice = service.price;
     const platformFeePercentage = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE || '10');
@@ -339,7 +218,8 @@ console.log(serviceId, providerId);
           amount: servicePrice,
           status: 'pending',
           paymentStatus: 'pending',
-           schedule: {                         
+          paymentMethod,
+          schedule: {
             date: scheduleDateTime,
             time: schedule.time,
           },
@@ -359,124 +239,165 @@ console.log(serviceId, providerId);
           platformFee,
           totalAmount: servicePrice,
           providerAmount,
-          paymentGateway: 'sslcommerz',
+          paymentMethod,
+          paymentGateway: paymentMethod === 'card' ? 'sslcommerz' : 'cod',
           paymentStatus: 'pending',
-          escrowStatus: 'pending',
+          escrowStatus: paymentMethod === 'cod' ? 'cod_pending' : 'pending',
+          returnToAdmin: paymentMethod === 'cod' ? platformFee : 0,
         },
       ],
       { session }
     );
 
-    // ── SSLCommerz payment ──────────────────────────────────────────────────
-    const paymentData = {
-      total_amount: servicePrice,
-      currency: 'BDT',
-      tran_id: `JOB_${job[0]._id}_${Date.now()}`,
-      success_url: `${process.env.BASE_URL}/api/payments/success`,
-      fail_url: `${process.env.BASE_URL}/api/payments/fail`,
-      cancel_url: `${process.env.BASE_URL}/api/payments/cancel`,
-      ipn_url: `${process.env.BASE_URL}/api/payments/ipn`,
-      cus_name: user.name,
-      cus_email: user.email,
-      cus_phone: user.phone,
-      cus_add1: user.location?.locationName || 'Dhaka',
-      shipping_method: 'NO',
-      product_name: service.name,
-      product_category: 'Service',
-      product_profile: 'general',
-    };
+    // ── Payment processing ──────────────────────────────────────────────────
+    if (paymentMethod === 'card') {
 
-    const sslResponse = await processSSLCommerzPayment(paymentData, cardDetails);
+      const paymentData = {
+        total_amount: servicePrice,
+        currency: 'BDT',
+        tran_id: `JOB_${job[0]._id}_${Date.now()}`,
+        success_url: `${process.env.BASE_URL}/api/payments/success`,
+        fail_url: `${process.env.BASE_URL}/api/payments/fail`,
+        cancel_url: `${process.env.BASE_URL}/api/payments/cancel`,
+        ipn_url: `${process.env.BASE_URL}/api/payments/ipn`,
+        cus_name: user.name,
+        cus_email: user.email,
+        cus_phone: user.phone,
+        cus_add1: user.location?.locationName || 'Dhaka',
+        shipping_method: 'NO',
+        product_name: service.name,
+        product_category: 'Service',
+        product_profile: 'general',
+      };
 
-    if (!sslResponse || sslResponse.status !== 'SUCCESS') {
-      throw new ApiError(400, 'Payment failed from gateway');
-    }
+      const sslResponse = await processSSLCommerzPayment(paymentData, cardDetails);
 
-    // ── Update payment & job after gateway success ──────────────────────────
-    payment[0].paymentStatus = 'completed';
-    payment[0].escrowStatus = 'held_in_admin_wallet';
-    payment[0].sslCommerzTransactionId = paymentData.tran_id;
-    payment[0].sslCommerzReference = sslResponse.sessionkey;
-    await payment[0].save({ session });
+      if (!sslResponse || sslResponse.status !== 'SUCCESS') {
+        throw new ApiError(400, 'Payment failed from gateway');
+      }
 
-    job[0].paymentStatus = 'held_in_escrow';
-    await job[0].save({ session });
+      payment[0].paymentStatus = 'completed';
+      payment[0].escrowStatus = 'held_in_admin_wallet';
+      payment[0].sslCommerzTransactionId = paymentData.tran_id;
+      payment[0].sslCommerzReference = sslResponse.sessionkey;
+      await payment[0].save({ session });
 
-    // ── Admin wallet (escrow) ───────────────────────────────────────────────
-    const adminUser = await User.findOne({ role: 'admin' }).session(session);
-    if (!adminUser) throw new ApiError(500, 'Admin not found');
+      job[0].paymentStatus = 'held_in_escrow';
+      await job[0].save({ session });
 
-    let adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
+      // ── Admin wallet escrow ─────────────────────────────────────────────
+      const adminUser = await User.findOne({ role: 'admin' }).session(session);
+      if (!adminUser) throw new ApiError(500, 'Admin not found');
 
-    if (!adminWallet) {
-      [adminWallet] = await Wallet.create(
-        [{
-          userId: adminUser._id,
-          role: 'admin',
-          balance: 0,
-          totalEarnings: 0,
-          totalPlatformFees: 0,
-          isActive: true
-        }],
-        { session }
-      );
-    }
+      let adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
 
-    // ONLY HOLD the amount, NOT add to earnings
-    adminWallet.balance += servicePrice; 
-    adminWallet.totalEarnings += platformFee; 
-    adminWallet.totalPlatformFees += platformFee;  // Held in escrow
-     // Held in escrow
-   // Held in escrow
-    adminWallet.totalHeld = (adminWallet.totalHeld || 0) + servicePrice;  // Track held amount
-    adminWallet.transactionHistory.push(payment[0]._id);
-    await adminWallet.save({ session });
+      if (!adminWallet) {
+        [adminWallet] = await Wallet.create(
+          [{
+            userId: adminUser._id,
+            role: 'admin',
+            balance: 0,
+            totalEarnings: 0,
+            totalPlatformFees: 0,
+            isActive: true,
+          }],
+          { session }
+        );
+      }
 
-    await session.commitTransaction();
+      adminWallet.balance += servicePrice;
+      adminWallet.totalEarnings += platformFee;
+      adminWallet.totalPlatformFees += platformFee;
+      adminWallet.totalHeld = (adminWallet.totalHeld || 0) + servicePrice;
+      adminWallet.transactionHistory.push(payment[0]._id);
+      await adminWallet.save({ session });
 
-    // Activity Log
-    await createActivityLog({
-      userId,
-      action: 'JOB_BOOKED',
-      entityType: 'Job',
-      entityId: job[0]._id,
-      details: { orderId, amount: servicePrice },
-      req
-    });
+      await session.commitTransaction();
 
-    // ── Notifications (outside transaction — non-critical) ──────────────────
-    // Notify customer
-    await createNotification({
-      userId: userId,
-      title: 'Booking Confirmed',
-      message: `Your booking for "${service.name}" (Order #${orderId}) has been placed successfully. Awaiting provider confirmation.`,
-      type: 'job',
-      referenceId: job[0]._id,
-      metadata: { orderId, jobId: job[0]._id },
-    });
+      await createActivityLog({
+        userId,
+        action: 'JOB_BOOKED',
+        entityType: 'Job',
+        entityId: job[0]._id,
+        details: { orderId, amount: servicePrice, paymentMethod: 'card' },
+        req,
+      });
 
-    // Notify provider's user account
-    const providerUser = await User.findById(provider.userId);
-    if (providerUser) {
       await createNotification({
-        userId: providerUser._id,
-        title: 'New Job Request',
-        message: `You have a new job request for "${service.name}" (Order #${orderId}). Please accept or reject.`,
+        userId,
+        title: 'Booking Confirmed',
+        message: `Your booking for "${service.name}" (Order #${orderId}) has been placed successfully. Awaiting provider confirmation.`,
         type: 'job',
         referenceId: job[0]._id,
         metadata: { orderId, jobId: job[0]._id },
       });
+
+      const providerUser = await User.findById(provider.userId);
+      if (providerUser) {
+        await createNotification({
+          userId: providerUser._id,
+          title: 'New Job Request',
+          message: `You have a new job request for "${service.name}" (Order #${orderId}). Please accept or reject.`,
+          type: 'job',
+          referenceId: job[0]._id,
+          metadata: { orderId, jobId: job[0]._id },
+        });
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'Job booked successfully.',
+        data: {
+          job: job[0],
+          payment: payment[0],
+          gatewayUrl: sslResponse.GatewayPageURL,
+        },
+      });
+
+    } else {
+      // ── COD flow ──────────────────────────────────────────────────────────
+      await session.commitTransaction();
+
+      await createActivityLog({
+        userId,
+        action: 'JOB_BOOKED',
+        entityType: 'Job',
+        entityId: job[0]._id,
+        details: { orderId, amount: servicePrice, paymentMethod: 'cod' },
+        req,
+      });
+
+      await createNotification({
+        userId,
+        title: 'Booking Confirmed (Cash on Delivery)',
+        message: `Your booking for "${service.name}" (Order #${orderId}) has been placed. You will pay BDT ${servicePrice} in cash to the provider.`,
+        type: 'job',
+        referenceId: job[0]._id,
+        metadata: { orderId, jobId: job[0]._id },
+      });
+
+      const providerUser = await User.findById(provider.userId);
+      if (providerUser) {
+        await createNotification({
+          userId: providerUser._id,
+          title: 'New Job Request (Cash on Delivery)',
+          message: `You have a new COD job request for "${service.name}" (Order #${orderId}). Customer will pay BDT ${servicePrice} in cash. Please accept or reject.`,
+          type: 'job',
+          referenceId: job[0]._id,
+          metadata: { orderId, jobId: job[0]._id },
+        });
+      }
+
+      return res.status(201).json({
+        success: true,
+        message: 'Job booked successfully. Payment will be collected in cash.',
+        data: {
+          job: job[0],
+          payment: payment[0],
+        },
+      });
     }
 
-    return res.status(201).json({
-      success: true,
-      message: 'Job booked successfully.',
-      data: {
-        job: job[0],
-        payment: payment[0],
-        gatewayUrl: sslResponse.GatewayPageURL,
-      },
-    });
   } catch (error) {
     await session.abortTransaction();
     return res.status(error.statusCode || 500).json({ success: false, message: error.message });
@@ -544,29 +465,28 @@ export async function confirmCompletionByCustomer(req, res) {
 
     session.startTransaction();
 
-const existingJob = await Job.findById(jobId);
-if (!existingJob) {
-  throw new ApiError(404, 'Job not found');
-}
+    const existingJob = await Job.findById(jobId);
+    if (!existingJob) {
+      throw new ApiError(404, 'Job not found');
+    }
 
-if (existingJob.customer.toString() !== customerId.toString()) {
-  throw new ApiError(403, 'Not authorized');
-}
+    if (existingJob.customer.toString() !== customerId.toString()) {
+      throw new ApiError(403, 'Not authorized');
+    }
 
-//  IMPORTANT: idempotent guard
-if (existingJob.status === 'confirmed_by_user') {
-  return res.status(200).json({
-    success: true,
-    message: 'Job already confirmed',
-  });
-}
+    if (existingJob.status === 'confirmed_by_user') {
+      return res.status(200).json({
+        success: true,
+        message: 'Job already confirmed',
+      });
+    }
 
-    // primary STEP 1: Atomic job update (prevents race condition)
+    // ── STEP 1: Atomic job update ───────────────────────────────────────────
     const job = await Job.findOneAndUpdate(
       {
         _id: jobId,
         customer: customerId,
-        status: 'completed_by_provider', // only allow this state
+        status: 'completed_by_provider',
       },
       {
         $set: {
@@ -578,19 +498,15 @@ if (existingJob.status === 'confirmed_by_user') {
       { new: true, session }
     ).populate('service', 'name');
 
-    // 🧠 Handle edge cases
     if (!job) {
       const existingJob = await Job.findById(jobId);
 
-      if (!existingJob) {
-        throw new ApiError(404, 'Job not found');
-      }
+      if (!existingJob) throw new ApiError(404, 'Job not found');
 
       if (existingJob.customer.toString() !== customerId.toString()) {
         throw new ApiError(403, 'Not authorized');
       }
 
-      // primary Idempotent response
       if (existingJob.status === 'confirmed_by_user') {
         return res.status(200).json({
           success: true,
@@ -604,15 +520,94 @@ if (existingJob.status === 'confirmed_by_user') {
       );
     }
 
-    // primary STEP 2: Payment validation
+    // ── STEP 2: Payment fetch ───────────────────────────────────────────────
     const payment = await Payment.findOne({ jobId }).session(session);
     if (!payment) throw new ApiError(404, 'Payment record not found');
 
+    // ── COD FLOW ────────────────────────────────────────────────────────────
+    if (payment.paymentMethod === 'cod') {
+
+      if (payment.escrowStatus !== 'cod_pending') {
+        throw new ApiError(400, 'COD payment is not pending');
+      }
+
+      payment.escrowStatus = 'cod_completed';
+      payment.paymentStatus = 'completed';
+      payment.releasedAt = new Date();
+      await payment.save({ session });
+
+      // Provider stats
+      const provider = await Provider.findById(job.provider).session(session);
+      if (provider) {
+        await provider.incrementServiceOrderCount(job.service);
+      }
+
+      await session.commitTransaction();
+
+      // Activity log
+      try {
+        await createActivityLog({
+          userId: customerId,
+          action: 'JOB_CONFIRMED',
+          entityType: 'Job',
+          entityId: job._id,
+          details: {
+            orderId: job.orderId,
+            amount: payment.providerAmount,
+            paymentMethod: 'cod',
+          },
+          req,
+        });
+      } catch (e) {
+        console.error('Activity log failed:', e.message);
+      }
+
+      // Notifications
+      try {
+        if (provider) {
+          await createNotification({
+            userId: provider.userId,
+            title: 'Job Completed (COD)',
+            message: `Order #${job.orderId} confirmed by customer. Collect BDT ${payment.providerAmount} in cash and pay BDT ${payment.returnToAdmin} platform fee to admin.`,
+            type: 'payment',
+            referenceId: job._id,
+          });
+        }
+
+        await createNotification({
+          userId: customerId,
+          title: 'Job Completed',
+          message: `Order #${job.orderId} completed successfully.`,
+          type: 'job',
+          referenceId: job._id,
+        });
+      } catch (e) {
+        console.error('Notification failed:', e.message);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Job confirmed. Provider will collect cash payment.',
+        data: {
+          job,
+          payment: {
+            totalAmount: payment.totalAmount,
+            platformFee: payment.platformFee,
+            providerAmount: payment.providerAmount,
+            returnToAdmin: payment.returnToAdmin,
+            paymentMethod: 'cod',
+            status: 'cod_completed',
+          },
+        },
+      });
+    }
+
+    // ── CARD FLOW ───────────────────────────────────────────────────────────
     if (payment.escrowStatus !== 'held_in_admin_wallet') {
       throw new ApiError(400, 'Payment is not in escrow');
     }
 
-    // primary STEP 3: Admin wallet
+    // STEP 3: Admin wallet
     const adminUser = await User.findOne({ role: 'admin' }).session(session);
     if (!adminUser) throw new ApiError(500, 'Admin not found');
 
@@ -623,12 +618,11 @@ if (existingJob.status === 'confirmed_by_user') {
 
     if (!adminWallet) throw new ApiError(500, 'Admin wallet not found');
 
-    // primary FIXED: correct balance check
     if (adminWallet.balance < payment.providerAmount) {
       throw new ApiError(400, 'Insufficient admin balance');
     }
 
-    // primary STEP 4: Provider wallet
+    // STEP 4: Provider wallet
     let providerWallet = await Wallet.findOne({
       userId: payment.providerId,
       role: 'provider',
@@ -651,7 +645,7 @@ if (existingJob.status === 'confirmed_by_user') {
       );
     }
 
-    // primary STEP 5: Wallet transactions
+    // STEP 5: Wallet transactions
     adminWallet.balance -= payment.providerAmount;
     adminWallet.totalHeld = (adminWallet.totalHeld || 0) - payment.totalAmount;
     adminWallet.totalPlatformFees += payment.platformFee;
@@ -663,12 +657,12 @@ if (existingJob.status === 'confirmed_by_user') {
     providerWallet.transactionHistory.push(payment._id);
     await providerWallet.save({ session });
 
-    // primary STEP 6: Update payment
+    // STEP 6: Update payment
     payment.escrowStatus = 'released_to_provider';
     payment.releasedAt = new Date();
     await payment.save({ session });
 
-    // primary STEP 7: Provider stats
+    // STEP 7: Provider stats
     const provider = await Provider.findById(job.provider).session(session);
     if (provider) {
       await provider.incrementServiceOrderCount(job.service);
@@ -676,7 +670,7 @@ if (existingJob.status === 'confirmed_by_user') {
 
     await session.commitTransaction();
 
-    // primary STEP 8: Activity Log (non-blocking)
+    // STEP 8: Activity log
     try {
       await createActivityLog({
         userId: customerId,
@@ -686,6 +680,7 @@ if (existingJob.status === 'confirmed_by_user') {
         details: {
           orderId: job.orderId,
           amount: payment.providerAmount,
+          paymentMethod: 'card',
         },
         req,
       });
@@ -693,13 +688,13 @@ if (existingJob.status === 'confirmed_by_user') {
       console.error('Activity log failed:', e.message);
     }
 
-    // primary STEP 9: Notifications (non-blocking)
+    // STEP 9: Notifications
     try {
       if (provider) {
         await createNotification({
           userId: provider.userId,
           title: 'Payment Released & Order Completed',
-          message: `Order #${job.orderId} confirmed. Amount credited.`,
+          message: `Order #${job.orderId} confirmed. BDT ${payment.providerAmount} has been credited to your wallet.`,
           type: 'payment',
           referenceId: job._id,
         });
@@ -725,21 +720,20 @@ if (existingJob.status === 'confirmed_by_user') {
           totalAmount: payment.totalAmount,
           platformFee: payment.platformFee,
           providerAmount: payment.providerAmount,
+          paymentMethod: 'card',
           status: 'released_to_provider',
         },
         providerStats: provider
           ? {
-              totalOrdersCompleted: provider.totalOrdersCompleted,
-              serviceOrdersCount: Object.fromEntries(
-                provider.serviceOrdersCount
-              ),
-            }
+            totalOrdersCompleted: provider.totalOrdersCompleted,
+            serviceOrdersCount: Object.fromEntries(provider.serviceOrdersCount),
+          }
           : null,
       },
     });
+
   } catch (error) {
     await session.abortTransaction();
-
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Internal server error',

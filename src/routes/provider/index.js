@@ -6,6 +6,7 @@ import jobRoutes from './job.routes.js';
 import walletRoutes from './wallet.route.js';
 import withdrawalRoutes from './withdrawal.routes.js';
 import statsRoute from './stats.routes.js';
+import paymentRoutes from './payment.routes.js';
 const router = Router();
 
 router.use('/auth', providerAuthRoute);
@@ -15,4 +16,5 @@ router.use('/job', jobRoutes);
 router.use('/wallet', walletRoutes);
 router.use('/withdrawal', withdrawalRoutes);
 router.use('/dashboard', statsRoute);
+router.use('/payment',paymentRoutes);
 export default router;
