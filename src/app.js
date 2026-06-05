@@ -15,6 +15,7 @@ const server = createServer(app);
 const allowedOrigins = [
   "https://kaj-now.vercel.app",
   "http://localhost:3000",
+  "http://localhost:5000",
   "http://103.132.96.120:3000",
   "http://192.168.1.46:3000",
 ];
@@ -23,12 +24,12 @@ const allowedOrigins = [
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (server-to-server, mobile apps, curl)
-    if (!origin) return callback(null, true);
-
-    // Allow all Vercel preview deployments too
+    if (!origin || origin === "null") {
+      return callback(null, true);
+    }    // Allow all Vercel preview deployments too
     if (
       allowedOrigins.includes(origin) ||
-      origin.endsWith(".vercel.app")       
+      origin.endsWith(".vercel.app")
     ) {
       return callback(null, true);
     }

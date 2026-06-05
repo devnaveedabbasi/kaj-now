@@ -21,41 +21,46 @@ const paymentSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ====== AMOUNT BREAKDOWN (10% platform fee, 90% for provider) ======
+    // ====== AMOUNT BREAKDOWN ======
     servicePrice: {
       type: Number,
       required: true,
       min: 0,
-      description: 'Base service price'
     },
     platformFee: {
       type: Number,
       required: true,
       min: 0,
-      description: 'Admin platform fee (10% of servicePrice)'
     },
     totalAmount: {
       type: Number,
       required: true,
       min: 0,
-      description: 'Total amount charged to customer (usually = servicePrice)'
     },
     providerAmount: {
       type: Number,
       default: 0,
       min: 0,
-      description: 'Amount provider will receive (90% of servicePrice)'
     },
 
     // ====== PAYMENT GATEWAY ======
+    // 'sslcommerz' covers both card and bKash (both go through SSLCommerz)
     paymentGateway: {
       type: String,
       enum: ['sslcommerz', 'cod'],
       default: 'sslcommerz',
     },
 
-    // ====== PAYMENT STATUS (gateway payment confirmation) ======
-    // pending → completed (when payment gateway confirms)
+    // ====== PAYMENT METHOD ======
+    // Added 'bkash' alongside existing 'card' and 'cod'
+    paymentMethod: {
+      type: String,
+      enum: ['card', 'cod', 'bkash', 'nagad', 'rocket'],
+      default: 'card',
+      index: true,
+    },
+
+    // ====== PAYMENT STATUS ======
     paymentStatus: {
       type: String,
       enum: ['pending', 'processing', 'completed', 'failed', 'refunded'],
@@ -63,33 +68,28 @@ const paymentSchema = new mongoose.Schema(
       index: true,
     },
 
-    // payment method is cod 
-    paymentMethod: {
-      type: String,
-      enum: ['card', 'cod'],
-      default: 'card',
-    },
-
-
     returnToAdmin: {
       type: Number,
       default: 0,
     },
 
-
-    // ====== ESCROW STATUS (payment flow in our system) ======
-    // pending → held_in_admin_wallet → released_to_provider OR refunded_to_customer
+    // ====== ESCROW STATUS ======
     escrowStatus: {
       type: String,
-      enum: ['pending', 'held_in_admin_wallet', 'released_to_provider', 'refunded_to_customer', 'cod_pending', 'cod_completed'],
+      enum: [
+        'pending',
+        'held_in_admin_wallet',
+        'released_to_provider',
+        'refunded_to_customer',
+        'cod_pending',
+        'cod_completed',
+      ],
       default: 'pending',
       index: true,
-      description: 'Tracks where the payment is held/moved'
     },
 
-
-
     // ====== SSL COMMERZ INTEGRATION ======
+    // Shared across card and bKash flows
     sslCommerzReference: {
       type: String,
       trim: true,
@@ -105,22 +105,26 @@ const paymentSchema = new mongoose.Schema(
       default: false,
     },
 
-    // ====== REFUND INFO ======
-    refundedAt: {
-      type: Date,
-    },
-    refundReason: {
+    // ====== BKASH-SPECIFIC FIELDS ======
+    bkashTransactionId: {
       type: String,
       trim: true,
-      description: 'Reason for refund (provider_rejected, dispute_resolution, etc.)'
+      sparse: true,
+      index: true,
+      description: 'bKash transaction ID returned from SSLCommerz callback',
     },
+    bkashNumber: {
+      type: String,
+      trim: true,
+      description: 'Masked bKash mobile number (e.g. 017XXXX1234)',
+    },
+
+    // ====== REFUND INFO ======
+    refundedAt: { type: Date },
+    refundReason: { type: String, trim: true },
 
     // ====== PAYMENT RELEASE TO PROVIDER ======
-    releasedAt: {
-      type: Date,
-      description: 'When payment was released to provider wallet'
-    },
-
+    releasedAt: { type: Date },
   },
   { timestamps: true }
 );

@@ -1043,7 +1043,7 @@ export const getTopRatedServices = async (req, res) => {
 
             { $unwind: "$service" },
 
-            // ✅ REMOVE DUPLICATE SERVICES
+            //  REMOVE DUPLICATE SERVICES
             {
                 $group: {
                     _id: "$service._id",

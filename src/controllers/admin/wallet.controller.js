@@ -212,7 +212,7 @@ console.log('Recent transactions:', recentTransactions);
             count: stat.count
         })).reverse();
 
-        // ✅ SYNC WALLET WITH ACTUAL DATA
+        //  SYNC WALLET WITH ACTUAL DATA
         // Update wallet totalEarnings to match actual platform fees earned
         if (adminWallet.totalEarnings !== adminNetEarning) {
             adminWallet.totalEarnings = adminNetEarning;

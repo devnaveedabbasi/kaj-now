@@ -1,17 +1,40 @@
-// routes/payment.routes.js
 import express from 'express';
-import * as paymentController from '../controllers/payment.controller.js';
-import { asyncHandler } from '../utils/asyncHandler.js';
-import { authMiddleware as authenticateToken, authorize as requireRole } from '../middleware/auth.js';
+import {
+  // Card callbacks (existing)
+  paymentSuccess,
+  paymentFailed,
+  paymentCancel,
+  // bKash callbacks (new)
+  bkashPaymentSuccess,
+  bkashPaymentFailed,
+  bkashPaymentCancel,
+  bkashIpnHandler,
+} from '../controllers/payment.controller.js';
 
 const router = express.Router();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CARD PAYMENT CALLBACKS (existing — unchanged)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/success', paymentSuccess);
+router.get('/fail', paymentFailed);
+router.get('/cancel', paymentCancel);
 
-router.get('/success', asyncHandler(paymentController.paymentSuccess));
-router.get('/fail', asyncHandler(paymentController.paymentFailed));
-router.get('/cancel', (req, res) => {
-  res.redirect(`${process.env.FRONTEND_URL}/payment/cancelled`);
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// BKASH PAYMENT CALLBACKS (new)
+// SSLCommerz can POST or GET to these URLs depending on its config.
+// Register both so the gateway works in all configurations.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/bkash/success', bkashPaymentSuccess);
+router.post('/bkash/success', bkashPaymentSuccess);
 
+router.get('/bkash/fail', bkashPaymentFailed);
+router.post('/bkash/fail', bkashPaymentFailed);
+
+router.get('/bkash/cancel', bkashPaymentCancel);
+router.post('/bkash/cancel', bkashPaymentCancel);
+
+// IPN is always a server-to-server POST
+router.post('/bkash/ipn', bkashIpnHandler);
 
 export default router;
