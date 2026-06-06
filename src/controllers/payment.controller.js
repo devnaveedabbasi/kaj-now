@@ -14,7 +14,8 @@ import { createNotification } from '../utils/notification.js';
 // For Postman/no-frontend testing: points to backend result routes
 // For production app: set FRONTEND_URL=kajnow:// (deep link) in .env
 // ─────────────────────────────────────────────────────────────────────────────
-const BASE = process.env.APP_BASE_URL || 'http://localhost:5000';
+const BASE = process.env.APP_BASE_URL;
+console.log(BASE, process.env.APP_BASE_URL, 'BASE_URL for SSLCommerz callbacks');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED HELPER — Create Job + Payment from a BookingIntent

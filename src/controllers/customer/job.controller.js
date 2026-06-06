@@ -273,8 +273,8 @@ export async function bookJob(req, res) {
     // SSLCommerz MUST communicate with the backend server, NOT the mobile app.
     // So we use BASE_URL (the backend's URL) for success_url, fail_url, etc.
     // The backend will process the callback and THEN redirect to APP_BASE_URL.
-    const BASE_URL = process.env.BASE_URL || 'http://localhost:5000';
-
+    const BASE_URL = process.env.BASE_URL;
+ console.log(BASE_URL, process.env.BASE_URL, 'BASE_URL for SSLCommerz callbacks');
     const paymentData = {
       total_amount: servicePrice,
       currency: 'BDT',
