@@ -9,6 +9,14 @@ import jobSchedulerService from './src/services/jobScheduler.service.js';
 // Initialize background jobs
 jobSchedulerService.init();
 
+console.log('Starting server with config:', {
+  port: config.port,
+  env: process.env.NODE_ENV,
+  appBaseUrl: process.env.APP_BASE_URL,
+  baseUrl: process.env.BASE_URL,
+  dbUri: config.dbUri ? '***' : 'Not Set',
+});
+
 server.listen(config.port, '0.0.0.0', () => {
   console.log(` Server running on port ${config.port}`);
   if (process.env.NODE_ENV !== 'production') {
