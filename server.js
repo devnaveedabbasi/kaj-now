@@ -11,10 +11,8 @@ jobSchedulerService.init();
 
 console.log('Starting server with config:', {
   port: config.port,
-  env: process.env.NODE_ENV,
   appBaseUrl: process.env.APP_BASE_URL,
   baseUrl: process.env.BASE_URL,
-  dbUri: config.dbUri ? '***' : 'Not Set',
 });
 
 server.listen(config.port, '0.0.0.0', () => {
