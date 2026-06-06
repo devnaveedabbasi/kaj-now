@@ -206,7 +206,7 @@ export async function bookJob(req, res) {
             paymentGateway: 'cod',
             paymentStatus: 'pending',
             escrowStatus: 'cod_pending',
-            returnToAdmin: platformFee,
+            returnToAdmin: 0,
           },
         ],
         { session }
@@ -626,16 +626,19 @@ export async function confirmCompletionByCustomer(req, res) {
     // ── STEP 2: Payment fetch ───────────────────────────────────────────────
     const payment = await Payment.findOne({ jobId }).session(session);
     if (!payment) throw new ApiError(404, 'Payment record not found');
+    console.log('Payment record found for Job ID:', jobId, payment);
 
     // ── COD FLOW ────────────────────────────────────────────────────────────
     if (payment.paymentMethod === 'cod') {
-
+      console.log('Processing COD confirmation for Job ID:', jobId);
       if (payment.escrowStatus !== 'cod_pending') {
         throw new ApiError(400, 'COD payment is not pending');
       }
 
       payment.escrowStatus = 'cod_completed';
       payment.paymentStatus = 'completed';
+      payment.returnToAdmin = (payment.returnToAdmin || 0) + payment.platformFee;
+      payment.confirmedAt = new Date();
       payment.releasedAt = new Date();
       await payment.save({ session });
 
@@ -1103,6 +1106,8 @@ export const getOrderById = async (req, res) => {
       status: order.status,
       paymentStatus: order.paymentStatus,
       amount: order.amount,
+      schedule: order.schedule,
+
       service: {
         _id: order.service?._id,
         name: order.service?.name,
@@ -1125,7 +1130,6 @@ export const getOrderById = async (req, res) => {
         email: order.customer?.email,
         profilePicture: order.customer?.profilePicture
       },
-      schedule: order.schedule,
       payment: payment ? {
         _id: payment._id,
         totalAmount: payment.totalAmount,

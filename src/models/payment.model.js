@@ -122,9 +122,10 @@ const paymentSchema = new mongoose.Schema(
     // ====== REFUND INFO ======
     refundedAt: { type: Date },
     refundReason: { type: String, trim: true },
-
+   
     // ====== PAYMENT RELEASE TO PROVIDER ======
     releasedAt: { type: Date },
+    confirmedAt: { type: Date }
   },
   { timestamps: true }
 );
