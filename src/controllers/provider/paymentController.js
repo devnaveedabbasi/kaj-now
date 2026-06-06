@@ -3,7 +3,7 @@ import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import mongoose from 'mongoose';
-import User from '../../models/user.model.js';
+import User from '../../models/User.model.js';
 import Wallet from '../../models/wallet.model.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import { createNotification } from '../../utils/notification.js';

@@ -635,6 +635,18 @@ export async function confirmCompletionByCustomer(req, res) {
         throw new ApiError(400, 'COD payment is not pending');
       }
 
+      const wallet = await Wallet.findOne({ userId: payment.providerId, role: 'provider' }).session(session);
+      if (!wallet) {
+      wallet = await Wallet.create([{
+        userId: payment.providerId,
+        role: 'provider',
+      }], { session });
+    }
+    wallet.totalEarnings += payment.providerAmount;
+    wallet.totalPlatformFees += payment.platformFee;
+    wallet.transactionHistory.push(payment._id);
+    await wallet.save({ session });
+
       payment.escrowStatus = 'cod_completed';
       payment.paymentStatus = 'completed';
       payment.returnToAdmin = (payment.returnToAdmin || 0) + payment.platformFee;
