@@ -66,7 +66,7 @@ const jobSchema = new mongoose.Schema(
     },
     paymentMethod: {
       type: String,
-      enum: ['card','cod','bkash','nagad','rocket'],
+      enum: ['card', 'cod', 'bkash', 'nagad', 'rocket', 'bank'],
       required: true,
     },
      schedule: {

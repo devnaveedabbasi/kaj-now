@@ -3,133 +3,90 @@ import Payment from '../models/payment.model.js';
 import Job from '../models/job.model.js';
 import Wallet from '../models/wallet.model.js';
 import User from '../models/User.model.js';
+import Provider from '../models/provider/Provider.model.js';
+import Service from '../models/admin/service.model.js';
+import BookingIntent from '../models/bookingIntent.model.js';
 import { validateSSLCommerzPayment } from '../service/sslcommerz.js';
 import { createNotification } from '../utils/notification.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DEEP LINK HELPER
-// Mobile app ka URL scheme .env mein set karo:
-//   APP_SCHEME=myapp          → myapp://payment/success?jobId=xxx
-// Agar nahi diya to fallback HTML page show hoga.
+// FRONTEND_URL — where to redirect after payment callbacks
+// For Postman/no-frontend testing: points to backend result routes
+// For production app: set FRONTEND_URL=kajnow:// (deep link) in .env
 // ─────────────────────────────────────────────────────────────────────────────
-function buildDeepLink(path, params = {}) {
-  const scheme = process.env.APP_SCHEME; // e.g. "myapp"
-  if (!scheme) return null;
-  const query = new URLSearchParams(params).toString();
-  return `${scheme}://${path}${query ? '?' + query : ''}`;
-}
-
-// HTML page jo mobile browser mein khulti hai aur app ko deep link se open karti hai
-function sendMobileRedirectPage(res, { status, title, message, deepLink, params = {} }) {
-  const scheme = process.env.APP_SCHEME;
-  const fallbackDeepLink = scheme
-    ? `${scheme}://payment/${status}?${new URLSearchParams(params).toString()}`
-    : null;
-
-  const targetLink = deepLink || fallbackDeepLink;
-
-  // Auto-redirect HTML — app install hogi to khulegi, nahi to message dikhega
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>${title}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: ${status === 'success' ? '#f0fdf4' : status === 'failed' ? '#fef2f2' : '#fffbeb'};
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-    .card {
-      background: white;
-      border-radius: 16px;
-      padding: 40px 32px;
-      text-align: center;
-      max-width: 360px;
-      width: 100%;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-    }
-    .icon {
-      font-size: 56px;
-      margin-bottom: 16px;
-    }
-    h1 {
-      font-size: 22px;
-      font-weight: 700;
-      color: #111;
-      margin-bottom: 10px;
-    }
-    p {
-      font-size: 15px;
-      color: #555;
-      line-height: 1.5;
-      margin-bottom: 28px;
-    }
-    .btn {
-      display: inline-block;
-      padding: 14px 32px;
-      border-radius: 10px;
-      font-size: 16px;
-      font-weight: 600;
-      text-decoration: none;
-      background: ${status === 'success' ? '#16a34a' : status === 'failed' ? '#dc2626' : '#d97706'};
-      color: white;
-      cursor: pointer;
-      border: none;
-      width: 100%;
-    }
-    .sub { font-size: 13px; color: #999; margin-top: 16px; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <div class="icon">${status === 'success' ? '✅' : status === 'failed' ? '❌' : '⚠️'}</div>
-    <h1>${title}</h1>
-    <p>${message}</p>
-    ${targetLink
-      ? `<a href="${targetLink}" class="btn">Return to App</a>
-         <p class="sub">Tap the button if app does not open automatically.</p>`
-      : `<p class="sub">You can close this window and return to the app.</p>`
-    }
-  </div>
-  ${targetLink
-    ? `<script>
-        // Auto-open app after 800ms
-        setTimeout(function() {
-          window.location.href = "${targetLink}";
-        }, 800);
-      </script>`
-    : ''
-  }
-</body>
-</html>`;
-
-  res.setHeader('Content-Type', 'text/html');
-  return res.status(status === 'success' ? 200 : 400).send(html);
-}
-
+const BASE = process.env.APP_BASE_URL || 'http://localhost:5000';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED HELPER: Payment escrow mein daalo + admin wallet update karo
+// SHARED HELPER — Create Job + Payment from a BookingIntent
+// Used by both paymentSuccess and paymentIPN (idempotent)
+// Returns { job, payment } or throws on error
 // ─────────────────────────────────────────────────────────────────────────────
-async function holdPaymentInEscrow(payment, session) {
-  payment.paymentStatus = 'completed';
-  payment.escrowStatus = 'held_in_admin_wallet';
-  payment.sslCommerzValidation = true;
-  await payment.save({ session });
+async function createJobFromIntent(intent, tran_id, session) {
+  // Guard: schedule conflict check — same ±1 hour window as bookJob pre-check
+  // If this fires it means a job was created between booking initiation and
+  // payment confirmation (race condition / retry scenario).
+  const CONFLICT_WINDOW_MS = 60 * 60 * 1000;
+  const intentScheduleDate = new Date(intent.schedule.date);
 
-  const job = await Job.findById(payment.jobId).session(session);
-  if (job) {
-    job.paymentStatus = 'held_in_escrow';
-    await job.save({ session });
+  const dupJob = await Job.findOne({
+    customer: intent.userId,
+    service: intent.serviceId,
+    provider: intent.providerId,
+    status: { $in: ['pending', 'accepted', 'in_progress'] },
+    'schedule.date': {
+      $gte: new Date(intentScheduleDate.getTime() - CONFLICT_WINDOW_MS),
+      $lte: new Date(intentScheduleDate.getTime() + CONFLICT_WINDOW_MS),
+    },
+  }).session(session);
+
+  if (dupJob) {
+    // Delete intent immediately — no retry needed
+    await BookingIntent.deleteOne({ _id: intent._id }).session(session);
+    throw new Error('DUPLICATE_BOOKING');
   }
 
+
+  // Create Job
+  const [job] = await Job.create(
+    [
+      {
+        orderId: intent.orderId,
+        provider: intent.providerId,
+        customer: intent.userId,
+        service: intent.serviceId,
+        amount: intent.servicePrice,
+        status: 'pending',
+        paymentStatus: 'held_in_escrow',
+        paymentMethod: intent.paymentMethod,
+        schedule: intent.schedule,
+      },
+    ],
+    { session }
+  );
+
+  // Create Payment record
+  const [payment] = await Payment.create(
+    [
+      {
+        jobId: job._id,
+        customerId: intent.userId,
+        providerId: intent.providerId,
+        servicePrice: intent.servicePrice,
+        platformFee: intent.platformFee,
+        totalAmount: intent.servicePrice,
+        providerAmount: intent.providerAmount,
+        paymentMethod: intent.paymentMethod,
+        paymentGateway: 'sslcommerz',
+        paymentStatus: 'completed',
+        escrowStatus: 'held_in_admin_wallet',
+        sslCommerzTransactionId: tran_id,
+        sslCommerzValidation: true,
+      },
+    ],
+    { session }
+  );
+
+  // Escrow funds into admin wallet
   const adminUser = await User.findOne({ role: 'admin' }).session(session);
   if (adminUser) {
     let adminWallet = await Wallet.findOne({
@@ -139,388 +96,341 @@ async function holdPaymentInEscrow(payment, session) {
 
     if (!adminWallet) {
       [adminWallet] = await Wallet.create(
-        [{
-          userId: adminUser._id,
-          role: 'admin',
-          balance: 0,
-          totalEarnings: 0,
-          totalWithdrawn: 0,
-          totalPlatformFees: 0,
-          isActive: true,
-        }],
+        [
+          {
+            userId: adminUser._id,
+            role: 'admin',
+            balance: 0,
+            totalEarnings: 0,
+            totalPlatformFees: 0,
+            totalHeld: 0,
+            isActive: true,
+            transactionHistory: [],
+          },
+        ],
         { session }
       );
     }
 
-    adminWallet.balance += payment.totalAmount;
-    adminWallet.totalEarnings += payment.platformFee;
-    adminWallet.totalPlatformFees += payment.platformFee;
-    adminWallet.totalHeld = (adminWallet.totalHeld || 0) + payment.totalAmount;
+    adminWallet.balance += intent.servicePrice;
+    adminWallet.totalEarnings += intent.platformFee;
+    adminWallet.totalPlatformFees += intent.platformFee;
+    adminWallet.totalHeld = (adminWallet.totalHeld || 0) + intent.servicePrice;
     adminWallet.transactionHistory.push(payment._id);
     await adminWallet.save({ session });
   }
 
-  return job;
+  // Mark intent as completed
+  intent.status = 'completed';
+  await intent.save({ session });
+
+  return { job, payment };
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// CARD CALLBACKS — unchanged, web redirect use karte hain
+// SUCCESS CALLBACK — SSLCommerz POSTs here after successful payment
+// Handles: bKash, Nagad, Rocket, Internet Banking (bank), Card (3DS)
 // ─────────────────────────────────────────────────────────────────────────────
-
 export async function paymentSuccess(req, res) {
   const session = await mongoose.startSession();
   session.startTransaction();
-  try {
-    const { tran_id, val_id } = req.query;
-    const validation = await validateSSLCommerzPayment(val_id);
-    if (validation.status !== 'VALID') {
-      return res.redirect(`${process.env.FRONTEND_URL}/payment/failed?transaction=${tran_id}`);
-    }
-    const payment = await Payment.findOne({ sslCommerzTransactionId: tran_id }).session(session);
-    if (!payment) return res.redirect(`${process.env.FRONTEND_URL}/payment/not-found`);
-    if (payment.paymentStatus === 'completed') {
-      await session.abortTransaction();
-      return res.redirect(`${process.env.FRONTEND_URL}/payment/success?job=${payment.jobId}`);
-    }
-    const job = await holdPaymentInEscrow(payment, session);
-    await session.commitTransaction();
-    return res.redirect(`${process.env.FRONTEND_URL}/payment/success?job=${job?._id ?? payment.jobId}`);
-  } catch (error) {
-    await session.abortTransaction();
-    console.error('Card paymentSuccess error:', error);
-    return res.redirect(`${process.env.FRONTEND_URL}/payment/error`);
-  } finally {
-    session.endSession();
-  }
-}
-
-export async function paymentFailed(req, res) {
-  try {
-    const { tran_id } = req.query;
-    const payment = await Payment.findOne({ sslCommerzTransactionId: tran_id });
-    if (payment && payment.paymentStatus !== 'failed') {
-      payment.paymentStatus = 'failed';
-      await payment.save();
-      const job = await Job.findById(payment.jobId);
-      if (job) { job.status = 'pending'; job.paymentStatus = 'pending'; await job.save(); }
-    }
-    return res.redirect(`${process.env.FRONTEND_URL}/payment/failed?transaction=${tran_id}`);
-  } catch (error) {
-    console.error('Card paymentFailed error:', error);
-    return res.redirect(`${process.env.FRONTEND_URL}/payment/error`);
-  }
-}
-
-export async function paymentCancel(req, res) {
-  try {
-    const { tran_id } = req.query;
-    const payment = await Payment.findOne({ sslCommerzTransactionId: tran_id });
-    if (payment && payment.paymentStatus === 'pending') {
-      payment.paymentStatus = 'failed';
-      await payment.save();
-      const job = await Job.findById(payment.jobId);
-      if (job) { job.status = 'pending'; job.paymentStatus = 'pending'; await job.save(); }
-    }
-    return res.redirect(`${process.env.FRONTEND_URL}/payment/cancelled?transaction=${tran_id}`);
-  } catch (error) {
-    console.error('Card paymentCancel error:', error);
-    return res.redirect(`${process.env.FRONTEND_URL}/payment/error`);
-  }
-}
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// BKASH CALLBACKS — Mobile App ke liye HTML + Deep Link
-//
-// Flow:
-//  1. User SSLCommerz hosted page pe bKash se payment karta hai
-//  2. SSLCommerz backend ko POST karta hai (success/fail/cancel URL)
-//  3. Backend payment validate + update karta hai
-//  4. HTML page return hoti hai jisme deep link hota hai
-//  5. Deep link mobile app ko open karta hai correct screen pe
-//
-// .env mein add karo:
-//   APP_SCHEME=yourappscheme   (e.g. "helperapp")
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * GET|POST /api/payments/bkash/success
- * SSLCommerz yahan redirect karta hai successful bKash payment ke baad.
- */
-export async function bkashPaymentSuccess(req, res) {
-  const session = await mongoose.startSession();
-  session.startTransaction();
 
   try {
-    const { tran_id, val_id } = { ...req.query, ...req.body };
+    // Merge query + body (SSLCommerz can POST or GET)
+    const callbackData = { ...req.query, ...req.body };
+    const { tran_id, val_id, status: callbackStatus } = callbackData;
+    const isSandbox = process.env.SSL_COMMERZ_IS_SANDBOX === 'true';
 
     if (!tran_id || !val_id) {
-      console.error('[bKash Success] Missing tran_id or val_id');
-      return sendMobileRedirectPage(res, {
-        status: 'failed',
-        title: 'Payment Error',
-        message: 'Invalid payment callback. Please contact support.',
-        params: { error: 'missing_params' },
-      });
-    }
-
-    // ── Step 1: SSLCommerz se validate karo ──────────────────────────────
-    const validation = await validateSSLCommerzPayment(val_id);
-
-    if (!validation || validation.status !== 'VALID') {
-      console.error('[bKash Success] Validation failed:', validation?.status);
       await session.abortTransaction();
-      return sendMobileRedirectPage(res, {
-        status: 'failed',
-        title: 'Payment Validation Failed',
-        message: 'We could not verify your bKash payment. If money was deducted, it will be refunded within 3-5 business days.',
-        params: { tran_id, method: 'bkash' },
-      });
+      return res.redirect(
+        `${BASE}/api/payment-result/failed?error=missing_params`
+      );
     }
 
-    // ── Step 2: Payment record dhundo ────────────────────────────────────
-    const payment = await Payment.findOne({ sslCommerzTransactionId: tran_id }).session(session);
+    // ── Step 1: Validate with SSLCommerz ─────────────────────────────
+    // The callback body already contains status='VALID' from SSLCommerz.
+    // We also call the validation API for extra security.
+    // In sandbox, the validation API often returns 500 — we fall back
+    // to trusting the signed callback status in that case.
+    let isValidPayment = false;
 
-    if (!payment) {
-      console.error('[bKash Success] Payment not found for tran_id:', tran_id);
+    try {
+      const validation = await validateSSLCommerzPayment(val_id);
+      isValidPayment = validation?.status === 'VALID';
+      if (!isValidPayment) {
+        console.warn(`[paymentSuccess] Validation API rejected: ${JSON.stringify(validation)}`);
+      }
+    } catch (validationErr) {
+      // SSLCommerz sandbox validation API returns 500 frequently.
+      // Fall back: trust the signed status from the callback body.
+      if (isSandbox && callbackStatus === 'VALID') {
+        console.warn(
+          `[paymentSuccess] Validation API failed (sandbox 500). ` +
+          `Trusting callback status=VALID for tran_id=${tran_id}`
+        );
+        isValidPayment = true;
+      } else {
+        // Production: never skip validation on API failure
+        console.error(`[paymentSuccess] Validation API failed:`, validationErr.message);
+        isValidPayment = false;
+      }
+    }
+
+    if (!isValidPayment) {
       await session.abortTransaction();
-      return sendMobileRedirectPage(res, {
-        status: 'failed',
-        title: 'Payment Not Found',
-        message: 'Payment record not found. Please contact support with your transaction ID.',
-        params: { tran_id },
-      });
+      return res.redirect(
+        `${BASE}/api/payment-result/failed?error=invalid_payment&transaction=${tran_id}`
+      );
     }
 
-    // ── Idempotency: already processed? ──────────────────────────────────
-    if (payment.paymentStatus === 'completed') {
+    // ── Step 2: Idempotency — check if already processed ─────────────
+    const existingPayment = await Payment.findOne({
+      sslCommerzTransactionId: tran_id,
+    }).session(session);
+
+    if (existingPayment && existingPayment.paymentStatus === 'completed') {
       await session.abortTransaction();
-      return sendMobileRedirectPage(res, {
-        status: 'success',
-        title: 'Payment Already Confirmed',
-        message: 'Your bKash payment was already confirmed. Your booking is active.',
-        params: { jobId: payment.jobId.toString(), method: 'bkash' },
-      });
+      return res.redirect(
+        `${BASE}/api/payment-result/success?job=${existingPayment.jobId}&method=${existingPayment.paymentMethod}`
+      );
     }
 
-    if (payment.paymentMethod !== 'bkash') {
-      console.error('[bKash Success] Wrong payment method for tran_id:', tran_id);
+    // ── Step 3: Find BookingIntent ────────────────────────────────────
+    const intent = await BookingIntent.findOne({ tranId: tran_id }).session(session);
+
+    if (!intent) {
       await session.abortTransaction();
-      return sendMobileRedirectPage(res, {
-        status: 'failed',
-        title: 'Payment Error',
-        message: 'Payment method mismatch. Please contact support.',
-        params: { tran_id },
-      });
+      console.warn(`[paymentSuccess] No BookingIntent found for tranId: ${tran_id}`);
+      return res.redirect(
+        `${BASE}/api/payment-result/failed?error=session_expired&transaction=${tran_id}`
+      );
     }
 
-    // ── Step 3: bKash transaction details store karo ──────────────────────
-    if (validation.bank_tran_id) payment.bkashTransactionId = validation.bank_tran_id;
-    if (validation.card_no) payment.bkashNumber = validation.card_no;
+    // Already completed (race condition safeguard)
+    if (intent.status === 'completed') {
+      await session.abortTransaction();
+      const completedPayment = await Payment.findOne({ sslCommerzTransactionId: tran_id });
+      return res.redirect(
+        `${BASE}/api/payment-result/success?job=${completedPayment?.jobId || ''}&method=${intent.paymentMethod}`
+      );
+    }
 
-    // ── Step 4: Escrow mein daalo ─────────────────────────────────────────
-    const job = await holdPaymentInEscrow(payment, session);
+    // ── Enforce Correct Payment Method ───────────────────────────────
+    // Security check: ensure the user actually paid with the method they selected
+    const intentMethod = intent.paymentMethod.toLowerCase();
+    const paidMethodStr = (callbackData.card_type || callbackData.card_issuer || callbackData.card_brand || '').toLowerCase();
+
+    // MFS methods must strictly match their intended gateway
+    let isMethodValid = true;
+    if (intentMethod === 'bkash' && !paidMethodStr.includes('bkash')) isMethodValid = false;
+    if (intentMethod === 'nagad' && !paidMethodStr.includes('nagad')) isMethodValid = false;
+    // Rocket often returns as DBBL or Dutch Bangla Mobile Banking
+    if (intentMethod === 'rocket' && !(paidMethodStr.includes('rocket') || paidMethodStr.includes('dbbl') || paidMethodStr.includes('dutch') || paidMethodStr.includes('mobilebanking'))) {
+      isMethodValid = false;
+    }
+
+    if (!isMethodValid) {
+      await session.abortTransaction();
+      console.error(`[paymentSuccess] Payment method mismatch! Expected: ${intentMethod}, Paid with: ${paidMethodStr}`);
+      
+      // Mark intent as failed so the user has to book again correctly
+      intent.status = 'failed';
+      await BookingIntent.updateOne({ _id: intent._id }, { status: 'failed' });
+
+      return res.redirect(
+        `${BASE}/api/payment-result/failed?error=payment_method_mismatch&transaction=${tran_id}`
+      );
+    }
+
+    // ── Step 4: Create Job + Payment from intent ──────────────────────
+    let job, payment;
+    try {
+      ({ job, payment } = await createJobFromIntent(intent, tran_id, session));
+    } catch (err) {
+      if (err.message === 'DUPLICATE_BOOKING') {
+        await session.commitTransaction();
+        return res.redirect(
+          `${BASE}/api/payment-result/failed?error=duplicate_booking&transaction=${tran_id}`
+        );
+      }
+      throw err;
+    }
+
     await session.commitTransaction();
 
-    // ── Step 5: Notifications ─────────────────────────────────────────────
+    // ── Step 5: Notifications (outside transaction) ───────────────────
     try {
+      const service = await Service.findById(intent.serviceId);
+      const provider = await Provider.findById(intent.providerId);
+      const methodName = intent.paymentMethod.toUpperCase();
+
       await createNotification({
-        userId: payment.customerId,
-        title: 'bKash Payment Successful',
-        message: `Your bKash payment for Order #${job?.orderId} has been confirmed. Your booking is active.`,
+        userId: intent.userId,
+        title: 'Payment Successful & Booking Confirmed',
+        message: `Your ${methodName} payment for "${service?.name}" (Order #${intent.orderId}) is confirmed. Your booking is now active.`,
         type: 'payment',
-        referenceId: payment.jobId,
+        referenceId: job._id,
+        metadata: { orderId: intent.orderId, jobId: job._id, method: intent.paymentMethod },
       });
 
-      const jobDoc = job || await Job.findById(payment.jobId).populate('provider');
-      if (jobDoc?.provider) {
-        const { default: Provider } = await import('../models/provider/Provider.model.js');
-        const provider = await Provider.findById(jobDoc.provider);
-        if (provider) {
-          await createNotification({
-            userId: provider.userId,
-            title: 'New Job Request',
-            message: `New bKash booking for Order #${jobDoc.orderId}. Please accept or reject.`,
-            type: 'job',
-            referenceId: payment.jobId,
-          });
-        }
+      if (provider?.userId) {
+        await createNotification({
+          userId: provider.userId,
+          title: 'New Job Confirmed',
+          message: `New job for "${service?.name}" (Order #${intent.orderId}) confirmed. Payment received.`,
+          type: 'job',
+          referenceId: job._id,
+          metadata: { orderId: intent.orderId, jobId: job._id },
+        });
       }
     } catch (notifErr) {
-      console.error('[bKash Success] Notification error:', notifErr.message);
+      console.error('[paymentSuccess] Notification error (non-fatal):', notifErr.message);
     }
 
-    // ── Step 6: Mobile app ko deep link se wapas bhejo ────────────────────
-    const jobId = (job?._id ?? payment.jobId).toString();
-    return sendMobileRedirectPage(res, {
-      status: 'success',
-      title: 'Payment Successful! 🎉',
-      message: `Your bKash payment of BDT ${payment.totalAmount} was successful. Your booking has been confirmed.`,
-      params: { jobId, method: 'bkash', tran_id },
-    });
-
+    return res.redirect(
+      `${BASE}/api/payment-result/success?job=${job._id}&method=${intent.paymentMethod}`
+    );
   } catch (error) {
     await session.abortTransaction();
-    console.error('[bKash Success] Error:', error);
-    return sendMobileRedirectPage(res, {
-      status: 'failed',
-      title: 'Payment Error',
-      message: 'An unexpected error occurred. Please contact support if money was deducted.',
-      params: { error: 'server_error' },
-    });
+    console.error('[paymentSuccess] Error:', error);
+    return res.redirect(`${BASE}/api/payment-result/error`);
   } finally {
     session.endSession();
   }
 }
 
-
-/**
- * GET|POST /api/payments/bkash/fail
- * SSLCommerz yahan redirect karta hai jab bKash payment fail ho.
- */
-export async function bkashPaymentFailed(req, res) {
+// ─────────────────────────────────────────────────────────────────────────────
+// FAILED CALLBACK — SSLCommerz POSTs here on payment failure
+// CRITICAL: NO Job or Payment created here
+// BookingIntent is DELETED immediately so user can retry
+// ─────────────────────────────────────────────────────────────────────────────
+export async function paymentFailed(req, res) {
   try {
     const { tran_id } = { ...req.query, ...req.body };
 
     if (tran_id) {
-      const payment = await Payment.findOne({ sslCommerzTransactionId: tran_id });
-      if (payment && payment.paymentStatus !== 'completed') {
-        payment.paymentStatus = 'failed';
-        await payment.save();
-
-        const job = await Job.findById(payment.jobId);
-        if (job) {
-          job.status = 'pending';
-          job.paymentStatus = 'pending';
-          await job.save();
-        }
-
-        try {
-          await createNotification({
-            userId: payment.customerId,
-            title: 'bKash Payment Failed',
-            message: 'Your bKash payment could not be processed. Please try again.',
-            type: 'payment',
-            referenceId: payment.jobId,
-          });
-        } catch (e) { /* non-critical */ }
+      // Delete BookingIntent immediately so user can book again
+      const deleted = await BookingIntent.deleteOne({ tranId: tran_id });
+      if (deleted.deletedCount > 0) {
+        console.log(`[paymentFailed] Deleted BookingIntent: ${tran_id}`);
       }
     }
 
-    return sendMobileRedirectPage(res, {
-      status: 'failed',
-      title: 'Payment Failed',
-      message: 'Your bKash payment could not be completed. No money has been deducted. Please try again.',
-      params: { tran_id: tran_id || '', method: 'bkash' },
-    });
-
+    return res.redirect(
+      `${BASE}/api/payment-result/failed?error=payment_declined&transaction=${tran_id || ''}`
+    );
   } catch (error) {
-    console.error('[bKash Fail] Error:', error);
-    return sendMobileRedirectPage(res, {
-      status: 'failed',
-      title: 'Payment Failed',
-      message: 'Payment failed. Please try again.',
-      params: { error: 'server_error' },
-    });
+    console.error('[paymentFailed] Error:', error);
+    return res.redirect(`${BASE}/api/payment-result/error`);
   }
 }
 
-
-/**
- * GET|POST /api/payments/bkash/cancel
- * SSLCommerz yahan redirect karta hai jab user payment cancel kare.
- */
-export async function bkashPaymentCancel(req, res) {
+// ─────────────────────────────────────────────────────────────────────────────
+// CANCEL CALLBACK — User cancelled on SSLCommerz hosted page
+// CRITICAL: NO Job or Payment created here
+// BookingIntent is DELETED immediately so user can retry
+// ─────────────────────────────────────────────────────────────────────────────
+export async function paymentCancel(req, res) {
   try {
     const { tran_id } = { ...req.query, ...req.body };
 
     if (tran_id) {
-      const payment = await Payment.findOne({ sslCommerzTransactionId: tran_id });
-      if (payment && payment.paymentStatus === 'pending') {
-        payment.paymentStatus = 'failed';
-        await payment.save();
-
-        const job = await Job.findById(payment.jobId);
-        if (job) {
-          job.status = 'pending';
-          job.paymentStatus = 'pending';
-          await job.save();
-        }
-
-        try {
-          await createNotification({
-            userId: payment.customerId,
-            title: 'bKash Payment Cancelled',
-            message: 'You cancelled the bKash payment. Your booking is on hold.',
-            type: 'payment',
-            referenceId: payment.jobId,
-          });
-        } catch (e) { /* non-critical */ }
+      // Delete BookingIntent immediately so user can book again
+      const deleted = await BookingIntent.deleteOne({ tranId: tran_id });
+      if (deleted.deletedCount > 0) {
+        console.log(`[paymentCancel] Deleted BookingIntent: ${tran_id}`);
       }
     }
 
-    return sendMobileRedirectPage(res, {
-      status: 'cancelled',
-      title: 'Payment Cancelled',
-      message: 'You cancelled the bKash payment. Your booking is saved — you can complete payment anytime.',
-      params: { tran_id: tran_id || '', method: 'bkash' },
-    });
-
+    return res.redirect(
+      `${BASE}/api/payment-result/cancelled?transaction=${tran_id || ''}`
+    );
   } catch (error) {
-    console.error('[bKash Cancel] Error:', error);
-    return sendMobileRedirectPage(res, {
-      status: 'cancelled',
-      title: 'Payment Cancelled',
-      message: 'Payment was cancelled.',
-      params: { error: 'server_error' },
-    });
+    console.error('[paymentCancel] Error:', error);
+    return res.redirect(`${BASE}/api/payment-result/error`);
   }
 }
 
-
-/**
- * POST /api/payments/bkash/ipn
- * Server-to-server fallback — browser redirect fail ho to yeh kaam aata hai.
- * Hamesha 200 return karo SSLCommerz ko.
- */
-export async function bkashIpnHandler(req, res) {
+// ─────────────────────────────────────────────────────────────────────────────
+// IPN (Instant Payment Notification) — Server-to-server backup
+// Fires when the redirect callback may have been missed
+// Fully idempotent — safe to receive multiple times
+// ─────────────────────────────────────────────────────────────────────────────
+export async function paymentIPN(req, res) {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const { tran_id, val_id, status } = req.body;
 
+    // SSLCommerz sends IPN for failed payments too — filter them out
     if ((status !== 'VALID' && status !== 'VALIDATED') || !tran_id || !val_id) {
       await session.abortTransaction();
       return res.status(200).json({ received: true });
     }
 
-    const payment = await Payment.findOne({ sslCommerzTransactionId: tran_id }).session(session);
+    // ── Idempotency: already processed? ──────────────────────────────
+    const existingPayment = await Payment.findOne({
+      sslCommerzTransactionId: tran_id,
+    }).session(session);
 
-    if (!payment || payment.paymentStatus === 'completed' || payment.paymentMethod !== 'bkash') {
+    if (existingPayment && existingPayment.paymentStatus === 'completed') {
+      await session.abortTransaction();
+      console.log(`[IPN] Already processed: ${tran_id}`);
+      return res.status(200).json({ received: true });
+    }
+
+    // ── Find BookingIntent ────────────────────────────────────────────
+    const intent = await BookingIntent.findOne({ tranId: tran_id }).session(session);
+
+    if (!intent || intent.status === 'completed') {
       await session.abortTransaction();
       return res.status(200).json({ received: true });
     }
 
+    // ── Enforce Correct Payment Method ───────────────────────────────
+    const intentMethod = intent.paymentMethod.toLowerCase();
+    const paidMethodStr = (req.body.card_type || req.body.card_issuer || req.body.card_brand || '').toLowerCase();
+
+    let isMethodValid = true;
+    if (intentMethod === 'bkash' && !paidMethodStr.includes('bkash')) isMethodValid = false;
+    if (intentMethod === 'nagad' && !paidMethodStr.includes('nagad')) isMethodValid = false;
+    if (intentMethod === 'rocket' && !(paidMethodStr.includes('rocket') || paidMethodStr.includes('dbbl') || paidMethodStr.includes('dutch') || paidMethodStr.includes('mobilebanking'))) {
+      isMethodValid = false;
+    }
+
+    if (!isMethodValid) {
+      await session.abortTransaction();
+      console.error(`[IPN] Payment method mismatch! Expected: ${intentMethod}, Paid with: ${paidMethodStr}`);
+      return res.status(200).json({ received: true });
+    }
+
+    // ── Validate with SSLCommerz ──────────────────────────────────────
     const validation = await validateSSLCommerzPayment(val_id);
     if (!validation || validation.status !== 'VALID') {
       await session.abortTransaction();
       return res.status(200).json({ received: true });
     }
 
-    if (validation.bank_tran_id) payment.bkashTransactionId = validation.bank_tran_id;
-    if (validation.card_no) payment.bkashNumber = validation.card_no;
+    // ── Create Job + Payment (same logic as success callback) ─────────
+    try {
+      await createJobFromIntent(intent, tran_id, session);
+    } catch (err) {
+      if (err.message === 'DUPLICATE_BOOKING') {
+        await session.commitTransaction();
+        return res.status(200).json({ received: true });
+      }
+      throw err;
+    }
 
-    await holdPaymentInEscrow(payment, session);
     await session.commitTransaction();
-
-    console.log(`[bKash IPN] Payment confirmed via IPN for tran_id: ${tran_id}`);
+    console.log(`[IPN] Payment confirmed via IPN: ${tran_id}`);
     return res.status(200).json({ received: true });
-
   } catch (error) {
     await session.abortTransaction();
-    console.error('[bKash IPN] Error:', error);
+    console.error('[IPN] Error:', error);
+    // Always return 200 to SSLCommerz — they retry on non-200
     return res.status(200).json({ received: true });
   } finally {
     session.endSession();

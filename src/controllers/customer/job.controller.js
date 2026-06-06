@@ -8,7 +8,7 @@ import Service from '../../models/admin/service.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
-import { initiateBkashSession, processSSLCommerzPayment } from '../../service/sslcommerz.js';
+import { processSSLCommerzCardPayment, initiateSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import { validateCardDetails } from '../../utils/validateCardDetails.js';
@@ -28,46 +28,45 @@ export async function bookJob(req, res) {
 
   try {
     const userId = req.user._id;
-    const { serviceId, providerId, cardDetails, schedule, paymentMethod } = req.body;
+    const {
+      serviceId,
+      providerId,
+      cardDetails,
+      schedule,
+      paymentMethod,
+    } = req.body;
 
-    // ── Basic Validation ────────────────────────────────────────────────────
-    if (!serviceId) {
-      throw new ApiError(400, 'serviceId required');
+    // ── Supported Methods ────────────────────────────────────────────
+    const SUPPORTED_METHODS = ['card', 'cod', 'bkash', 'nagad', 'rocket', 'bank'];
+    if (!paymentMethod || !SUPPORTED_METHODS.includes(paymentMethod)) {
+      throw new ApiError(400, `paymentMethod must be one of: ${SUPPORTED_METHODS.join(', ')}`);
     }
 
-    // ── paymentMethod now accepts card | cod | bkash ────────────────────────
-    if (!paymentMethod || !['card', 'cod', 'bkash'].includes(paymentMethod)) {
-      throw new ApiError(400, 'paymentMethod must be card, cod, or bkash');
-    }
-
+    // ── Schedule Validation ──────────────────────────────────────────
     if (!schedule?.date || !schedule?.time) {
       throw new ApiError(400, 'Schedule date and time required');
     }
 
-    // ── Format Validation ───────────────────────────────────────────────────
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(schedule.date)) {
-      throw new ApiError(400, 'Invalid date format. Use YYYY-MM-DD (e.g. 2026-06-04)');
+      throw new ApiError(400, 'Invalid date format. Use YYYY-MM-DD');
     }
 
     const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
     if (!timeRegex.test(schedule.time)) {
-      throw new ApiError(400, 'Invalid time format. Use HH:MM in 24-hour format (e.g. 16:10)');
+      throw new ApiError(400, 'Invalid time format. Use HH:MM in 24-hour format');
     }
 
-    // ── Build scheduleDateTime ──────────────────────────────────────────────
     const scheduleDateTime = new Date(`${schedule.date}T${schedule.time}:00`);
     if (isNaN(scheduleDateTime.getTime())) {
       throw new ApiError(400, 'Invalid schedule date or time');
     }
 
-    // ── Date/Time Rules ─────────────────────────────────────────────────────
     const now = new Date();
     const todayDateStr = now.toISOString().split('T')[0];
     const isToday = schedule.date === todayDateStr;
-
-    const todayMidnight = new Date(todayDateStr + 'T00:00:00');
     const scheduleMidnight = new Date(schedule.date + 'T00:00:00');
+    const todayMidnight = new Date(todayDateStr + 'T00:00:00');
 
     if (scheduleMidnight < todayMidnight) {
       throw new ApiError(400, 'Cannot book for a past date');
@@ -85,7 +84,7 @@ export async function bookJob(req, res) {
       }
     }
 
-    // ── Card-only validation (bKash does NOT need cardDetails) ──────────────
+    // ── Method-specific validation ───────────────────────────────────
     if (paymentMethod === 'card') {
       if (
         !cardDetails?.cardNumber ||
@@ -93,83 +92,57 @@ export async function bookJob(req, res) {
         !cardDetails?.cvv ||
         !cardDetails?.cardHolderName
       ) {
-        throw new ApiError(400, 'Complete card details required');
+        throw new ApiError(
+          400,
+          'Complete card details required: cardNumber, expiryDate, cvv, cardHolderName'
+        );
       }
       validateCardDetails(cardDetails);
     }
 
-    // ── Fetch documents ─────────────────────────────────────────────────────
+    // ── Fetch Documents ──────────────────────────────────────────────
     const user = await User.findById(userId).session(session);
     if (!user) throw new ApiError(404, 'User not found');
 
     const service = await Service.findById(serviceId).session(session);
     if (!service || !service.isActive) throw new ApiError(404, 'Service not available');
 
-    const Category = mongoose.model('Category');
-    const category = await Category.findById(service.categoryId).session(session);
-    if (!category || !category.isActive) throw new ApiError(404, 'Service category is inactive');
-
     const serviceRequest = await ServiceRequest.findOne({
       serviceId,
       providerId,
       status: 'approved',
     }).session(session);
-
-    if (!serviceRequest) throw new ApiError(400, 'No provider found for this service');
+    if (!serviceRequest) throw new ApiError(400, 'Provider not found for this service');
 
     const provider = await Provider.findById(providerId).session(session);
     if (!provider) throw new ApiError(404, 'Provider not found');
 
-    // ── parseTimeToMinutes helper ───────────────────────────────────────────
-    const parseTimeToMinutes = (timeStr) => {
-      const [hours, minutes] = timeStr.split(':').map(Number);
-      return hours * 60 + minutes;
-    };
-
-    const requestedMinutes = parseTimeToMinutes(schedule.time);
-
-    // ── Conflict check ──────────────────────────────────────────────────────
-    const scheduleDateOnly = new Date(schedule.date + 'T00:00:00');
-
-    const samedayJobs = await Job.find({
-      provider: providerId,
-      status: { $in: ['pending', 'accepted', 'in_progress'] },
-      'schedule.date': {
-        $gte: scheduleDateOnly,
-        $lt: new Date(scheduleDateOnly.getTime() + 24 * 60 * 60 * 1000),
-      },
-    })
-      .select('schedule.time')
-      .session(session)
-      .lean();
-
-    const conflictingJob = samedayJobs.find((job) => {
-      const existingMinutes = parseTimeToMinutes(job.schedule.time);
-      return Math.abs(requestedMinutes - existingMinutes) < 60;
-    });
-
-    if (conflictingJob) {
-      throw new ApiError(
-        409,
-        'Provider is busy at this time. Minimum 1 hour gap required between bookings. Please choose a different time.'
-      );
-    }
-
-    // ── Duplicate booking check ─────────────────────────────────────────────
+    // ── Schedule conflict check — ALL payment methods ──────────────────
+    // Block booking if an active job already exists within ±1 hour of the
+    // requested schedule. This runs BEFORE payment so money is never taken
+    // for a booking that will fail.
+    const CONFLICT_WINDOW_MS = 60 * 60 * 1000; // 1 hour in milliseconds
     const existingJob = await Job.findOne({
       customer: userId,
       service: serviceId,
       provider: providerId,
       status: { $in: ['pending', 'accepted', 'in_progress'] },
-      'schedule.date': scheduleDateTime,
-      'schedule.time': schedule.time,
+      'schedule.date': {
+        $gte: new Date(scheduleDateTime.getTime() - CONFLICT_WINDOW_MS),
+        $lte: new Date(scheduleDateTime.getTime() + CONFLICT_WINDOW_MS),
+      },
     }).session(session);
 
     if (existingJob) {
-      throw new ApiError(408, 'Already have an active booking for this service at this time');
+      const existingTime = existingJob.schedule?.time || 'N/A';
+      throw new ApiError(
+        409,
+        `You already have an active booking (Order #${existingJob.orderId}) scheduled at ${existingTime}. ` +
+        `Please choose a time at least 1 hour before or after your existing booking.`
+      );
     }
 
-    // ── COD dues limit check ────────────────────────────────────────────────
+    // ── COD: provider dues check ─────────────────────────────────────
     if (paymentMethod === 'cod') {
       const pendingDues = await Payment.aggregate([
         {
@@ -181,33 +154,28 @@ export async function bookJob(req, res) {
         },
         { $group: { _id: null, total: { $sum: '$returnToAdmin' } } },
       ]);
-
       const totalDues = pendingDues[0]?.total || 0;
       const COD_LIMIT = parseFloat(process.env.COD_DUES_LIMIT || '2000');
-
       if (totalDues >= COD_LIMIT) {
         throw new ApiError(
           400,
-          `Provider has pending dues of BDT ${totalDues}. Cannot accept new COD bookings until dues are cleared.`
+          `Provider has pending dues of BDT ${totalDues}. Cannot accept new COD bookings.`
         );
       }
     }
 
-    // ── Price calculation ───────────────────────────────────────────────────
+    // ── Price Calculation ────────────────────────────────────────────
     const servicePrice = service.price;
     const platformFeePercentage = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE || '10');
     const platformFee = parseFloat(((platformFeePercentage / 100) * servicePrice).toFixed(2));
     const providerAmount = parseFloat((servicePrice - platformFee).toFixed(2));
-
-    // ── Generate order ID ───────────────────────────────────────────────────
     const orderId = await generateOrderId();
 
-    // ── Create Job ──────────────────────────────────────────────────────────
-    let job, payment;
-
-    if (paymentMethod !== 'bkash') {
-      // ✅ CARD & COD: Create Job and Payment immediately
-      job = await Job.create(
+    // ────────────────────────────────────────────────────────────────
+    // COD FLOW — Job created immediately, no payment upfront
+    // ────────────────────────────────────────────────────────────────
+    if (paymentMethod === 'cod') {
+      const job = await Job.create(
         [
           {
             orderId,
@@ -217,17 +185,14 @@ export async function bookJob(req, res) {
             amount: servicePrice,
             status: 'pending',
             paymentStatus: 'pending',
-            paymentMethod,
-            schedule: {
-              date: scheduleDateTime,
-              time: schedule.time,
-            },
+            paymentMethod: 'cod',
+            schedule: { date: scheduleDateTime, time: schedule.time },
           },
         ],
         { session }
       );
 
-      payment = await Payment.create(
+      const payment = await Payment.create(
         [
           {
             jobId: job[0]._id,
@@ -237,244 +202,312 @@ export async function bookJob(req, res) {
             platformFee,
             totalAmount: servicePrice,
             providerAmount,
-            paymentMethod,
-            paymentGateway: paymentMethod === 'cod' ? 'cod' : 'sslcommerz',
+            paymentMethod: 'cod',
+            paymentGateway: 'cod',
             paymentStatus: 'pending',
-            escrowStatus: paymentMethod === 'cod' ? 'cod_pending' : 'pending',
-            returnToAdmin: paymentMethod === 'cod' ? platformFee : 0,
+            escrowStatus: 'cod_pending',
+            returnToAdmin: platformFee,
           },
         ],
         { session }
       );
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // CARD PAYMENT FLOW (existing — unchanged)
-    // ────────────────────────────────────────────────────────────────────────
-    if (paymentMethod === 'card') {
-      const paymentData = {
-        total_amount: servicePrice,
-        currency: 'BDT',
-        tran_id: `JOB_${job[0]._id}_${Date.now()}`,
-        success_url: `${process.env.BASE_URL}/api/payments/success`,
-        fail_url: `${process.env.BASE_URL}/api/payments/fail`,
-        cancel_url: `${process.env.BASE_URL}/api/payments/cancel`,
-        ipn_url: `${process.env.BASE_URL}/api/payments/ipn`,
-        cus_name: user.name,
-        cus_email: user.email,
-        cus_phone: user.phone,
-        cus_add1: user.location?.locationName || 'Dhaka',
-        shipping_method: 'NO',
-        product_name: service.name,
-        product_category: 'Service',
-        product_profile: 'general',
-      };
-
-      const sslResponse = await processSSLCommerzPayment(paymentData, cardDetails);
-
-      if (!sslResponse || sslResponse.status !== 'SUCCESS') {
-        throw new ApiError(400, 'Payment failed from gateway');
-      }
-
-      payment[0].paymentStatus = 'completed';
-      payment[0].escrowStatus = 'held_in_admin_wallet';
-      payment[0].sslCommerzTransactionId = paymentData.tran_id;
-      payment[0].sslCommerzReference = sslResponse.sessionkey;
-      await payment[0].save({ session });
-
-      job[0].paymentStatus = 'held_in_escrow';
-      await job[0].save({ session });
-
-      // ── Admin wallet escrow ─────────────────────────────────────────────
-      const adminUser = await User.findOne({ role: 'admin' }).session(session);
-      if (!adminUser) throw new ApiError(500, 'Admin not found');
-
-      let adminWallet = await Wallet.findOne({
-        userId: adminUser._id,
-        role: 'admin',
-      }).session(session);
-
-      if (!adminWallet) {
-        [adminWallet] = await Wallet.create(
-          [
-            {
-              userId: adminUser._id,
-              role: 'admin',
-              balance: 0,
-              totalEarnings: 0,
-              totalPlatformFees: 0,
-              isActive: true,
-            },
-          ],
-          { session }
-        );
-      }
-
-      adminWallet.balance += servicePrice;
-      adminWallet.totalEarnings += platformFee;
-      adminWallet.totalPlatformFees += platformFee;
-      adminWallet.totalHeld = (adminWallet.totalHeld || 0) + servicePrice;
-      adminWallet.transactionHistory.push(payment[0]._id);
-      await adminWallet.save({ session });
 
       await session.commitTransaction();
 
-      await createActivityLog({
-        userId,
-        action: 'JOB_BOOKED',
-        entityType: 'Job',
-        entityId: job[0]._id,
-        details: { orderId, amount: servicePrice, paymentMethod: 'card' },
-        req,
-      });
+      await createNotifications(
+        user._id,
+        provider.userId,
+        service.name,
+        orderId,
+        job[0]._id,
+        servicePrice,
+        'cod'
+      );
 
-      await createNotification({
-        userId,
-        title: 'Booking Confirmed',
-        message: `Your booking for "${service.name}" (Order #${orderId}) has been placed successfully. Awaiting provider confirmation.`,
-        type: 'job',
-        referenceId: job[0]._id,
-        metadata: { orderId, jobId: job[0]._id },
-      });
-
-      const providerUser = await User.findById(provider.userId);
-      if (providerUser) {
-        await createNotification({
-          userId: providerUser._id,
-          title: 'New Job Request',
-          message: `You have a new job request for "${service.name}" (Order #${orderId}). Please accept or reject.`,
-          type: 'job',
-          referenceId: job[0]._id,
-          metadata: { orderId, jobId: job[0]._id },
-        });
-      }
-
-      return res.status(201).json({
-        success: true,
-        message: 'Job booked successfully.',
-        data: {
-          job: job[0],
-          payment: payment[0],
-          gatewayUrl: sslResponse.GatewayPageURL,
-        },
-      });
+      return res.status(201).json(
+        new ApiResponse(
+          201,
+          { job: job[0], payment: payment[0] },
+          'Job booked successfully. Payment will be collected in cash.'
+        )
+      );
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // BKASH PAYMENT FLOW (new)
-    // Creates an SSLCommerz session locked to bKash, returns gateway URL.
-    // Payment is NOT confirmed here — confirmation happens in the callback.
-    // ────────────────────────────────────────────────────────────────────────
-    if (paymentMethod === 'bkash') {
-      const tranId = `BKASH_${userId}_${Date.now()}`;
+    // ────────────────────────────────────────────────────────────────
+    // ALL ONLINE PAYMENTS — Shared SSLCommerz payload
+    // ────────────────────────────────────────────────────────────────
 
-      const paymentData = {
-        total_amount: servicePrice,
-        currency: 'BDT',
-        tran_id: tranId,
-        success_url: `${process.env.BASE_URL}/api/payments/bkash/success`,
-        fail_url: `${process.env.BASE_URL}/api/payments/bkash/fail`,
-        cancel_url: `${process.env.BASE_URL}/api/payments/bkash/cancel`,
-        ipn_url: `${process.env.BASE_URL}/api/payments/bkash/ipn`,
-        cus_name: user.name,
-        cus_email: user.email,
-        cus_phone: user.phone || '',
-        cus_add1: user.location?.locationName || 'Dhaka',
-        product_name: service.name,
-        product_category: 'Service',
-        product_profile: 'general',
-      };
-
-      const sslResponse = await initiateBkashSession(paymentData);
-
-      if (!sslResponse || sslResponse.status !== 'SUCCESS') {
-        throw new ApiError(400, 'Failed to initiate bKash payment session');
-      }
-
-      // ✅ STORE BOOKING INTENT (NOT Job/Payment)
-      const bookingIntent = await BookingIntent.create({
-        tranId,
-        bookingData: {
-          userId,
-          serviceId,
-          providerId,
-          schedule,
-          paymentMethod: 'bkash',
-          servicePrice,
-          platformFee,
-          providerAmount,
-          orderId,
-        },
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
-      });
-
-      await session.commitTransaction();
-
-      // Return gateway URL WITHOUT creating Job yet
-      return res.status(201).json({
-        success: true,
-        message: 'bKash payment session created. Complete payment to create booking.',
-        data: {
-          gatewayUrl: sslResponse.GatewayPageURL,
-          tranId,
-        },
-      });
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
-    // COD FLOW (existing — unchanged)
-    // ────────────────────────────────────────────────────────────────────────
-    await session.commitTransaction();
-
-    await createActivityLog({
+    // ── Prevent duplicate concurrent payment sessions ────────────────
+    // If a pending BookingIntent already exists for same user+service+provider
+    // AND within ±1 hour of the new requested time, block it.
+    // This allows the user to book different schedules without waiting for intent expiry.
+    const pendingIntent = await BookingIntent.findOne({
       userId,
-      action: 'JOB_BOOKED',
-      entityType: 'Job',
-      entityId: job[0]._id,
-      details: { orderId, amount: servicePrice, paymentMethod: 'cod' },
-      req,
-    });
-
-    await createNotification({
-      userId,
-      title: 'Booking Confirmed (Cash on Delivery)',
-      message: `Your booking for "${service.name}" (Order #${orderId}) has been placed. You will pay BDT ${servicePrice} in cash to the provider.`,
-      type: 'job',
-      referenceId: job[0]._id,
-      metadata: { orderId, jobId: job[0]._id },
-    });
-
-    const providerUser = await User.findById(provider.userId);
-    if (providerUser) {
-      await createNotification({
-        userId: providerUser._id,
-        title: 'New Job Request (Cash on Delivery)',
-        message: `You have a new COD job request for "${service.name}" (Order #${orderId}). Customer will pay BDT ${servicePrice} in cash. Please accept or reject.`,
-        type: 'job',
-        referenceId: job[0]._id,
-        metadata: { orderId, jobId: job[0]._id },
-      });
-    }
-
-    return res.status(201).json({
-      success: true,
-      message: 'Job booked successfully. Payment will be collected in cash.',
-      data: {
-        job: job[0],
-        payment: payment[0],
+      serviceId,
+      providerId,
+      status: 'pending',
+      'schedule.date': {
+        $gte: new Date(scheduleDateTime.getTime() - CONFLICT_WINDOW_MS),
+        $lte: new Date(scheduleDateTime.getTime() + CONFLICT_WINDOW_MS),
       },
     });
 
+    if (pendingIntent) {
+      // Calculate remaining time so user knows when to retry
+      const expiresIn = Math.max(
+        0,
+        Math.floor((new Date(pendingIntent.expiresAt) - Date.now()) / 1000 / 60)
+      );
+      const pendingTime = pendingIntent.schedule?.time || 'N/A';
+      throw new ApiError(
+        409,
+        `A payment session is already in progress for this service at ${pendingTime}. ` +
+        `Complete the previous payment or wait ${expiresIn} minute(s) for it to expire.`
+      );
+    }
+
+    const tranId = `${paymentMethod.toUpperCase()}_${userId}_${Date.now()}_${Math.random()
+      .toString(36)
+      .substr(2, 6)}`;
+
+    // SSLCommerz MUST communicate with the backend server, NOT the mobile app.
+    // So we use BASE_URL (the backend's URL) for success_url, fail_url, etc.
+    // The backend will process the callback and THEN redirect to APP_BASE_URL.
+    const BASE_URL = process.env.BASE_URL || 'http://localhost:5000';
+
+    const paymentData = {
+      total_amount: servicePrice,
+      currency: 'BDT',
+      tran_id: tranId,
+      success_url: `${BASE_URL}/api/payments/success`,
+      fail_url: `${BASE_URL}/api/payments/fail`,
+      cancel_url: `${BASE_URL}/api/payments/cancel`,
+      ipn_url: `${BASE_URL}/api/payments/ipn`,
+      cus_name: user.name,
+      cus_email: user.email,
+      cus_phone: user.phone || user.phoneNumber || '01700000000',
+      cus_add1: user.location?.locationName || 'Dhaka',
+      cus_city: 'Dhaka',
+      cus_country: 'Bangladesh',
+      shipping_method: 'NO',
+      product_name: service.name,
+      product_category: 'Service',
+      product_profile: 'general',
+      // multi_card_name restricts SSLCommerz hosted page to ONLY the chosen method.
+      // This prevents user from switching to a different method on the gateway page.
+      payment_method: paymentMethod !== 'card' ? paymentMethod : undefined,
+    };
+
+    // ────────────────────────────────────────────────────────────────
+    // CARD FLOW — Direct API with card credentials
+    // Job created immediately if SSL charges directly (no GatewayPageURL)
+    // Falls back to BookingIntent + hosted redirect if 3DS is required
+    // ────────────────────────────────────────────────────────────────
+    if (paymentMethod === 'card') {
+      let sslResponse;
+      try {
+        sslResponse = await processSSLCommerzCardPayment(paymentData, cardDetails);
+      } catch (err) {
+        throw new ApiError(502, `Card payment gateway error: ${err.message}`);
+      }
+
+      // Card payment must return SUCCESS — any other status is a failure
+      if (!sslResponse || sslResponse.status !== 'SUCCESS') {
+        throw new ApiError(
+          400,
+          `Card payment failed: ${sslResponse?.failedreason || 'Payment declined by gateway'}`
+        );
+      }
+
+      // ── Create Job + Payment immediately on SUCCESS ───────────────
+      // We trust the SUCCESS status from SSLCommerz directly.
+      // In sandbox, GatewayPageURL may be returned alongside SUCCESS — we
+      // ignore it and always create the job right here so the user never
+      // has to visit a hosted page when paying by card.
+      const job = await Job.create(
+        [
+          {
+            orderId,
+            provider: provider._id,
+            customer: user._id,
+            service: serviceId,
+            amount: servicePrice,
+            status: 'pending',
+            paymentStatus: 'held_in_escrow',
+            paymentMethod: 'card',
+            schedule: { date: scheduleDateTime, time: schedule.time },
+          },
+        ],
+        { session }
+      );
+
+      const payment = await Payment.create(
+        [
+          {
+            jobId: job[0]._id,
+            customerId: user._id,
+            providerId: provider._id,
+            servicePrice,
+            platformFee,
+            totalAmount: servicePrice,
+            providerAmount,
+            paymentMethod: 'card',
+            paymentGateway: 'sslcommerz',
+            paymentStatus: 'completed',
+            escrowStatus: 'held_in_admin_wallet',
+            sslCommerzTransactionId: sslResponse.tran_id || tranId,
+            sslCommerzValidation: true,
+          },
+        ],
+        { session }
+      );
+
+      await updateAdminWallet(session, servicePrice, platformFee, payment[0]._id);
+      await session.commitTransaction();
+
+      await createNotifications(
+        user._id,
+        provider.userId,
+        service.name,
+        orderId,
+        job[0]._id,
+        servicePrice,
+        'card'
+      );
+
+      return res.status(201).json(
+        new ApiResponse(
+          201,
+          { job: job[0], payment: payment[0] },
+          'Job booked and card payment confirmed successfully.'
+        )
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // MFS (bKash / Nagad / Rocket) & BANK (Internet Banking) FLOW
+    // Redirects to SSLCommerz hosted page locked to chosen method
+    // Job is created ONLY after successful payment callback
+    // BookingIntent is auto-deleted by MongoDB TTL on expiry
+    // ────────────────────────────────────────────────────────────────
+    let sslResponse;
+    try {
+      sslResponse = await initiateSSLCommerzPayment(paymentData);
+    } catch (err) {
+      throw new ApiError(502, `Payment gateway error: ${err.message}`);
+    }
+
+    if (!sslResponse || sslResponse.status !== 'SUCCESS') {
+      throw new ApiError(
+        400,
+        `Failed to initiate ${paymentMethod} payment: ${sslResponse?.failedreason || 'Gateway error'}`
+      );
+    }
+
+    // Create BookingIntent — holds booking data until callback confirms payment
+    await BookingIntent.create({
+      tranId,
+      orderId,
+      userId: user._id,
+      providerId: provider._id,
+      serviceId: service._id,
+      servicePrice,
+      platformFee,
+      providerAmount,
+      paymentMethod,
+      schedule: { date: scheduleDateTime, time: schedule.time },
+    });
+
+    await session.commitTransaction();
+
+    const methodLabels = {
+      bkash: 'bKash',
+      nagad: 'Nagad',
+      rocket: 'Rocket',
+      bank: 'Internet Banking (Bank Transfer)',
+    };
+
+    return res.status(201).json(
+      new ApiResponse(
+        201,
+        {
+          gatewayUrl: sslResponse.GatewayPageURL,
+          tranId,
+          paymentMethod,
+          expiresIn: 3600,
+        },
+        `${methodLabels[paymentMethod] || paymentMethod.toUpperCase()} payment session created. Complete payment to confirm booking.`
+      )
+    );
   } catch (error) {
     await session.abortTransaction();
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message,
-    });
+    console.error('[bookJob] Error:', error);
+    return res
+      .status(error.statusCode || 500)
+      .json(new ApiResponse(error.statusCode || 500, null, error.message));
   } finally {
     session.endSession();
   }
 }
+
+
+
+// ─────────────────────────────────────────────────────────────
+// HELPER FUNCTIONS
+// ─────────────────────────────────────────────────────────────
+async function updateAdminWallet(session, totalAmount, platformFee, paymentId) {
+  const adminUser = await User.findOne({ role: 'admin' }).session(session);
+  if (!adminUser) throw new Error('Admin not found');
+
+  let adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
+
+  if (!adminWallet) {
+    [adminWallet] = await Wallet.create([{
+      userId: adminUser._id,
+      role: 'admin',
+      balance: 0,
+      totalEarnings: 0,
+      totalPlatformFees: 0,
+      isActive: true,
+      totalHeld: 0,
+      transactionHistory: []
+    }], { session });
+  }
+
+  adminWallet.balance += totalAmount;
+  adminWallet.totalEarnings += platformFee;
+  adminWallet.totalPlatformFees += platformFee;
+  adminWallet.totalHeld = (adminWallet.totalHeld || 0) + totalAmount;
+  adminWallet.transactionHistory.push(paymentId);
+  await adminWallet.save({ session });
+}
+
+async function createNotifications(customerId, providerUserId, serviceName, orderId, jobId, amount, method) {
+
+
+  await createNotification({
+    userId: customerId,
+    title: 'Booking Confirmed',
+    message: `Your booking for "${serviceName}" (Order #${orderId}) has been confirmed. Payment of BDT ${amount} via ${method.toUpperCase()} successful.`,
+    type: 'job',
+    referenceId: jobId,
+    metadata: { orderId, jobId, amount, method },
+  });
+
+  if (providerUserId) {
+    await createNotification({
+      userId: providerUserId,
+      title: 'New Job Confirmed',
+      message: `New job for "${serviceName}" (Order #${orderId}) has been confirmed. Payment verified.`,
+      type: 'job',
+      referenceId: jobId,
+      metadata: { orderId, jobId, amount, method },
+    });
+  }
+}
+
+
+
 
 
 export async function acceptJob(req, res) {
@@ -976,6 +1009,7 @@ export const getMyOrders = async (req, res) => {
       status: order.status,
       paymentStatus: order.paymentStatus,
       amount: order.amount,
+      schedule: order.schedule,
       service: {
         _id: order.service?._id,
         name: order.service?.name,
@@ -1091,6 +1125,7 @@ export const getOrderById = async (req, res) => {
         email: order.customer?.email,
         profilePicture: order.customer?.profilePicture
       },
+      schedule: order.schedule,
       payment: payment ? {
         _id: payment._id,
         totalAmount: payment.totalAmount,

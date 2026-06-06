@@ -1,40 +1,26 @@
-import express from 'express';
+import { Router } from 'express';
 import {
-  // Card callbacks (existing)
   paymentSuccess,
   paymentFailed,
   paymentCancel,
-  // bKash callbacks (new)
-  bkashPaymentSuccess,
-  bkashPaymentFailed,
-  bkashPaymentCancel,
-  bkashIpnHandler,
+  paymentIPN,
 } from '../controllers/payment.controller.js';
 
-const router = express.Router();
+const router = Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CARD PAYMENT CALLBACKS (existing — unchanged)
+// SSLCommerz CALLBACK routes — called by SSLCommerz gateway server
+// These process the payment, create/reject the job, then redirect to results
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/success', paymentSuccess);
+router.post('/success', paymentSuccess);
+
 router.get('/fail', paymentFailed);
+router.post('/fail', paymentFailed);
+
 router.get('/cancel', paymentCancel);
+router.post('/cancel', paymentCancel);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// BKASH PAYMENT CALLBACKS (new)
-// SSLCommerz can POST or GET to these URLs depending on its config.
-// Register both so the gateway works in all configurations.
-// ─────────────────────────────────────────────────────────────────────────────
-router.get('/bkash/success', bkashPaymentSuccess);
-router.post('/bkash/success', bkashPaymentSuccess);
-
-router.get('/bkash/fail', bkashPaymentFailed);
-router.post('/bkash/fail', bkashPaymentFailed);
-
-router.get('/bkash/cancel', bkashPaymentCancel);
-router.post('/bkash/cancel', bkashPaymentCancel);
-
-// IPN is always a server-to-server POST
-router.post('/bkash/ipn', bkashIpnHandler);
+router.post('/ipn', paymentIPN);   // Server-to-server — must return 200
 
 export default router;

@@ -1,33 +1,63 @@
+// models/BookingIntent.model.js
 import mongoose from 'mongoose';
 
-const bookingIntentSchema = new mongoose.Schema(
-  {
-    tranId: {
-      type: String,
-      unique: true,
-      index: true,
-    },
-    bookingData: {
-      userId: mongoose.Schema.Types.ObjectId,
-      serviceId: mongoose.Schema.Types.ObjectId,
-      providerId: mongoose.Schema.Types.ObjectId,
-      schedule: {
-        date: String,
-        time: String,
-      },
-      paymentMethod: String,
-      servicePrice: Number,
-      platformFee: Number,
-      tranId: String,
-    },
-    expiresAt: {
-      type: Date,
-      default: () => new Date(Date.now() + 60 * 60 * 1000), // 1 hour
-      index: { expireAfterSeconds: 0 }, // Auto-delete after expiry
-    },
+const bookingIntentSchema = new mongoose.Schema({
+  tranId: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true,
   },
-  { timestamps: true }
-);
+  orderId: { type: String, required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'User' },
+  providerId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Provider' },
+  serviceId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Service' },
+  servicePrice: { type: Number, required: true },
+  platformFee: { type: Number, required: true },
+  providerAmount: { type: Number, required: true },
 
-const BookingIntent = mongoose.models.BookingIntent || mongoose.model('BookingIntent', bookingIntentSchema);
+  paymentMethod: {
+    type: String,
+    enum: ['card', 'bkash', 'nagad', 'rocket', 'bank'],
+    required: true,
+  },
+
+  // Lifecycle status of this intent
+  status: {
+    type: String,
+    enum: ['pending', 'completed', 'failed', 'cancelled'],
+    default: 'pending',
+    index: true,
+  },
+
+  schedule: {
+    date: { type: Date, required: true },
+    time: { type: String, required: true },
+  },
+
+  // Stored only for card (for direct-charge fallback logging)
+  cardDetails: {
+    cardNumber: String,
+    expiryDate: String,
+    cardHolderName: String,
+    cvv: String,
+  },
+
+  // 1-hour TTL — MongoDB auto-deletes after expiry
+  expiresAt: {
+    type: Date,
+    default: () => new Date(Date.now() + 60 * 60 * 1000),
+  },
+
+  createdAt: { type: Date, default: Date.now },
+});
+
+// Auto-cleanup expired intents via MongoDB TTL
+bookingIntentSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+// Prevent model recompilation error on hot-reload
+const BookingIntent =
+  mongoose.models.BookingIntent ||
+  mongoose.model('BookingIntent', bookingIntentSchema);
+
 export default BookingIntent;

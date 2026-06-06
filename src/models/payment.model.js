@@ -47,7 +47,7 @@ const paymentSchema = new mongoose.Schema(
     // 'sslcommerz' covers both card and bKash (both go through SSLCommerz)
     paymentGateway: {
       type: String,
-      enum: ['sslcommerz', 'cod'],
+      enum: ['sslcommerz', 'cod', 'bank_transfer'],
       default: 'sslcommerz',
     },
 
@@ -55,7 +55,7 @@ const paymentSchema = new mongoose.Schema(
     // Added 'bkash' alongside existing 'card' and 'cod'
     paymentMethod: {
       type: String,
-      enum: ['card', 'cod', 'bkash', 'nagad', 'rocket'],
+      enum: ['card', 'cod', 'bkash', 'nagad', 'rocket', 'bank'],
       default: 'card',
       index: true,
     },

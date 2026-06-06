@@ -7,7 +7,7 @@ import User from '../../models/user.model.js';
 import Wallet from '../../models/wallet.model.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import { createNotification } from '../../utils/notification.js';
-import { processSSLCommerzPayment } from '../../service/sslcommerz.js';
+import { initiateSSLCommerzPayment } from '../../service/sslcommerz.js';
 import { validateCardDetails } from '../../utils/validateCardDetails.js';
 export const paymentHistory = async (req, res) => {
     try {
@@ -195,6 +195,7 @@ export const payToAdmin = async (req, res) => {
 
         // ── SSLCommerz payment ───────────────────────────────────────────────────
         const tran_id = `COD_DUES_${provider._id}_${Date.now()}`;
+    const BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5000';
 
         const paymentData = {
             total_amount: totalDues,
@@ -214,7 +215,7 @@ export const payToAdmin = async (req, res) => {
             product_profile: 'general',
         };
 
-        const sslResponse = await processSSLCommerzPayment(paymentData, cardDetails);
+        const sslResponse = await initiateSSLCommerzPayment(paymentData, cardDetails);
 
         if (!sslResponse || sslResponse.status !== 'SUCCESS') {
             throw new ApiError(400, 'Payment failed from gateway');

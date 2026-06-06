@@ -1,3 +1,4 @@
+// service/sslcommerz.js
 import axios from 'axios';
 
 const SSL_COMMERZ_STORE_ID = process.env.SSL_COMMERZ_STORE_ID;
@@ -8,9 +9,71 @@ const SSL_COMMERZ_BASE_URL = SSL_COMMERZ_IS_SANDBOX
   : 'https://secure.sslcommerz.com';
 
 // ─────────────────────────────────────────────────────────────
-// CARD: Direct payment with card credentials (existing, unchanged)
+// INITIATE PAYMENT WITH SPECIFIC METHOD
 // ─────────────────────────────────────────────────────────────
-export async function processSSLCommerzPayment(paymentData, cardDetails) {
+// service/sslcommerz.js - Ensure payment_option is correct
+
+export async function initiateSSLCommerzPayment(paymentData) {
+  try {
+    const postData = {
+      store_id: SSL_COMMERZ_STORE_ID,
+      store_passwd: SSL_COMMERZ_STORE_PASSWORD,
+      total_amount: paymentData.total_amount,
+      currency: paymentData.currency || 'BDT',
+      tran_id: paymentData.tran_id,
+      success_url: paymentData.success_url,
+      fail_url: paymentData.fail_url,
+      cancel_url: paymentData.cancel_url,
+      ipn_url: paymentData.ipn_url,
+      cus_name: paymentData.cus_name,
+      cus_email: paymentData.cus_email,
+      cus_phone: paymentData.cus_phone,
+      cus_add1: paymentData.cus_add1 || 'Dhaka',
+      cus_city: paymentData.cus_city || 'Dhaka',
+      cus_country: paymentData.cus_country || 'Bangladesh',
+      shipping_method: paymentData.shipping_method || 'NO',
+      product_name: paymentData.product_name,
+      product_category: paymentData.product_category || 'Service',
+      product_profile: paymentData.product_profile || 'general',
+      emi_option: 0,
+    };
+
+    // Map payment methods to SSLCommerz multi_card_name
+    // Setting multi_card_name locks the hosted page to show ONLY that method
+    // SSLCommerz expects specific internal gateway names.
+    const methodMapping = {
+      'bkash': 'bkash',
+      'nagad': 'nagad',
+      'rocket': 'dbblmobilebanking',
+      'bank': 'internetbank',
+      'card': 'visa,master,amex,othercards',
+    };
+    if (paymentData.payment_method) {
+      postData.multi_card_name = methodMapping[paymentData.payment_method];
+      postData.payment_option = paymentData.payment_method;
+    }
+    console.log('[SSLCommerz] Post Data:', {
+      ...postData,
+      store_passwd: '***HIDDEN***'
+    });
+
+    const response = await axios.post(
+      `${SSL_COMMERZ_BASE_URL}/gwprocess/v4/api.php`,
+      new URLSearchParams(postData),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error('SSLCommerz Init Error:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// CARD: Direct payment with card credentials
+// ─────────────────────────────────────────────────────────────
+export async function processSSLCommerzCardPayment(paymentData, cardDetails) {
   try {
     const postData = {
       store_id: SSL_COMMERZ_STORE_ID,
@@ -35,7 +98,7 @@ export async function processSSLCommerzPayment(paymentData, cardDetails) {
       card_number: cardDetails.cardNumber,
       card_expiry: cardDetails.expiryDate,
       card_cvv: cardDetails.cvv,
-      card_type: 'VISA',
+      card_type: cardDetails.cardType || 'VISA',
     };
 
     const response = await axios.post(
@@ -52,89 +115,83 @@ export async function processSSLCommerzPayment(paymentData, cardDetails) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// BKASH: Initiate SSLCommerz session restricted to bKash only
-// Returns a GatewayPageURL the frontend redirects to
+// VALIDATION: Shared by all payment methods
 // ─────────────────────────────────────────────────────────────
-export async function initiateBkashSession(paymentData) {
-  try {
-    const postData = {
-      store_id: SSL_COMMERZ_STORE_ID,
-      store_passwd: SSL_COMMERZ_STORE_PASSWORD,
-      total_amount: paymentData.total_amount,
-      currency: paymentData.currency || 'BDT',
-      tran_id: paymentData.tran_id,
-      success_url: paymentData.success_url,
-      fail_url: paymentData.fail_url,
-      cancel_url: paymentData.cancel_url,
-      ipn_url: paymentData.ipn_url,
-      cus_name: paymentData.cus_name,
-      cus_email: paymentData.cus_email,
-      cus_phone: paymentData.cus_phone,
-      cus_add1: paymentData.cus_add1 || 'Dhaka',
-      cus_city: paymentData.cus_city || 'Dhaka',
-      cus_country: paymentData.cus_country || 'Bangladesh',
-      shipping_method: 'NO',
-      product_name: paymentData.product_name,
-      product_category: paymentData.product_category || 'Service',
-      product_profile: 'general',
+// service/sslcommerz.js - Fix validation
 
-      // ── bKash-specific SSLCommerz parameters ──────────────────
-      // Restrict the gateway page to show only bKash as payment option
-      emi_option: 0,
-      allowed_bin: 'bKash',        // Whitelists bKash on the hosted page
-      payment_option: 'only_bkash', // SSLCommerz flag to filter payment methods
-    };
-
-    const response = await axios.post(
-      `${SSL_COMMERZ_BASE_URL}/gwprocess/v4/api.php`,
-      new URLSearchParams(postData),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
-
-    return response.data; // Expect { status: 'SUCCESS', GatewayPageURL: '...', sessionkey: '...' }
-  } catch (error) {
-    console.error('SSLCommerz bKash session error:', error.message);
-    throw error;
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// VALIDATION: Shared by both card and bKash callback handlers
-// ─────────────────────────────────────────────────────────────
 export const validateSSLCommerzPayment = async (val_id) => {
   try {
     const store_id = SSL_COMMERZ_STORE_ID;
-    const store_passwd = SSL_COMMERZ_STORE_PASSWORD;   // ← Sirf actual password (no @ssl)
+    const store_passwd = SSL_COMMERZ_STORE_PASSWORD;
+
+    console.log('[SSLCommerz Validation] Request params:', {
+      val_id,
+      store_id,
+      hasPassword: !!store_passwd,
+      passwordLength: store_passwd?.length
+    });
 
     if (!val_id || !store_id || !store_passwd) {
       throw new Error('Missing SSLCommerz Store ID or Password in .env');
     }
 
-    const response = await axios.get(
-      'https://sandbox.sslcommerz.com/validator/api/validationserverAPI.php',
-      {
-        params: {
-          val_id,
-          store_id,
-          store_passwd,
-          format: 'json',
-          v: 1                          // Important for better response
-        },
-        timeout: 15000
+    const apiUrl = `${SSL_COMMERZ_BASE_URL}/validator/api/validationserverAPI.php`;
+
+    const response = await axios.get(apiUrl, {
+      params: {
+        val_id,
+        store_id,
+        store_passwd,
+        format: 'json',
+        v: 1
+      },
+      timeout: 15000,
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
       }
-    );
-
-    console.log('[SSLCommerz Validation Success]', response.data);
-    return response.data;
-
-  } catch (error) {
-    console.error('[SSLCommerz Validation FAILED]');
-    console.error({
-      status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data,
-      message: error.message
     });
+
+    console.log('[SSLCommerz Validation] Response status:', response.status);
+    console.log('[SSLCommerz Validation] Response data:', response.data);
+
+    return response.data;
+  } catch (error) {
+    // Log the failure but return null — let the CALLER decide whether to
+    // fall back to trusting the callback status (sandbox) or fail hard (prod)
+    console.error('[SSLCommerz Validation FAILED]', {
+      message: error.message,
+      httpStatus: error.response?.status,
+      val_id,
+    });
+    // Re-throw so the caller can distinguish network/server errors from
+    // a clean 'INVALID' response
     throw error;
   }
 };
+// ─────────────────────────────────────────────────────────────
+// REFUND FUNCTION
+// ─────────────────────────────────────────────────────────────
+export async function refundSSLCommerzPayment(refundData) {
+  try {
+    const postData = {
+      store_id: SSL_COMMERZ_STORE_ID,
+      store_passwd: SSL_COMMERZ_STORE_PASSWORD,
+      refund_amount: refundData.amount,
+      refund_remarks: refundData.reason || 'Customer refund',
+      bank_tran_id: refundData.bank_tran_id,
+      refund_opt: 'yes',
+    };
+
+    const response = await axios.post(
+      `${SSL_COMMERZ_BASE_URL}/validator/api/merchantTransIDvalidationAPI.php`,
+      new URLSearchParams(postData),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error('SSLCommerz Refund Error:', error.message);
+    throw error;
+  }
+}

@@ -34,6 +34,11 @@ const walletSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    totalHeld: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     transactionHistory: [
       {
         type: mongoose.Schema.Types.ObjectId,

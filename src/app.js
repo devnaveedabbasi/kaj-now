@@ -58,6 +58,46 @@ app.get("/", (req, res) => {
 // Routes
 app.use("/api", routes);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PAYMENT RESULT PAGES — /api/payment-result/*
+// SSLCommerz callbacks redirect here. Returns JSON so Postman / mobile app
+// WebView can read the result. When real app is ready, just change FRONTEND_URL
+// in .env to the app's deep link (e.g. kajnow://) — these routes stay as
+// fallback for server-side testing.
+// ─────────────────────────────────────────────────────────────────────────────
+app.get("/api/payment-result/success", (req, res) => {
+  return res.status(200).json({
+    success: true,
+    message: "Payment successful! Booking confirmed.",
+    job: req.query.job || null,
+    method: req.query.method || null,
+  });
+});
+
+app.get("/api/payment-result/failed", (req, res) => {
+  return res.status(200).json({
+    success: false,
+    message: "Payment failed or booking could not be completed.",
+    error: req.query.error || "unknown",
+    transaction: req.query.transaction || null,
+  });
+});
+
+app.get("/api/payment-result/cancelled", (req, res) => {
+  return res.status(200).json({
+    success: false,
+    message: "Payment was cancelled.",
+    transaction: req.query.transaction || null,
+  });
+});
+
+app.get("/api/payment-result/error", (req, res) => {
+  return res.status(500).json({
+    success: false,
+    message: "An unexpected error occurred during payment processing.",
+  });
+});
+
 // ----------------------
 // 404 HANDLER (IMPORTANT)
 // ----------------------
