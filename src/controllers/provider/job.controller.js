@@ -491,49 +491,49 @@ export async function startJob(req, res) {
 
 
     // ── Schedule check — 1 ghante ka rule ──────────────────
-    // if (job.schedule?.date) {
-    //   // Current UTC timestamp
-    //   const now = Date.now();
+    if (job.schedule?.date) {
+      // Current UTC timestamp
+      const now = Date.now();
 
-    //   // Scheduled UTC timestamp
-    //   const scheduledTime = new Date(job.schedule.date).getTime();
+      // Scheduled UTC timestamp
+      const scheduledTime = new Date(job.schedule.date).getTime();
 
-    //   // Difference in minutes
-    //   const diffMinutes = (scheduledTime - now) / (1000 * 60);
+      // Difference in minutes
+      const diffMinutes = (scheduledTime - now) / (1000 * 60);
 
-    //   // Debugging
-    //   console.log("==================================");
-    //   console.log("NOW UTC:", new Date(now).toISOString());
-    //   console.log(
-    //     "SCHEDULE UTC:",
-    //     new Date(scheduledTime).toISOString()
-    //   );
-    //   console.log("DIFF MINUTES:", diffMinutes);
-    //   console.log("==================================");
+      // Debugging
+      console.log("==================================");
+      console.log("NOW UTC:", new Date(now).toISOString());
+      console.log(
+        "SCHEDULE UTC:",
+        new Date(scheduledTime).toISOString()
+      );
+      console.log("DIFF MINUTES:", diffMinutes);
+      console.log("==================================");
 
-    //   // User can only start within 1 hour before schedule
-    //   if (diffMinutes > 60) {
-    //     const hoursLeft = Math.floor(diffMinutes / 60);
-    //     const minsLeft = Math.floor(diffMinutes % 60);
+      // User can only start within 1 hour before schedule
+      if (diffMinutes > 60) {
+        const hoursLeft = Math.floor(diffMinutes / 60);
+        const minsLeft = Math.floor(diffMinutes % 60);
 
-    //     throw new ApiError(
-    //       400,
-    //       `Job cannot be started. You can start it 1 hour before the scheduled time. There are still ${hoursLeft}h ${minsLeft}m remaining.`
-    //     );
-    //   }
+        throw new ApiError(
+          400,
+          `Job cannot be started. You can start it 1 hour before the scheduled time. There are still ${hoursLeft}h ${minsLeft}m remaining.`
+        );
+      }
 
-    //   // Allow start up to 2 hours after scheduled time
-    //   const twoHoursAfter = scheduledTime + 2 * 60 * 60 * 1000;
+      // Allow start up to 2 hours after scheduled time
+      const twoHoursAfter = scheduledTime + 2 * 60 * 60 * 1000;
 
-    //   if (now > twoHoursAfter) {
-    //     throw new ApiError(
-    //       400,
-    //       "Scheduled time expired more than 2 hours ago."
-    //     );
-    //   }
+      if (now > twoHoursAfter) {
+        throw new ApiError(
+          400,
+          "Scheduled time expired more than 2 hours ago."
+        );
+      }
 
-    //   console.log("JOB START ALLOWED");
-    // }
+      console.log("JOB START ALLOWED");
+    }
 
     job.status = 'in_progress';
     job.startedAt = new Date();
