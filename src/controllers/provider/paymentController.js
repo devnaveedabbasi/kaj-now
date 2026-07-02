@@ -195,8 +195,8 @@ export const payToAdmin = async (req, res) => {
 
         // ── SSLCommerz payment ───────────────────────────────────────────────────
         const tran_id = `COD_DUES_${provider._id}_${Date.now()}`;
-    const BASE_URL = process.env.APP_BASE_URL;
-console.log(BASE_URL, process.env.APP_BASE_URL, 'BASE_URL for SSLCommerz callbacks');
+        const BASE_URL = process.env.APP_BASE_URL;
+        console.log(BASE_URL, process.env.APP_BASE_URL, 'BASE_URL for SSLCommerz callbacks');
         const paymentData = {
             total_amount: totalDues,
             currency: 'BDT',

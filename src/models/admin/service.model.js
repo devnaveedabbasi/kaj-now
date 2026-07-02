@@ -18,6 +18,12 @@ const serviceSchema = new mongoose.Schema({
     isDeleted: { type: Boolean, default: false },
     reviews: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Review' }],
     averageRating: { type: Number, default: 3 },
+    subServices: [
+        {
+            name: { type: String, required: true, trim: true },
+            price: { type: Number, required: true },
+        }
+    ],
 }, { timestamps: true });
 
 // Method to update average rating

@@ -1,13 +1,15 @@
 import express from 'express';
-import { 
-  createService, 
-  getAllServices, 
-  getServiceById, 
-  updateService,  
+import {
+  createService,
+  getAllServices,
+  getServiceById,
+  updateService,
   toggleServiceActive,
   softDeleteService,
   hardDeleteService,
-  getServicesByCategory
+  getServicesByCategory,
+  setSubServices,
+  deleteSubService
 } from '../../controllers/admin/service.controller.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { uploadServiceFiles } from '../../middleware/upload.js';
@@ -33,5 +35,9 @@ router.put('/:id', uploadServiceFiles.fields([
 router.patch('/:id/toggle-active', asyncHandler(toggleServiceActive));
 router.delete('/:id/soft', asyncHandler(softDeleteService));
 router.delete('/:id/hard', asyncHandler(hardDeleteService));
+
+// Sub-services
+router.post('/:id/sub-services', asyncHandler(setSubServices));
+router.delete('/:id/sub-services/:subId', asyncHandler(deleteSubService));
 
 export default router;

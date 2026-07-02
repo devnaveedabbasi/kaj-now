@@ -1,20 +1,36 @@
 import express from "express";
 import path from "path";
 import { createServer } from "http";
+import { Server } from "socket.io";
 import connectDb from "./config/db.js";
 import routes from "./routes/index.js";
 import cors from "cors";
 import requestLogger from "./middleware/requestLogger.js";
 import { ApiError } from "./utils/errorHandler.js";
 import errorHandler from "./middleware/errorHandler.js";
+import { initSocket } from "./config/socket.js";
+import { generateContractPdfIfMissing } from "./utils/generateContract.js";
 
 const app = express();
 const server = createServer(app);
+
+// ── Socket.IO Setup ───────────────────────────────────────────
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+  transports: ["websocket", "polling"],
+});
+
+initSocket(io);
+// ─────────────────────────────────────────────────────────────
 
 // Allowed origins
 const allowedOrigins = [
   "https://kaj-now.vercel.app",
   "http://localhost:3000",
+  "http://localhost:3001",
   "http://localhost:5000",
   "http://103.132.96.120:3000",
   "http://192.168.1.46:3000",
@@ -48,6 +64,9 @@ app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
+app.use("/contracts", express.static(path.join(process.cwd(), "public/contracts")));
+
+generateContractPdfIfMissing();
 app.use(requestLogger);
 
 // Health check

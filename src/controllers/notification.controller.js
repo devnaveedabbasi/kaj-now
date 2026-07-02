@@ -4,6 +4,7 @@ import { ApiError } from '../utils/errorHandler.js';
 import {  getUnreadCount, sendPushNotification } from '../utils/notification.js';
 import admin from '../config/firebase/firebase.js';
 import User from '../models/User.model.js';
+
 export const getUserNotifications = async (req, res) => {
   try {
     const userId = req.user._id;

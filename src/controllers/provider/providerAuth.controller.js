@@ -17,7 +17,9 @@ const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const phoneRegex = /^(\+880|880|0)?1[3-9][0-9]{8}$/;
+const phoneRegex = /^(?:\+44\d{10}|(?:\+880|880|0)?1[3-9]\d{8})$/;
+const bdPhoneRegex = /^(\+880|880|0)?1[3-9][0-9]{8}$/;
+const ukPhoneRegex = /^\+44[0-9]{10}$/;
 
 const deleteFile = (filePath) => {
   try {
@@ -62,10 +64,16 @@ export async function register(req, res) {
     throw new ApiError(400, 'Password must be at least 8 characters.');
   }
 
-  if (!phoneRegex.test(phone)) {
-    throw new ApiError(400, 'Only Bangladesh phone number is allowed.');
+  if (!bdPhoneRegex.test(phone) && !ukPhoneRegex.test(phone)) {
+    throw new ApiError(400, 'Only Bangladesh or UK phone numbers are allowed.');
   }
 
+  /* acha wo E-Sign wala kaam krna hai ...
+yahan per model mein (contract_pending) ye add kro..
+only UK Provider kay liye hoga ye scnario BD provider abhi jese chal rha hai hai bilkul sahi hai...    
+or app mein isko show krna hai or wahin per provider sign krega neechey subit krega phr wo admin khud verify krega usko means dekhega then approve krdega uska contract_pending thats it then wo dashbaord per  redirect hosakta hai ..
+mein use krha hun  react-native-signature-canvas ye wala package apney frontend side react native mein..
+ */
   const existing = await User.findOne({
     $or: [{ email }, { phone }],
   }).select('_id email phone isEmailVerified');
@@ -85,12 +93,14 @@ export async function register(req, res) {
 
   const hashed = await bcrypt.hash(password, SALT_ROUNDS);
   const otp = generateNumericOtp(4);
+  const region = phone.startsWith('+44') ? 'UK' : 'BD';
 
   const user = await User.create({
     name,
     email,
     phone,
     password: hashed,
+    region,
     role: 'provider',
     status: 'pending',
     isEmailVerified: false,
@@ -433,38 +443,52 @@ export const completeProfile = async (req, res) => {
     longitude,
     locationName,
     permanentAddress,
+    providerType,
+    companyName,
+    companyNumber,
+    directorId,
   } = req.body;
 
   const files = req.files || {};
 
-  // REQUIRED VALIDATION
-  if (!gender) throw new ApiError(400, "Gender is required");
-  if (!dob) throw new ApiError(400, "Date of birth is required");
+  // Region + providerType
+  const userRegion = req.user?.region || 'BD';
+  const isUK = userRegion === 'UK';
+  const isCompany = providerType === 'company';
+
+  // COMMON REQUIRED
   if (!serviceCategoryId) throw new ApiError(400, "Service category is required");
   if (!serviceIds) throw new ApiError(400, "Services are required");
   if (!latitude || !longitude) throw new ApiError(400, "Location coordinates are required");
 
-  // GENDER VALIDATION
-  const allowedGenders = ["male", "female", "other", "prefer_not_say"];
-  if (!allowedGenders.includes(gender)) {
-    throw new ApiError(400, "Invalid gender value");
+  // GENDER + DOB — company provider ke liye nahi
+  let parsedDob = null;
+  if (!isCompany) {
+    if (!gender) throw new ApiError(400, "Gender is required");
+    if (!dob) throw new ApiError(400, "Date of birth is required");
+
+    const allowedGenders = ["male", "female", "other", "prefer_not_say"];
+    if (!allowedGenders.includes(gender)) {
+      throw new ApiError(400, "Invalid gender value");
+    }
+
+    parsedDob = new Date(dob);
+    if (isNaN(parsedDob.getTime())) {
+      throw new ApiError(400, "Invalid date of birth");
+    }
+
+    const today = new Date();
+    let age = today.getFullYear() - parsedDob.getFullYear();
+    const m = today.getMonth() - parsedDob.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < parsedDob.getDate())) age--;
+    if (age < 18) throw new ApiError(400, "You must be at least 18 years old");
   }
 
-  // DOB VALIDATION (accurate age check)
-  const parsedDob = new Date(dob);
-  if (isNaN(parsedDob.getTime())) {
-    throw new ApiError(400, "Invalid date of birth");
-  }
-
-  const today = new Date();
-  let age = today.getFullYear() - parsedDob.getFullYear();
-  const m = today.getMonth() - parsedDob.getMonth();
-  if (m < 0 || (m === 0 && today.getDate() < parsedDob.getDate())) {
-    age--;
-  }
-
-  if (age < 18) {
-    throw new ApiError(400, "You must be at least 18 years old");
+  // COMPANY string fields validation
+  if (isUK && isCompany) {
+    if (!companyName?.trim()) throw new ApiError(400, "Company name is required");
+    if (!companyNumber?.trim()) throw new ApiError(400, "Company number is required");
+    if (!directorId?.trim()) throw new ApiError(400, "Director ID is required");
   }
 
   // LOCATION VALIDATION
@@ -479,8 +503,19 @@ export const completeProfile = async (req, res) => {
     throw new ApiError(400, "Invalid longitude");
   }
 
-  // FILE VALIDATION
-  const requiredFiles = ["facePhoto", "idCardFront", "idCardBack"];
+  // FILE VALIDATION — region + providerType based
+  let requiredFiles = [];
+
+  if (isUK && isCompany) {
+    // UK Company — sirf companyAddressProof
+    requiredFiles = ["companyAddressProof"];
+  } else if (isUK && !isCompany) {
+    // UK Individual — common + addressProof + rightToWork (dbsCertificate optional)
+    requiredFiles = ["facePhoto", "idCardFront", "idCardBack", "addressProof", "rightToWork"];
+  } else {
+    // BD — common only
+    requiredFiles = ["facePhoto", "idCardFront", "idCardBack"];
+  }
 
   for (let field of requiredFiles) {
     if (!files[field] || !files[field][0]) {
@@ -532,14 +567,11 @@ export const completeProfile = async (req, res) => {
   // UPDATE PROVIDER
   const uploadPath = "/uploads/provider/";
 
-  provider.gender = gender;
-  provider.dob = parsedDob;
+  provider.providerType = providerType || 'individual';
   provider.Category = serviceCategoryId;
   provider.services = serviceIdArray;
 
-  if (permanentAddress) {
-    provider.permanentAddress = permanentAddress;
-  }
+  if (permanentAddress) provider.permanentAddress = permanentAddress;
 
   provider.location = {
     type: "Point",
@@ -547,14 +579,33 @@ export const completeProfile = async (req, res) => {
     locationName: locationName || "",
   };
 
-  provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
-  provider.idCardFront = `${uploadPath}${files.idCardFront[0].filename}`;
-  provider.idCardBack = `${uploadPath}${files.idCardBack[0].filename}`;
+  if (isUK && isCompany) {
+    // UK Company fields
+    provider.companyName = companyName.trim();
+    provider.companyNumber = companyNumber.trim();
+    provider.directorId = directorId.trim();
+    provider.companyAddressProof = `${uploadPath}${files.companyAddressProof[0].filename}`;
 
-  if (files.certificates?.length > 0) {
-    provider.certificates = files.certificates.map(
-      (f) => `${uploadPath}${f.filename}`
-    );
+  } else {
+    // BD + UK Individual — common fields
+    provider.gender = gender;
+    provider.dob = parsedDob;
+    provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
+    provider.idCardFront = `${uploadPath}${files.idCardFront[0].filename}`;
+    provider.idCardBack = `${uploadPath}${files.idCardBack[0].filename}`;
+
+    if (files.certificates?.length > 0) {
+      provider.certificates = files.certificates.map(f => `${uploadPath}${f.filename}`);
+    }
+
+    // UK Individual extra fields
+    if (isUK) {
+      provider.addressProof = `${uploadPath}${files.addressProof[0].filename}`;
+      provider.rightToWork = `${uploadPath}${files.rightToWork[0].filename}`;
+      if (files.dbsCertificate?.[0]) {
+        provider.dbsCertificate = `${uploadPath}${files.dbsCertificate[0].filename}`;
+      }
+    }
   }
 
   provider.isKycCompleted = true;
@@ -607,12 +658,14 @@ export async function me(req, res) {
         name: user.name,
         email: user.email,
         role: user.role,
+        region: user?.region,
         phone: user.phone,
         profilePicture: user.profilePicture,
         status: user.status,
         providerId: provider._id,
         dob: provider.dob,
         gender: provider.gender,
+        contractStatus: provider?.contractStatus,
         isKycCompleted: provider.isKycCompleted,
         kycStatus: provider.kycStatus,
         location: provider.location,

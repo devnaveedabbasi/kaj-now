@@ -9,6 +9,11 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 // Returns the popular and recommended service requests fully populated
 export const getFeaturedServiceRequests = async (req, res) => {
     try {
+        const userRegion = req.user?.region || 'BD';
+        const regionFilter = userRegion === 'UK'
+            ? { 'userArr.region': 'UK' }
+            : { 'userArr.region': { $nin: ['UK'] } };
+
         const [popularDocs, recommendedDocs] = await Promise.all([
             PopularService.find().lean(),
             RecommendedService.find().lean()
@@ -69,6 +74,7 @@ export const getFeaturedServiceRequests = async (req, res) => {
                 }
             },
             { $unwind: { path: '$userArr', preserveNullAndEmptyArrays: true } },
+            { $match: regionFilter },
             {
                 $project: {
                     _id: 1,

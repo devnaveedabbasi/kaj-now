@@ -38,7 +38,7 @@ export const createService = async (req, res) => {
     try {
         const { name, price, categoryId,description } = req.body;
         const userId = req.user._id;
-
+         console.log(req.body)
         const iconFile = req.files?.icon?.[0];
         const serviceImageFile = req.files?.serviceImage?.[0];
         // Validation
@@ -678,6 +678,73 @@ export const getServicesByCategory = async (req, res) => {
         );
     } catch (error) {
         console.error('Error getting services by category:', error);
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        } else {
+            res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
+        }
+    }
+};
+
+// ── SUB-SERVICES ─────────────────────────────────────────────────────────────
+
+// POST /admin/services/:id/sub-services — add/replace all sub-services
+export const setSubServices = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { subServices } = req.body; // [{ name, price }]
+
+        if (!Array.isArray(subServices)) {
+            throw new ApiError(400, 'subServices must be an array');
+        }
+
+        for (const s of subServices) {
+            if (!s.name || s.price === undefined) {
+                throw new ApiError(400, 'Each sub-service must have name and price');
+            }
+        }
+
+        const service = await Service.findByIdAndUpdate(
+            id,
+            { $set: { subServices } },
+            { new: true, runValidators: true }
+        );
+        if (!service) throw new ApiError(404, 'Service not found');
+
+        res.status(200).json(
+            new ApiResponse(200, { subServices: service.subServices }, 'Sub-services updated successfully')
+        );
+    } catch (error) {
+        console.error('setSubServices error:', error);
+        if (error instanceof ApiError) {
+            res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        } else {
+            res.status(500).json(new ApiResponse(500, null, error.message || 'Internal server error'));
+        }
+    }
+};
+
+// DELETE /admin/services/:id/sub-services/:subId — remove one sub-service
+export const deleteSubService = async (req, res) => {
+    try {
+        const { id, subId } = req.params;
+
+        const service = await Service.findById(id);
+        if (!service) throw new ApiError(404, 'Service not found');
+
+        const before = service.subServices.length;
+        service.subServices = service.subServices.filter(s => s._id.toString() !== subId);
+
+        if (service.subServices.length === before) {
+            throw new ApiError(404, 'Sub-service not found');
+        }
+
+        await service.save();
+
+        res.status(200).json(
+            new ApiResponse(200, { subServices: service.subServices }, 'Sub-service deleted successfully')
+        );
+    } catch (error) {
         if (error instanceof ApiError) {
             res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
         } else {

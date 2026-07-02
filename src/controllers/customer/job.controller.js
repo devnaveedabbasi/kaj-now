@@ -1035,6 +1035,7 @@ export const getMyOrders = async (req, res) => {
       },
       provider: {
         _id: order.provider?._id,
+        userId: order.provider?.userId?._id,
         name: order.provider?.userId?.name,
         email: order.provider?.userId?.email,
         phone: order.provider?.userId?.phoneNumber,
@@ -1130,6 +1131,7 @@ export const getOrderById = async (req, res) => {
       },
       provider: {
         _id: order.provider?._id,
+        userId: order.provider?.userId?._id,
         name: order.provider?.userId?.name,
         email: order.provider?.userId?.email,
         phone: order.provider?.userId?.phoneNumber,

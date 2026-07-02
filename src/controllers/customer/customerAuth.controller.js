@@ -17,7 +17,9 @@ const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const phoneRegex = /^(\+880|880|0)?1[3-9][0-9]{8}$/;
+const phoneRegex = /^(\+44[1-9][0-9]{9}|\+880[1-9][0-9]{9})$/;
+
+
 
 function publicUserDoc(user) {
   const u = user.toObject ? user.toObject() : { ...user };
@@ -35,7 +37,6 @@ async function setEmailOtp(user, otpPlain) {
 }
 
 
-
 export async function register(req, res) {
   const name = String(req.body.name || '').trim();
   const email = String(req.body.email || '').trim().toLowerCase();
@@ -49,13 +50,16 @@ export async function register(req, res) {
   if (!emailRegex.test(email)) {
     throw new ApiError(400, 'Invalid email address.');
   }
+
   if (password.length < 8) {
     throw new ApiError(400, 'Password must be at least 8 characters.');
   }
 
   if (!phoneRegex.test(phone)) {
-    throw new ApiError(400, 'Only Bangladesh phone number is allowed.');
+    throw new ApiError(400, 'Only UK or Bangladesh phone numbers are allowed.');
   }
+
+  const region = phone.startsWith('+44') ? 'UK' : 'BD';
 
   const existing = await User.findOne({
     $or: [{ email }, { phone }],
@@ -82,6 +86,7 @@ export async function register(req, res) {
     email,
     phone,
     password: hashed,
+    region,
     role: 'customer',
     status: 'pending',
     isEmailVerified: false,
@@ -90,7 +95,6 @@ export async function register(req, res) {
     otpAttempts: 0,
     lastOTPSent: new Date(),
   });
-
 
   await sendOtpEmail(email, otp);
 
@@ -148,7 +152,7 @@ export async function verifyEmail(req, res) {
   await user.save();
 
   const token = signToken(user._id, user.role);
-  user.token=token;
+  user.token = token;
   await user.save();
   const fresh = await User.findById(user._id);
   res.status(200).json(
@@ -220,7 +224,7 @@ export async function login(req, res) {
   if (user.status === 'suspended' || user.status === 'blocked') {
     throw new ApiError(401, `Account not authorized. Current status: ${user.status}`);
   }
-  
+
   if (user.status !== 'approved') {
     throw new ApiError(403, `Account not authorized. Current status: ${user.status}`);
   }
@@ -231,8 +235,8 @@ export async function login(req, res) {
   }
 
   const token = signToken(user._id, user.role);
-  user.token=token;
-await user.save();
+  user.token = token;
+  await user.save();
   res.status(200).json(
     new ApiResponse(
       200,
@@ -417,7 +421,9 @@ export async function me(req, res) {
         _id: user._id,
         name: user.name,
         email: user.email,
+        region: user.region,
         role: user.role,
+        contractStatus:user?.contractStatus,
         phone: user.phone,
         status: user.status,
         location: user.location,
@@ -459,25 +465,25 @@ export const updateProfile = async (req, res) => {
     }
 
     if (name) user.name = name.trim();
-    
+
     // Handle email update with OTP
     if (email && email !== user.email) {
       const existingUser = await User.findOne({ email, _id: { $ne: userId } });
       if (existingUser) {
         throw new ApiError(409, 'Email already registered');
       }
-      
+
       const otp = generateNumericOtp(4);
       user.pendingNewEmail = email.toLowerCase();
       user.emailUpdateOTP = otp;
       user.emailUpdateOtpExpiry = new Date(Date.now() + OTP_TTL_MS);
       user.emailUpdateOtpAttempts = 0;
       user.isEmailChanged = false;
-      
+
       await sendOtpEmail(email, otp);
-      
+
       await user.save();
-      
+
       return res.status(200).json(
         new ApiResponse(200, {
           message: `OTP sent to ${email}. Please verify to complete email update.`,
@@ -526,7 +532,7 @@ export const updateProfile = async (req, res) => {
     if (req.files?.profilePicture) {
       deleteFile(req.files.profilePicture[0].path);
     }
-    
+
     if (error instanceof ApiError) {
       return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
     }

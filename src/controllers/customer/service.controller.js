@@ -7,6 +7,68 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 import User from '../../models/User.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import Job from '../../models/job.model.js';
+
+
+// export const getAllCategories = async (req, res) => {
+//     try {
+//         const page = parseInt(req.query.page) || 1;
+//         const limit = parseInt(req.query.limit) || 10;
+//         const skip = (page - 1) * limit;
+//         const search = req.query.search || '';
+//         const sortField = req.query.sortBy || 'createdAt';
+//         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
+//         const sort = { [sortField]: sortOrder };
+
+//         // Get only ACTIVE and NON-DELETED categories from approved service requests
+//         const aggregationPipeline = [
+//             { $match: { status: 'approved' } },
+//             {
+//                 $lookup: {
+//                     from: 'categories',
+//                     localField: 'categoryId',
+//                     foreignField: '_id',
+//                     as: 'category'
+//                 }
+//             },
+//             { $unwind: '$category' },
+//             //  FILTER: Only active and non-deleted categories
+//             {
+//                 $match: {
+//                     'category.isActive': true,
+//                     'category.isDeleted': false
+//                 }
+//             },
+//             ...(search ? [{ $match: { 'category.name': { $regex: search, $options: 'i' } } }] : []),
+//             {
+//                 $group: {
+//                     _id: '$categoryId',
+//                     name: { $first: '$category.name' },
+//                     icon: { $first: '$category.icon' },
+//                     createdAt: { $first: '$category.createdAt' },
+//                     updatedAt: { $first: '$category.updatedAt' },
+//                     serviceCount: { $sum: 1 }
+//                 }
+//             },
+//             { $sort: sort },
+//             { $skip: skip },
+//             { $limit: limit }
+//         ];
+
+//         const categories = await ServiceRequest.aggregate(aggregationPipeline);
+
+//         res.status(200).json({
+//             success: true,
+//             categories: categories,
+//             pagination: {
+//                 page: page,
+//                 limit: limit
+//             }
+//         });
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
+
 export const getAllCategories = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
@@ -17,7 +79,11 @@ export const getAllCategories = async (req, res) => {
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
         const sort = { [sortField]: sortOrder };
 
-        // Get only ACTIVE and NON-DELETED categories from approved service requests
+        // User ki region
+        const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
+
+        const ukCategories = ['Delivery Service', 'Cleaning Service', 'Plumber Hire'];
+
         const aggregationPipeline = [
             { $match: { status: 'approved' } },
             {
@@ -29,11 +95,15 @@ export const getAllCategories = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
-            //  FILTER: Only active and non-deleted categories
             {
                 $match: {
                     'category.isActive': true,
-                    'category.isDeleted': false
+                    'category.isDeleted': false,
+                    // Region filter
+                    ...(userRegion === "UK"
+                        ? { 'category.name': { $in: ukCategories } }  // UK → sirf 3
+                        : { 'category.name': { $nin: ukCategories } } // BD → UK wali hide
+                    )
                 }
             },
             ...(search ? [{ $match: { 'category.name': { $regex: search, $options: 'i' } } }] : []),
@@ -82,7 +152,7 @@ export const getServiceById = async (req, res) => {
             .populate({
                 path: 'serviceId',
                 match: { _id: new mongoose.Types.ObjectId(serviceId) },  // sirf wahi service jo maangi hai
-                select: 'name price icon averageRating description reviews'
+                select: 'name price icon averageRating description reviews subServices'
             })
             .populate({
                 path: 'providerId',
@@ -112,23 +182,23 @@ export const getServiceById = async (req, res) => {
 
 
         const relatedServices = await ServiceRequest.find({
-  serviceId: serviceId,
-  status: 'approved',
-  _id: { $ne: service._id } // optional exclude current
-})
-.populate({
-  path: 'serviceId',
-  select: 'name price icon averageRating description'
-})
-.populate({
-  path: 'providerId',
-  select: 'userId location',
-  populate: {
-    path: 'userId',
-    select: 'name email phone profilePicture'
-  }
-})
-.lean();
+            serviceId: serviceId,
+            status: 'approved',
+            _id: { $ne: service._id } // optional exclude current
+        })
+            .populate({
+                path: 'serviceId',
+                select: 'name price icon averageRating description'
+            })
+            .populate({
+                path: 'providerId',
+                select: 'userId location',
+                populate: {
+                    path: 'userId',
+                    select: 'name email phone profilePicture'
+                }
+            })
+            .lean();
         console.log('Related services found:', relatedServices);
         console.log('Service found:', service);
         const targetService = service.serviceId.find(
@@ -145,6 +215,7 @@ export const getServiceById = async (req, res) => {
                     description: targetService.description,
                     averageRating: targetService.averageRating,
                     reviews: targetService.reviews || [],
+                    subServices: targetService.subServices || [],
                     ordersCount: jobCount || 22,
                     provider: {
                         _id: service.providerId?._id,
@@ -819,6 +890,10 @@ export const getRecommendedServices = async (req, res) => {
             );
         }
 
+        const userRegion = req.user?.region || 'BD';
+        const regionFilter = userRegion === 'UK'
+            ? { 'user.region': 'UK' }
+            : { 'user.region': { $nin: ['UK'] } };
         const user = await User.findById(req.user._id).select("location");
 
         const userCoordinates =
@@ -893,6 +968,7 @@ export const getRecommendedServices = async (req, res) => {
             },
 
             { $unwind: "$user" },
+            { $match: regionFilter },
         ];
 
         let serviceRequests = await ServiceRequest.aggregate(pipeline);
@@ -1028,6 +1104,10 @@ export const getRecommendedServices = async (req, res) => {
 export const getTopRatedServices = async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 6;
+        const userRegion = req.user?.region || 'BD';
+        const regionFilter = userRegion === 'UK'
+            ? { 'user.region': 'UK' }
+            : { 'user.region': { $nin: ['UK'] } };
 
         const pipeline = [
             { $match: { status: "approved" } },
@@ -1097,6 +1177,7 @@ export const getTopRatedServices = async (req, res) => {
             },
 
             { $unwind: "$user" },
+            { $match: regionFilter },
 
             {
                 $addFields: {
@@ -1187,6 +1268,10 @@ export const quickSearch = async (req, res) => {
         }
 
         const searchKeyword = q.trim();
+        const userRegion = req.user?.region || 'BD';
+        const regionFilter = userRegion === 'UK'
+            ? { 'user.region': 'UK' }
+            : { 'user.region': { $nin: ['UK'] } };
 
         const services = await ServiceRequest.aggregate([
             { $match: { status: 'approved' } },
@@ -1244,6 +1329,7 @@ export const quickSearch = async (req, res) => {
 
             {
                 $match: {
+                    ...regionFilter,
                     $or: [
                         { 'service.name': { $regex: searchKeyword, $options: 'i' } },
                         { 'category.name': { $regex: searchKeyword, $options: 'i' } },

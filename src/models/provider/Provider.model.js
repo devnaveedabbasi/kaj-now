@@ -46,15 +46,36 @@ const providerSchema = new mongoose.Schema(
       of: Number,
       default: {},
     },
-    
+
     totalOrdersCompleted: {
       type: Number,
       default: 0
     },
 
+    // BD Fields
     facePhoto: { type: String, trim: true, default: '' },
     idCardFront: { type: String, trim: true, default: '' },
     idCardBack: { type: String, trim: true, default: '' },
+    // UK Fileds
+    addressProof: { type: String, trim: true, default: '' },
+    rightToWork: { type: String, trim: true, default: '' },
+    dbsCertificate: { type: String, trim: true, default: '' },
+    // Company Fields
+    companyName: { type: String, trim: true, default: '' },
+    companyNumber: { type: String, trim: true, default: '' },
+    companyAddressProof: { type: String, trim: true, default: '' },
+    directorId: { type: String, trim: true, default: '' },
+    
+    providerType: { type: String, enum: ['individual', 'company'], default: 'individual' },
+
+    // Contract (UK providers only)
+    contractFile: { type: String, default: '' },
+    contractStatus: { type: String, enum: ['not_required', 'pending', 'signed', 'approved'], default: 'not_required' },
+    signatureImage: { type: String, default: '' },
+    agreedToTerms: { type: Boolean, default: false },
+    contractSignedAt: { type: Date },
+    contractApprovedAt: { type: Date },
+
     certificates: { type: [String], default: [] },
 
     isKycCompleted: {
@@ -77,7 +98,7 @@ const providerSchema = new mongoose.Schema(
 );
 
 // Method to increment service order count
-providerSchema.methods.incrementServiceOrderCount = async function(serviceId) {
+providerSchema.methods.incrementServiceOrderCount = async function (serviceId) {
   const currentCount = this.serviceOrdersCount.get(serviceId.toString()) || 0;
   this.serviceOrdersCount.set(serviceId.toString(), currentCount + 1);
   this.totalOrdersCompleted += 1;
@@ -86,7 +107,7 @@ providerSchema.methods.incrementServiceOrderCount = async function(serviceId) {
 };
 
 // Method to get service order count
-providerSchema.methods.getServiceOrderCount = function(serviceId) {
+providerSchema.methods.getServiceOrderCount = function (serviceId) {
   return this.serviceOrdersCount.get(serviceId.toString()) || 0;
 };
 

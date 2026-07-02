@@ -153,13 +153,44 @@ export const uploadProviderDocuments = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 }).fields([
-  { name: 'facePhoto', maxCount: 1 },
-  { name: 'idCardFront', maxCount: 1 },
-  { name: 'idCardBack', maxCount: 1 },
-  { name: 'certificates', maxCount: 1 }
+  // BD + UK Individual — common
+  { name: 'facePhoto',    maxCount: 1 },
+  { name: 'idCardFront',  maxCount: 1 },
+  { name: 'idCardBack',   maxCount: 1 },
+  { name: 'certificates', maxCount: 5 },
+  // UK Individual — extra
+  { name: 'addressProof',    maxCount: 1 },
+  { name: 'rightToWork',     maxCount: 1 },
+  { name: 'dbsCertificate',  maxCount: 1 },
+  // UK Company
+  { name: 'companyAddressProof', maxCount: 1 },
 ]);
 
 
+
+// Contract PDF — admin uploads, always overwrites same filename
+const contractStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'public/contracts';
+    ensureDirectoryExists(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, 'kajnow_provider_agreement.pdf');
+  }
+});
+
+export const uploadContractPdf = multer({
+  storage: contractStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed'));
+    }
+  }
+}).single('contractPdf');
 
 const withdrawalReceiptStorage = multer.diskStorage({
   destination: (req, file, cb) => {

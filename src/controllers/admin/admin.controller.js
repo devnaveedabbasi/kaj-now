@@ -11,6 +11,8 @@ import ActivityLog from "../../models/activityLog.model.js";
 import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
 import { createNotification } from "../../utils/notification.js";
+import { sendContractPendingEmail } from "../../service/emailService.js";
+import { getContractUrl } from "../../utils/generateContract.js";
 import Payment from '../../models/payment.model.js';
 import mongoose from "mongoose";
 
@@ -525,25 +527,48 @@ export const approveProviderKyc = async (req, res) => {
       throw new ApiError(400, 'Cannot approve KYC. Required documents are missing');
     }
 
+    const providerUser = provider.userId;
+    const isUK = providerUser?.region === 'UK';
+
     provider.kycStatus = 'approved';
     provider.isKycCompleted = true;
+
+    if (isUK) {
+      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      provider.contractStatus = 'pending';
+      provider.contractFile = getContractUrl(baseUrl);
+    }
+
     await provider.save();
 
-    // Send notification
-    await createNotification({
-      userId: provider.userId._id,
-      title: 'KYC Approved',
-      message: 'Your KYC has been approved! You can now offer services.',
-      type: 'kyc',
-      referenceId: provider._id
-    });
+    if (isUK) {
+      // UK: notify to sign contract
+      await createNotification({
+        userId: providerUser._id,
+        title: 'KYC Approved — Sign Your Contract',
+        message: 'Your KYC has been approved! Please sign the provider contract to get started.',
+        type: 'kyc',
+        referenceId: provider._id
+      });
+      await sendContractPendingEmail(providerUser.email, { userName: providerUser.name });
+    } else {
+      // BD: fully active
+      await createNotification({
+        userId: providerUser._id,
+        title: 'KYC Approved',
+        message: 'Your KYC has been approved! You can now offer services.',
+        type: 'kyc',
+        referenceId: provider._id
+      });
+    }
 
     res.status(200).json(
       new ApiResponse(200, {
         providerId: provider._id,
         kycStatus: provider.kycStatus,
-        isKycCompleted: provider.isKycCompleted
-      }, 'Provider KYC approved successfully')
+        isKycCompleted: provider.isKycCompleted,
+        contractStatus: provider.contractStatus
+      }, isUK ? 'KYC approved. Contract sent to provider.' : 'Provider KYC approved successfully')
     );
   } catch (error) {
     console.error('Error approving KYC:', error);

@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   phone: { type: String, required: true, unique: true },
   password: { type: String, required: true, select: false },
+  region: { type: String, required: false },
   role: {
     type: String,
     enum: ['customer', 'provider', 'admin'],
@@ -45,9 +46,9 @@ const userSchema = new mongoose.Schema({
   lastOTPSent: { type: Date },
   profileLastUpdated: { type: Date },
   fcmToken: { type: String, default: null },
-  },
+},
   {
-    timestamps: true,  
+    timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true }
   }

@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import config from '../config/index.js';
+import { complaintReplyTemplate, noteReplyTemplate, contractPendingTemplate, contractApprovedTemplate } from '../utils/emailTemplates.js';
 
 
 const transporter = nodemailer.createTransport({
@@ -123,6 +124,83 @@ export const sendWithdrawalApprovedEmail = async (to, data) => {
 // =========================
 //  WITHDRAWAL REJECTED EMAIL
 // =========================
+// =========================
+// 📧 COMPLAINT REPLY EMAIL
+// =========================
+export const sendComplaintReplyEmail = async (to, data) => {
+    const { userName, complaintType, complaintDescription, adminReply } = data;
+
+    const mailOptions = {
+        from: `"KajNow Support" <${config.email.user}>`,
+        to,
+        subject: 'Response to Your Complaint — KajNow Support',
+        html: complaintReplyTemplate({ userName, complaintType, complaintDescription, adminReply }),
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`Complaint reply email sent to: ${to}`);
+    } catch (error) {
+        console.error('Complaint reply email failed:', error);
+        throw new Error('Could not send complaint reply email.');
+    }
+};
+
+
+// =========================
+// 📧 NOTE REPLY EMAIL
+// =========================
+export const sendNoteReplyEmail = async (to, data) => {
+    const { userName, noteText, adminReply } = data;
+
+    const mailOptions = {
+        from: `"KajNow Support" <${config.email.user}>`,
+        to,
+        subject: 'Response to Your Note — KajNow Support',
+        html: noteReplyTemplate({ userName, noteText, adminReply }),
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+        console.log(`Note reply email sent to: ${to}`);
+    } catch (error) {
+        console.error('Note reply email failed:', error);
+        throw new Error('Could not send note reply email.');
+    }
+};
+
+
+// =========================
+//  WITHDRAWAL REJECTED EMAIL
+// =========================
+export const sendContractPendingEmail = async (to, { userName }) => {
+    const mailOptions = {
+        from: `"KajNow" <${config.email.user}>`,
+        to,
+        subject: 'Action Required: Sign Your KajNow Provider Contract',
+        html: contractPendingTemplate({ userName }),
+    };
+    try {
+        await transporter.sendMail(mailOptions);
+    } catch (error) {
+        console.error('Contract pending email failed:', error);
+    }
+};
+
+export const sendContractApprovedEmail = async (to, { userName }) => {
+    const mailOptions = {
+        from: `"KajNow" <${config.email.user}>`,
+        to,
+        subject: 'Your KajNow Provider Contract is Approved!',
+        html: contractApprovedTemplate({ userName }),
+    };
+    try {
+        await transporter.sendMail(mailOptions);
+    } catch (error) {
+        console.error('Contract approved email failed:', error);
+    }
+};
+
 export const sendWithdrawalRejectedEmail = async (to, data) => {
     const { amount, reason } = data;
 
