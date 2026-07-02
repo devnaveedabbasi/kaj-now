@@ -25,7 +25,7 @@ export const getAllUsers = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const { status, search, role } = req.query;
+    const { status, search, role, region } = req.query;
 
     let query = {
       role: { $ne: "admin" }, // default: admin exclude
@@ -38,6 +38,10 @@ export const getAllUsers = async (req, res) => {
 
     if (status !== undefined) {
       query.status = status;
+    }
+
+    if (region && ["UK", "BD"].includes(region)) {
+      query.region = region;
     }
 
     if (search) {
@@ -304,18 +308,26 @@ export const getAllProviders = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    const { kycStatus, search } = req.query;
+    const { kycStatus, search, region } = req.query;
 
     let query = {};
     if (kycStatus) query.kycStatus = kycStatus;
 
-    if (search) {
-      const matchingUsers = await User.find({
-        $or: [
+    // Provider has no region field of its own — region lives on the linked
+    // User, so resolve matching userIds the same way `search` already does.
+    if (search || (region && ["UK", "BD"].includes(region))) {
+      const userFilter = {};
+      if (search) {
+        userFilter.$or = [
           { name: { $regex: search, $options: 'i' } },
           { email: { $regex: search, $options: 'i' } }
-        ]
-      }).select('_id');
+        ];
+      }
+      if (region && ["UK", "BD"].includes(region)) {
+        userFilter.region = region;
+      }
+
+      const matchingUsers = await User.find(userFilter).select('_id');
       const userIds = matchingUsers.map(u => u._id);
       query.userId = { $in: userIds };
     }
