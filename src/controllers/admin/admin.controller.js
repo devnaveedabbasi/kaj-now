@@ -85,37 +85,46 @@ export const getAllUsers = async (req, res) => {
 };
 export const getUserStats = async (req, res) => {
   try {
+    const { region } = req.query;
+    const regionFilter = region && ["UK", "BD"].includes(region) ? { region } : {};
+
     // 1. TOTAL USERS (excluding admin)
     const totalUsers = await User.countDocuments({
       role: { $ne: "admin" },
+      ...regionFilter,
     });
 
     // 2. TOTAL CUSTOMERS
     const totalCustomers = await User.countDocuments({
       role: "customer",
+      ...regionFilter,
     });
 
     // 3. TOTAL PROVIDERS
     const totalProviders = await User.countDocuments({
       role: "provider",
+      ...regionFilter,
     });
 
     // 4. ACTIVE USERS
     const activeUsers = await User.countDocuments({
       role: { $ne: "admin" },
       status: "approved",
+      ...regionFilter,
     });
 
     // 5. BLOCKED / SUSPENDED USERS
     const blockedUsers = await User.countDocuments({
       role: { $ne: "admin" },
       status: { $in: ["blocked", "suspended"] },
+      ...regionFilter,
     });
 
     // 6. PENDING USERS
     const pendingUsers = await User.countDocuments({
       role: { $ne: "admin" },
       status: "pending",
+      ...regionFilter,
     });
 
     // 7. RESPONSE
@@ -383,7 +392,24 @@ export const getAllProviders = async (req, res) => {
 
 export const getProviderStats = async (req, res) => {
   try {
+    const { region } = req.query;
+    const regionStages = region && ["UK", "BD"].includes(region)
+      ? [
+          {
+            $lookup: {
+              from: "users",
+              localField: "userId",
+              foreignField: "_id",
+              as: "ownerUser",
+            },
+          },
+          { $unwind: "$ownerUser" },
+          { $match: { "ownerUser.region": region } },
+        ]
+      : [];
+
     const stats = await Provider.aggregate([
+      ...regionStages,
       {
         $group: {
           _id: null,
@@ -706,7 +732,7 @@ export const rejectProviderKyc = async (req, res) => {
 
 export const getAdminDashboardStats = async (req, res) => {
   try {
-    const { filter = 'thisMonth' } = req.query;
+    const { filter = 'thisMonth', region } = req.query;
 
     const now = new Date();
     let startDate, endDate;
@@ -734,6 +760,139 @@ export const getAdminDashboardStats = async (req, res) => {
     const dateFilter = {
       createdAt: { $gte: startDate, $lte: endDate }
     };
+
+    // ===============================
+    // REGION-SCOPED DASHBOARD (UK / BD)
+    // Job/Payment don't carry `region` directly — only via the linked
+    // customer's User.region — so this branch joins through that instead
+    // of touching the original (unscoped) aggregations below.
+    // ===============================
+    if (region && ['UK', 'BD'].includes(region)) {
+      const [totalCustomers, totalProviders] = await Promise.all([
+        User.countDocuments({ role: 'customer', region }),
+        User.countDocuments({ role: 'provider', region }),
+      ]);
+      const totalUsers = totalCustomers + totalProviders;
+
+      const regionJoin = [
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'customer',
+            foreignField: '_id',
+            as: 'customerUser',
+          },
+        },
+        { $unwind: '$customerUser' },
+        { $match: { 'customerUser.region': region } },
+      ];
+
+      const totalJobsAgg = await Job.aggregate([
+        ...regionJoin,
+        { $count: 'count' },
+      ]);
+      const totalJobs = totalJobsAgg[0]?.count || 0;
+
+      const earningsChartRaw = await Payment.aggregate([
+        { $match: { ...dateFilter, paymentStatus: 'completed' } },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'customerId',
+            foreignField: '_id',
+            as: 'customerUser',
+          },
+        },
+        { $unwind: '$customerUser' },
+        { $match: { 'customerUser.region': region } },
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+              year: { $year: '$createdAt' },
+              month: { $month: '$createdAt' },
+            },
+            dailyEarnings: { $sum: '$platformFee' },
+            jobs: { $sum: 1 },
+          },
+        },
+        { $sort: { '_id.date': 1 } },
+      ]);
+
+      const monthNamesRegion = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const earningsChart = earningsChartRaw.map(item => ({
+        date: item._id.date,
+        month: `${monthNamesRegion[item._id.month - 1]} ${item._id.year}`,
+        revenue: item.dailyEarnings,
+        jobs: item.jobs,
+      }));
+      const platformRevenue = earningsChart.reduce((sum, e) => sum + e.revenue, 0);
+
+      const jobStatusRaw = await Job.aggregate([
+        { $match: dateFilter },
+        ...regionJoin,
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]);
+      const jobStatusChart = jobStatusRaw.map(item => ({
+        status: item._id,
+        value: item.count,
+      }));
+
+      const recentJobIdsRaw = await Job.aggregate([
+        ...regionJoin,
+        { $sort: { createdAt: -1 } },
+        { $limit: 5 },
+        { $project: { _id: 1 } },
+      ]);
+      const recentJobIds = recentJobIdsRaw.map(j => j._id);
+      const recentJobsUnordered = await Job.find({ _id: { $in: recentJobIds } })
+        .populate('service', 'name')
+        .populate('customer', 'name')
+        .populate({ path: 'provider', populate: { path: 'userId', select: 'name' } })
+        .lean();
+      const recentJobsById = new Map(recentJobsUnordered.map(j => [j._id.toString(), j]));
+      const recentJobs = recentJobIds
+        .map(id => recentJobsById.get(id.toString()))
+        .filter(Boolean)
+        .map(job => ({
+          _id: job._id,
+          serviceName: job.service?.name || 'N/A',
+          customerName: job.customer?.name || 'N/A',
+          providerName: job.provider?.userId?.name || 'N/A',
+          amount: job.amount,
+          status: job.status,
+          createdAt: job.createdAt,
+        }));
+
+      return res.status(200).json(
+        new ApiResponse(200, {
+          filterApplied: filter,
+          region,
+
+          mainStats: {
+            // No per-region wallet ledger exists yet — admin wallet is a
+            // single global balance, so it can't be split accurately.
+            // Platform fee revenue for the period is used as the closest
+            // available region-scoped substitute.
+            totalBalance: 0,
+            totalRevenue: platformRevenue,
+            totalPlatformFees: platformRevenue,
+            totalJobs,
+            totalProviders,
+            totalCustomers,
+            totalUsers,
+          },
+
+          charts: {
+            earningsChart,
+            jobStatusChart,
+          },
+
+          recentJobs,
+
+        }, 'Dashboard stats retrieved successfully')
+      );
+    }
 
     // ===============================
     //  ADMIN WALLET

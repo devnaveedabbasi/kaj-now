@@ -9,6 +9,16 @@ const categorySchema = new mongoose.Schema(
             index: true,
         },
 
+        // Which market this category belongs to. Defaults to BD so every
+        // existing category (created before this field existed) is treated
+        // as Bangladesh, matching current behavior exactly.
+        region: {
+            type: String,
+            enum: ['UK', 'BD'],
+            default: 'BD',
+            index: true,
+        },
+
         name: {
             type: String,
             required: true,

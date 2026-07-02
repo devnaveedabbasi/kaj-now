@@ -64,6 +64,29 @@ const serviceImageStorage = multer.diskStorage({
   }
 });
 
+// Storage for provider-submitted service-request images (UK template flow —
+// provider supplies their own listing photos when applying for a service)
+const serviceRequestStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'public/uploads/service-requests';
+    ensureDirectoryExists(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, `request-${uniqueSuffix}${ext}`);
+  }
+});
+
+export const uploadServiceRequestImages = multer({
+  storage: serviceRequestStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: fileFilter
+}).fields([
+  { name: 'images', maxCount: 5 },
+]);
+
 // Provider storage
 const providerStorage = multer.diskStorage({
   destination: (req, file, cb) => {

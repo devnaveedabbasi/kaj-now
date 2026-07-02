@@ -2,17 +2,27 @@ import mongoose from 'mongoose';
 
 const serviceSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    // Which market this service belongs to. Defaults to BD so every
+    // existing service (created before this field existed) is treated
+    // as Bangladesh, matching current behavior exactly.
+    region: { type: String, enum: ['UK', 'BD'], default: 'BD', index: true },
     categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
     name: { type: String, required: true, trim: true, unique: true, minlength: 4, maxlength: 100 },
+    // UK services are just templates (title + category) — the provider fills
+    // in price/description/images/etc themselves on their ServiceRequest.
+    // BD services keep the original full-listing requirements untouched.
     icon: {
         type: String,
-        required: true,
+        required: function () { return this.region !== 'UK'; },
     },
     serviceImage: {
         type: String,
-        required: true,
+        required: function () { return this.region !== 'UK'; },
     },
-    price: { type: Number, required: true },
+    price: {
+        type: Number,
+        required: function () { return this.region !== 'UK'; },
+    },
     description: { type: String, trim: true, minlength: 10, maxlength: 1000 },
     isActive: { type: Boolean, default: true },
     isDeleted: { type: Boolean, default: false },

@@ -36,18 +36,29 @@ const cleanupFiles = (files) => {
 // Create service
 export const createService = async (req, res) => {
     try {
-        const { name, price, categoryId,description } = req.body;
+        const { name, price, categoryId,description, region } = req.body;
         const userId = req.user._id;
          console.log(req.body)
         const iconFile = req.files?.icon?.[0];
         const serviceImageFile = req.files?.serviceImage?.[0];
-        // Validation
-        if (!name || !categoryId || !price) {
+
+        if (region && !['UK', 'BD'].includes(region)) {
             cleanupFiles(req.files);
-            throw new ApiError(400, 'Name, categoryId and price are required');
+            throw new ApiError(400, 'Invalid region');
+        }
+        const resolvedRegion = region || 'BD';
+        // UK services are just templates — only a title + category. Everything
+        // else (icon/image/price/description) is filled in by the provider on
+        // their ServiceRequest. BD keeps the original full-listing requirements.
+        const isTemplate = resolvedRegion === 'UK';
+
+        // Validation
+        if (!name || !categoryId || (!isTemplate && !price)) {
+            cleanupFiles(req.files);
+            throw new ApiError(400, isTemplate ? 'Name and categoryId are required' : 'Name, categoryId and price are required');
         }
 
-        if (price < 0) {
+        if (price !== undefined && price !== '' && Number(price) < 0) {
             cleanupFiles(req.files);
             throw new ApiError(400, 'Price cannot be negative');
         }
@@ -57,6 +68,13 @@ export const createService = async (req, res) => {
         if (!category) {
             cleanupFiles(req.files);
             throw new ApiError(404, 'Category not found');
+        }
+
+        // A service's region must match its category's region — keeps a
+        // UK service from ever pointing at a BD category and vice versa.
+        if (category.region !== resolvedRegion) {
+            cleanupFiles(req.files);
+            throw new ApiError(400, `Category belongs to ${category.region}, not ${resolvedRegion}`);
         }
 
         // Check if service already exists in same category
@@ -72,28 +90,34 @@ export const createService = async (req, res) => {
             throw new ApiError(409, 'Service already exists in this category');
         }
 
-        // Handle icon upload - icon is required
-        if (!iconFile) {
-            cleanupFiles(req.files);
-            throw new ApiError(400, 'Service icon is required');
+        if (!isTemplate) {
+            // Handle icon upload - icon is required
+            if (!iconFile) {
+                cleanupFiles(req.files);
+                throw new ApiError(400, 'Service icon is required');
+            }
+
+            if(!serviceImageFile) {
+                cleanupFiles(req.files);
+                throw new ApiError(400, 'Service image is required');
+            }
         }
 
-        if(!serviceImageFile) {
-            cleanupFiles(req.files);
-            throw new ApiError(400, 'Service image is required');
-        }
-
-        const iconPath = `/uploads/services/icons/${iconFile.filename}`;
-        const serviceImagePath = `/uploads/services/images/${serviceImageFile.filename}`;
+        const iconPath = iconFile ? `/uploads/services/icons/${iconFile.filename}` : undefined;
+        const serviceImagePath = serviceImageFile ? `/uploads/services/images/${serviceImageFile.filename}` : undefined;
 
         const newServiceData = {
             userId,
             categoryId,
             name,
-            icon: iconPath,
-            serviceImage: serviceImagePath,
-            price: Number(price),
-            description: description || ''
+            region: resolvedRegion,
+            ...(iconPath && { icon: iconPath }),
+            ...(serviceImagePath && { serviceImage: serviceImagePath }),
+            ...(price !== undefined && price !== '' && { price: Number(price) }),
+            // Empty string still trips the schema's minlength(10) validator,
+            // so omit the field entirely when there's nothing to save —
+            // matters for UK templates, which have no description at all.
+            ...(description && { description }),
         };
 
         const newService = await Service.create(newServiceData);
@@ -137,10 +161,14 @@ export const getAllServices = async (req, res) => {
         const skip = (page - 1) * limit;
         
         const search = req.query.search || '';
-        const { categoryId, isActive, isDeleted, minPrice, maxPrice } = req.query;
-        
+        const { categoryId, isActive, isDeleted, minPrice, maxPrice, region } = req.query;
+
         let query = { userId };
-        
+
+        if (region && ['UK', 'BD'].includes(region)) {
+            query.region = region;
+        }
+
         if (categoryId) {
             query.categoryId = categoryId;
         }
@@ -187,11 +215,12 @@ export const getAllServices = async (req, res) => {
             Service.countDocuments(query)
         ]);
         
-        // Summary counters (GLOBAL)
+        // Summary counters
+        const regionFilter = query.region ? { region: query.region } : {};
         const [totalServices, activeServices, deletedServices] = await Promise.all([
-            Service.countDocuments({ userId }),
-            Service.countDocuments({ userId, isActive: true, isDeleted: false }),
-            Service.countDocuments({ userId, isDeleted: true })
+            Service.countDocuments({ userId, ...regionFilter }),
+            Service.countDocuments({ userId, ...regionFilter, isActive: true, isDeleted: false }),
+            Service.countDocuments({ userId, ...regionFilter, isDeleted: true })
         ]);
         
    const servicesWithRating = services.map(service => {

@@ -17,17 +17,20 @@ export const getAllCategories = async (req, res) => {
 
     let query = {
         isActive: true,
-        isDeleted: false
+        isDeleted: false,
+        // Only show the provider's own market — a UK provider shouldn't be
+        // offered BD categories to request against, and vice versa.
+        ...(req.user?.region && { region: req.user.region }),
     };
 
     if (search) {
         query.name = { $regex: search, $options: 'i' };
     }
-    
+
     const sortField = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortField]: sortOrder };
-    
+
     const [categories, totalCount] = await Promise.all([
         Category.find(query)
             .sort(sort)
@@ -93,13 +96,15 @@ export const getServicesByCategory = async (req, res) => {
         query.name = { $regex: search, $options: 'i' };
     }
     
-    // Check if category exists and is active
-    const category = await Category.findOne({ 
-        _id: categoryId, 
+    // Check if category exists, is active, and belongs to the provider's
+    // own market — a UK provider can't browse into a BD category by ID.
+    const category = await Category.findOne({
+        _id: categoryId,
         isActive: true,
-        isDeleted: false
+        isDeleted: false,
+        ...(req.user?.region && { region: req.user.region }),
     });
-    
+
     if (!category) {
         throw new ApiError(404, 'Category not found');
     }
@@ -138,11 +143,11 @@ export const getServicesByCategory = async (req, res) => {
 export const requestService = async (req, res) => {
     try {
         const userId = req.user._id;
-        let { serviceId } = req.body; // serviceId will be an array
-        
+        let { serviceId, price, description, availability } = req.body;
+
         // Handle serviceId as array
         let finalServiceIds = [];
-        
+
         if (serviceId && Array.isArray(serviceId)) {
             finalServiceIds = serviceId;
         } else if (serviceId && !Array.isArray(serviceId)) {
@@ -151,25 +156,48 @@ export const requestService = async (req, res) => {
         } else {
             throw new ApiError(400, 'Service ID array is required');
         }
-        
-        
+
+
         // Get provider
         const provider = await Provider.findOne({ userId });
         if (!provider) {
             throw new ApiError(404, 'Provider profile not found');
         }
-        
+
         // Verify all services exist
         const services = await Service.find({
             _id: { $in: finalServiceIds },
             isDeleted: false,
             isActive: true
         });
-        
+
         if (services.length !== finalServiceIds.length) {
             const foundIds = services.map(s => s._id.toString());
             const missingIds = finalServiceIds.filter(id => !foundIds.includes(id));
             throw new ApiError(404, `Services not found: ${missingIds.join(', ')}`);
+        }
+
+        // A provider can only request services from their own market.
+        if (req.user?.region && services.some(s => s.region !== req.user.region)) {
+            throw new ApiError(403, 'You can only request services in your own region');
+        }
+
+        // UK services are templates (title + category only) — the provider
+        // supplies the actual listing details (price, description, images,
+        // etc). Since those details apply to ONE listing, a UK request can
+        // only target a single template at a time. BD keeps its original
+        // multi-service bundling behavior untouched.
+        const isUkRequest = services.some(s => s.region === 'UK');
+        if (isUkRequest) {
+            if (finalServiceIds.length > 1) {
+                throw new ApiError(400, 'Select only one service template per UK request');
+            }
+            if (!price || !description) {
+                throw new ApiError(400, 'Price and description are required for this service request');
+            }
+            if (Number(price) < 0) {
+                throw new ApiError(400, 'Price cannot be negative');
+            }
         }
 
         if(provider.approvedServices && provider.approvedServices.length > 0){
@@ -186,40 +214,52 @@ export const requestService = async (req, res) => {
             serviceId: { $in: finalServiceIds },
             status: { $in: ['pending', 'approved'] }
         });
-        
+
         if (existingRequests.length > 0) {
             const existingServiceIds = existingRequests.map(r => r.serviceId.toString());
             const newServiceIds = finalServiceIds.filter(id => !existingServiceIds.includes(id));
-            
+
             if (newServiceIds.length === 0) {
                 throw new ApiError(409, `Already have requests for all selected services: ${existingServiceIds.join(', ')}`);
             }
-            
+
             // Only process new service IDs
             finalServiceIds = newServiceIds;
         }
-        
+
+        const imageFiles = req.files?.images || [];
+        const imagePaths = imageFiles.map(f => `/uploads/service-requests/${f.filename}`);
+
         // Create multiple requests
         const requests = [];
         for (const service of services) {
             if (finalServiceIds.includes(service._id.toString())) {
-                const request = await ServiceRequest.create({
+                const requestData = {
                     providerId: provider._id,
                     serviceId: service._id,
                     categoryId: service.categoryId
-                });
-                
-                await request.populate('serviceId', 'name price icon');
+                };
+
+                if (service.region === 'UK') {
+                    requestData.price = Number(price);
+                    requestData.description = description;
+                    if (availability) requestData.availability = availability;
+                    if (imagePaths.length > 0) requestData.images = imagePaths;
+                }
+
+                const request = await ServiceRequest.create(requestData);
+
+                await request.populate('serviceId', 'name price icon region');
                 await request.populate('categoryId', 'name icon');
                 requests.push(request);
             }
         }
-        
+
         if (requests.length === 0) {
             throw new ApiError(400, 'No new service requests to submit');
         }
-        
-        
+
+
         res.status(201).json(
             new ApiResponse(201, {
                 requests: requests,

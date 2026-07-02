@@ -211,8 +211,11 @@ export const getServiceById = async (req, res) => {
                     _id: targetService._id,
                     name: targetService.name,
                     icon: targetService.icon,
-                    price: targetService.price,
-                    description: targetService.description,
+                    // UK templates have no price/description of their own —
+                    // fall back to what the provider submitted on the request.
+                    price: targetService.price ?? service.price,
+                    description: targetService.description ?? service.description,
+                    images: service.images || [],
                     averageRating: targetService.averageRating,
                     reviews: targetService.reviews || [],
                     subServices: targetService.subServices || [],
@@ -397,11 +400,15 @@ export const getServicesByCategory = async (req, res) => {
                     },
 
                     price: {
-                        $first: '$service.price'
+                        $first: { $ifNull: ['$price', '$service.price'] }
                     },
 
                     description: {
-                        $first: '$service.description'
+                        $first: { $ifNull: ['$description', '$service.description'] }
+                    },
+
+                    images: {
+                        $first: { $ifNull: ['$images', []] }
                     },
 
                     averageRating: {
@@ -568,8 +575,13 @@ export const getAllApprovedServices = async (req, res) => {
                     _id: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
-                    price: '$service.price',
-                    description: '$service.description',
+                    // UK templates carry no price/description of their own —
+                    // prefer the provider's own submitted values when present.
+                    // BD always has $service.price/description set, so this
+                    // is a no-op there.
+                    price: { $ifNull: ['$price', '$service.price'] },
+                    description: { $ifNull: ['$description', '$service.description'] },
+                    images: { $ifNull: ['$images', []] },
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',
@@ -730,8 +742,13 @@ export const getApprovedServiceById = async (req, res) => {
                     _id: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
-                    price: '$service.price',
-                    description: '$service.description',
+                    // UK templates carry no price/description of their own —
+                    // prefer the provider's own submitted values when present.
+                    // BD always has $service.price/description set, so this
+                    // is a no-op there.
+                    price: { $ifNull: ['$price', '$service.price'] },
+                    description: { $ifNull: ['$description', '$service.description'] },
+                    images: { $ifNull: ['$images', []] },
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',
@@ -995,8 +1012,9 @@ export const getRecommendedServices = async (req, res) => {
                         _id: req.service._id,
                         name: req.service.name,
                         icon: req.service.icon,
-                        price: req.service.price,
-                        description: req.service.description?.substring(0, 100),
+                        price: req.price ?? req.service.price,
+                        description: (req.description ?? req.service.description)?.substring(0, 100),
+                        images: req.images || [],
 
                         averageRating: req.service.averageRating || 0,
                         totalReviews: req.service.reviews?.length || 0,
@@ -1203,8 +1221,9 @@ export const getTopRatedServices = async (req, res) => {
                     _id: "$service._id",
                     name: "$service.name",
                     icon: "$service.icon",
-                    price: "$service.price",
-                    description: "$service.description",
+                    price: { $ifNull: ["$price", "$service.price"] },
+                    description: { $ifNull: ["$description", "$service.description"] },
+                    images: { $ifNull: ["$images", []] },
 
                     averageRating: "$rating",
                     totalReviews: "$reviewsCount",
@@ -1345,8 +1364,13 @@ export const quickSearch = async (req, res) => {
                     _id: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
-                    price: '$service.price',
-                    description: '$service.description',
+                    // UK templates carry no price/description of their own —
+                    // prefer the provider's own submitted values when present.
+                    // BD always has $service.price/description set, so this
+                    // is a no-op there.
+                    price: { $ifNull: ['$price', '$service.price'] },
+                    description: { $ifNull: ['$description', '$service.description'] },
+                    images: { $ifNull: ['$images', []] },
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',

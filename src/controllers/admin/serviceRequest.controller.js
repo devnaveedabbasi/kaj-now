@@ -2,18 +2,29 @@ import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import User from '../../models/User.model.js';
 import Service from '../../models/admin/service.model.js';
+import Category from '../../models/admin/category.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+
+// ServiceRequest has no region of its own — it's derived from its category.
+async function categoryIdsForRegion(region) {
+    if (!region || !['UK', 'BD'].includes(region)) return null;
+    const categories = await Category.find({ region }).select('_id').lean();
+    return categories.map(c => c._id);
+}
 
 export const getAllServiceRequests = async (req, res) => {
 
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    const { status, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const { status, search, region, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
 
     let query = {};
     if (status) query.status = status;
+
+    const regionCategoryIds = await categoryIdsForRegion(region);
+    if (regionCategoryIds) query.categoryId = { $in: regionCategoryIds };
 
     if (search) {
         const [matchingUsers, matchingServices] = await Promise.all([
@@ -80,10 +91,13 @@ export const getAllServiceRequests = async (req, res) => {
 };
 
 export const getServiceRequestStats = async (req, res) => {
-    const totalRequests = await ServiceRequest.countDocuments();
-    const approvedRequests = await ServiceRequest.countDocuments({ status: 'approved' });
-    const pendingRequests = await ServiceRequest.countDocuments({ status: 'pending' });
-    const rejectedRequests = await ServiceRequest.countDocuments({ status: 'rejected' });
+    const regionCategoryIds = await categoryIdsForRegion(req.query.region);
+    const regionFilter = regionCategoryIds ? { categoryId: { $in: regionCategoryIds } } : {};
+
+    const totalRequests = await ServiceRequest.countDocuments(regionFilter);
+    const approvedRequests = await ServiceRequest.countDocuments({ ...regionFilter, status: 'approved' });
+    const pendingRequests = await ServiceRequest.countDocuments({ ...regionFilter, status: 'pending' });
+    const rejectedRequests = await ServiceRequest.countDocuments({ ...regionFilter, status: 'rejected' });
     res.status(200).json(
         new ApiResponse(200, {
             totalRequests,

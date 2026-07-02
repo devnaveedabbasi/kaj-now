@@ -20,7 +20,7 @@ const deleteOldImage = (imagePath) => {
 
 // Create Category
 export const createCategory = async (req, res) => {
-    const { name } = req.body;
+    const { name, region } = req.body;
     const userId = req.user._id;
 
     if (!name) {
@@ -28,6 +28,13 @@ export const createCategory = async (req, res) => {
             fs.unlinkSync(req.file.path);
         }
         throw new ApiError(400, 'Category name is required');
+    }
+
+    if (region && !['UK', 'BD'].includes(region)) {
+        if (req.file) {
+            fs.unlinkSync(req.file.path);
+        }
+        throw new ApiError(400, 'Invalid region');
     }
 
     const existingCategory = await Category.findOne({
@@ -45,6 +52,7 @@ export const createCategory = async (req, res) => {
     const categoryData = {
         userId,
         name,
+        region: region || 'BD',
         icon: req.file ? `/uploads/categories/${req.file.filename}` : null,
     };
 
@@ -64,9 +72,13 @@ export const getAllCategories = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const search = req.query.search || '';
-    const { isActive, isDeleted } = req.query;
+    const { isActive, isDeleted, region } = req.query;
 
     let query = { userId };
+
+    if (region && ['UK', 'BD'].includes(region)) {
+        query.region = region;
+    }
 
     // 🔍 Search filter
     if (search) {
@@ -100,15 +112,17 @@ export const getAllCategories = async (req, res) => {
     ]);
 
     // 📊 Summary
+    const regionFilter = query.region ? { region: query.region } : {};
     const [totalCategories, activeCategories, totalServices] =
         await Promise.all([
-            Category.countDocuments({ userId, isDeleted: false }),
-            Category.countDocuments({ userId, isActive: true, isDeleted: false }),
-            Service.countDocuments({ userId, isDeleted: false })
+            Category.countDocuments({ userId, ...regionFilter, isDeleted: false }),
+            Category.countDocuments({ userId, ...regionFilter, isActive: true, isDeleted: false }),
+            Service.countDocuments({ userId, ...regionFilter, isDeleted: false })
         ]);
 
     const deletedCategories = await Category.countDocuments({
         userId,
+        ...regionFilter,
         isDeleted: true
     });
 
