@@ -303,7 +303,13 @@ export const getServiceById = async (req, res) => {
             throw new ApiError(400, 'Invalid service ID format');
         }
 
-        const serviceRequest = await ServiceRequest.findOne({ serviceId: serviceId })
+        const provider = await Provider.findOne({ userId: req.user._id });
+        if (!provider) throw new ApiError(404, 'Provider profile not found');
+
+        const serviceRequest = await ServiceRequest.findOne({
+            serviceId: serviceId,
+            providerId: provider._id
+        })
             .populate('providerId', 'userId businessName businessPhone businessEmail location')
             .populate('serviceId', 'name price icon description categoryId averageRating')
             .populate('categoryId', 'name icon')
@@ -326,10 +332,14 @@ export const getServiceById = async (req, res) => {
         let ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
         let totalRating = 0;
 
-        if (serviceRequest.serviceId && serviceRequest.serviceId.length > 0) {
-            const firstService = serviceRequest.serviceId[0];
+        // Requested service ko array mein se dhundho
+        const targetService = serviceRequest.serviceId?.find(
+            s => s._id.toString() === serviceId
+        ) || serviceRequest.serviceId?.[0];
+
+        if (targetService) {
             reviews = await mongoose.model('Review').find({
-                service: firstService._id
+                service: targetService._id
             })
             .populate('userId', 'name email profilePicture')
             .lean();
@@ -342,7 +352,6 @@ export const getServiceById = async (req, res) => {
             }
         }
 
-        // Format reviews exactly as before
         const formattedReviews = reviews.map(review => ({
             _id: review._id,
             rating: review.rating,
@@ -354,15 +363,14 @@ export const getServiceById = async (req, res) => {
             updatedAt: review.updatedAt
         }));
 
-        // Final response - same structure as before
         const response = {
             _id: serviceRequest._id,
-            name: serviceRequest.serviceId?.[0]?.name || 'N/A',
-            description: serviceRequest.serviceId?.[0]?.description || 'No description available',
-            icon: serviceRequest.serviceId?.[0]?.icon || null,
-            price: serviceRequest.serviceId?.[0]?.price || 0,
+            name: targetService?.name || 'N/A',
+            description: targetService?.description || 'No description available',
+            icon: targetService?.icon || null,
+            price: targetService?.price || 0,
             isActive: serviceRequest.status === 'approved',
-            averageRating: serviceRequest.serviceId?.[0]?.averageRating || 0,
+            averageRating: targetService?.averageRating || 0,
             totalReviews: reviews.length,
 
             // Provider (service owner)
@@ -387,7 +395,7 @@ export const getServiceById = async (req, res) => {
             ratingDistribution,
 
             stats: {
-                averageRating: serviceRequest.serviceId?.[0]?.averageRating || 0,
+                averageRating: targetService?.averageRating || 0,
                 totalRatings: reviews.length
             },
 

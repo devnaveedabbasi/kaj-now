@@ -208,6 +208,7 @@ export async function getProviderJobs(req, res) {
         profilePicture: job.provider?.userId?.profilePicture,
         location: job.provider?.location || job.provider?.userId?.location
       },
+      subServices: job.subServices || [],
       timestamps: {
         createdAt: job.createdAt,
         acceptedAt: job.acceptedAt,
@@ -341,6 +342,7 @@ export async function getJobDetails(req, res) {
         disputedAt: job.disputedAt,
         cancelledAt: job.cancelledAt
       },
+      subServices: job.subServices || [],
       rejectionReason: job.rejectionReason,
       disputeReason: job.disputeReason
     };
