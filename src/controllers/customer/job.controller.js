@@ -34,6 +34,8 @@ export async function bookJob(req, res) {
       cardDetails,
       schedule,
       paymentMethod,
+      subServices,
+      totalPrice,
     } = req.body;
 
     // ── Supported Methods ────────────────────────────────────────────
@@ -165,7 +167,7 @@ export async function bookJob(req, res) {
     }
 
     // ── Price Calculation ────────────────────────────────────────────
-    const servicePrice = service.price;
+    const servicePrice = totalPrice || service.price;
     const platformFeePercentage = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE || '10');
     const platformFee = parseFloat(((platformFeePercentage / 100) * servicePrice).toFixed(2));
     const providerAmount = parseFloat((servicePrice - platformFee).toFixed(2));
@@ -187,6 +189,7 @@ export async function bookJob(req, res) {
             paymentStatus: 'pending',
             paymentMethod: 'cod',
             schedule: { date: scheduleDateTime, time: schedule.time },
+            subServices: subServices || [],
           },
         ],
         { session }
@@ -336,6 +339,7 @@ export async function bookJob(req, res) {
             paymentStatus: 'held_in_escrow',
             paymentMethod: 'card',
             schedule: { date: scheduleDateTime, time: schedule.time },
+            subServices: subServices || [],
           },
         ],
         { session }
@@ -1050,6 +1054,7 @@ export const getMyOrders = async (req, res) => {
         disputedAt: order.disputedAt,
         cancelledAt: order.cancelledAt
       },
+      subServices: order.subServices || [],
       rejectionReason: order.rejectionReason,
       disputeReason: order.disputeReason
     }));
@@ -1162,6 +1167,7 @@ export const getOrderById = async (req, res) => {
         disputedAt: order.disputedAt,
         cancelledAt: order.cancelledAt
       },
+      subServices: order.subServices || [],
       rejectionReason: order.rejectionReason,
       disputeReason: order.disputeReason
     };

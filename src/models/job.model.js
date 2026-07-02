@@ -89,6 +89,13 @@ const jobSchema = new mongoose.Schema(
     disputedAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
 
+    subServices: [
+      {
+        name: { type: String },
+        price: { type: Number },
+      }
+    ],
+
     rejectionReason: { type: String, trim: true, default: null },
     disputeReason: { type: String, trim: true, default: null },
   },
