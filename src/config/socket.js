@@ -75,6 +75,13 @@ export function initSocket(io) {
     // Broadcast online status to everyone in this user's job rooms
     socket.broadcast.emit('user_online', { userId });
 
+    // Admin sockets auto-join a shared room so every admin session gets
+    // realtime sidebar updates (new message / unread count) for ALL support
+    // conversations, not just the one currently open.
+    if (socket.user.role === 'admin') {
+      socket.join('admin_support_room');
+    }
+
     // ── Join Chat Room ──────────────────────────────────────
     // Client sends jobId, we make both parties join same room
     socket.on('join_chat', async ({ jobId }) => {
@@ -288,6 +295,14 @@ export function initSocket(io) {
 
         socket.to(room).emit('support_messages_read', { roomId, readBy: userId });
 
+        // Admin ne is room ko open/read kiya → sidebar mein unread badge clear karo (sab admin sessions)
+        if (socket.user.role === 'admin') {
+          io.to('admin_support_room').emit('support_conversation_updated', {
+            roomId,
+            unreadCount: 0,
+          });
+        }
+
         // Admin ka online status bhi bhejo (customer/provider ke liye)
         let adminId = null;
         let adminOnline = false;
@@ -367,11 +382,17 @@ export function initSocket(io) {
         socket.to(room).emit('support_receive_message', { ...msgPayload, isMine: false });
 
         // Blue ticks agar receiver room mein hai
+        const receiverOnline = isUserOnline(receiverId.toString());
         const receiverInRoom = await isUserInRoom(io, room, receiverId.toString());
         if (receiverInRoom) {
           await SupportMessage.findByIdAndUpdate(newMsg._id, { isRead: true, readAt: new Date() });
           io.to(room).emit('support_messages_read', { roomId, readBy: receiverId.toString() });
         } else {
+          // Receiver online but different screen → delivered (double tick) for sender's UI
+          if (receiverOnline) {
+            io.to(room).emit('support_message_delivered', { messageId: newMsg._id.toString(), roomId });
+          }
+
           // Push notification — save nahi hogi DB mein, sirf push
           const senderName = socket.user.role === 'admin' ? 'Support Team' : socket.user.name;
           const receiver = await User.findById(receiverId).select('fcmToken fcmTokens').lean();
@@ -390,6 +411,33 @@ export function initSocket(io) {
             }, receiverId);
           }
         }
+
+        // ── Sidebar sync for ALL admin sessions ──────────────────────────
+        // adminId = jo bhi is conversation ka admin-side receiver/sender hai
+        const adminObjectId = socket.user.role === 'admin' ? socket.user._id : receiverId;
+        const unreadForAdmin = await SupportMessage.countDocuments({
+          roomId,
+          receiverId: adminObjectId,
+          isRead: false,
+        });
+
+        io.to('admin_support_room').emit('support_conversation_updated', {
+          roomId,
+          lastMessage: newMsg.message,
+          lastMessageAt: newMsg.createdAt,
+          unreadCount: unreadForAdmin,
+          senderRole: socket.user.role,
+          // Naya conversation ho sakta hai — user snapshot bhej do taake
+          // admin sidebar bina extra API call ke naya row daal sake
+          user: socket.user.role === 'admin' ? undefined : {
+            _id: socket.user._id,
+            name: socket.user.name,
+            email: socket.user.email,
+            role: socket.user.role,
+            profilePicture: socket.user.profilePicture,
+            phone: socket.user.phone,
+          },
+        });
 
       } catch (err) {
         console.error('[Support] send_support_message error:', err);
@@ -422,8 +470,24 @@ export function initSocket(io) {
         );
 
         io.to(`support_${roomId}`).emit('support_messages_read', { roomId, readBy: userId });
+
+        if (socket.user.role === 'admin') {
+          io.to('admin_support_room').emit('support_conversation_updated', { roomId, unreadCount: 0 });
+        }
       } catch (err) {
         console.error('[Support] support_mark_read error:', err);
+      }
+    });
+
+    // ── Leave Support Room ──────────────────────────────────
+    // Admin switches conversations ya chat band karta hai — purana room
+    // chhodo taake stale room membership ki wajah se galat "read" na ho jaye.
+    socket.on('leave_support', ({ roomUserId } = {}) => {
+      const roomId = socket.user.role === 'admin' ? roomUserId : userId;
+      if (!roomId) return;
+      socket.leave(`support_${roomId}`);
+      if (socket.currentSupportRoom === roomId) {
+        socket.currentSupportRoom = null;
       }
     });
 
