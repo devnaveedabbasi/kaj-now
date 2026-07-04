@@ -81,9 +81,7 @@ export const getAllCategories = async (req, res) => {
 
         // User ki region
         const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
-
-        const ukCategories = ['Delivery Service', 'Cleaning Service', 'Plumber Hire'];
-
+        const categoryRegion = req.user?.region === "UK" ? "UK" : "BD";
         const aggregationPipeline = [
             { $match: { status: 'approved' } },
             {
@@ -100,10 +98,8 @@ export const getAllCategories = async (req, res) => {
                     'category.isActive': true,
                     'category.isDeleted': false,
                     // Region filter
-                    ...(userRegion === "UK"
-                        ? { 'category.name': { $in: ukCategories } }  // UK → sirf 3
-                        : { 'category.name': { $nin: ukCategories } } // BD → UK wali hide
-                    )
+                    "category.region": categoryRegion,
+
                 }
             },
             ...(search ? [{ $match: { 'category.name': { $regex: search, $options: 'i' } } }] : []),
@@ -119,7 +115,7 @@ export const getAllCategories = async (req, res) => {
             },
             { $sort: sort },
             { $skip: skip },
-            { $limit: limit }
+            { $limit: limit },
         ];
 
         const categories = await ServiceRequest.aggregate(aggregationPipeline);
@@ -140,14 +136,14 @@ export const getAllCategories = async (req, res) => {
 export const getServiceById = async (req, res) => {
     try {
         const { serviceId } = req.params;
-
+const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
         if (!mongoose.Types.ObjectId.isValid(serviceId)) {
             return res.status(400).json(new ApiResponse(400, null, 'Invalid service ID format'));
         }
 
         const service = await ServiceRequest.findOne({
             serviceId: { $in: [serviceId] },
-            status: 'approved'
+            status: 'approved',
         })
             .populate({
                 path: 'serviceId',

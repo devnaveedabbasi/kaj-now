@@ -89,7 +89,8 @@ export function initSocket(io) {
         // Verify this user belongs to this job
         let job;
         if (socket.user.role === 'customer') {
-          job = await Job.findOne({ _id: jobId, customer: socket.user._id });
+          job = await Job.findOne({ _id: jobId, customer: socket.user._id })
+            .populate('provider', 'userId');
         } else if (socket.user.role === 'provider') {
           job = await Job.findOne({ _id: jobId, provider: socket.provider._id });
         }
@@ -118,6 +119,24 @@ export function initSocket(io) {
         });
 
         socket.emit('joined_chat', { jobId, message: 'Joined chat room' });
+
+        // Room mein baaki logon ko batao ke ye user join hua
+        socket.to(room).emit('user_joined_chat', { userId });
+
+        // Dusrey ki "in chat" status emit karo (sirf agar wo bhi is room mein ho)
+        let otherUserId;
+        if (socket.user.role === 'customer') {
+          otherUserId = job.provider?.userId?.toString();
+        } else {
+          otherUserId = job.customer?.toString();
+        }
+        if (otherUserId) {
+          const otherInRoom = await isUserInRoom(io, room, otherUserId);
+          socket.emit('online_status', {
+            userId: otherUserId,
+            isOnline: otherInRoom,
+          });
+        }
 
       } catch (err) {
         console.error('[Socket] join_chat error:', err);
@@ -198,9 +217,17 @@ export function initSocket(io) {
           }
         }
 
-        // ── Push Notification (only if receiver NOT in this room) ──
+        // ── Push Notification + Badge (only if receiver NOT in this room) ──
         const receiverInRoom = await isUserInRoom(io, room, receiverId.toString());
         if (!receiverInRoom) {
+          // Real-time badge update — receiver ke saare active sockets ko direct notify karo
+          const receiverSocketIds = onlineUsers.get(receiverId.toString());
+          if (receiverSocketIds) {
+            receiverSocketIds.forEach(sid => {
+              io.to(sid).emit('new_message_notification', { jobId });
+            });
+          }
+
           const receiver = await User.findById(receiverId).select('fcmToken fcmTokens').lean();
           const tokens = [
             ...(receiver?.fcmTokens || []),
@@ -260,6 +287,15 @@ export function initSocket(io) {
         userId: checkId,
         isOnline: isUserOnline(checkId),
       });
+    });
+
+    // ── Leave Chat Room ─────────────────────────────────────
+    socket.on('leave_chat', ({ jobId }) => {
+      const room = `chat_${jobId}`;
+      socket.leave(room);
+      if (socket.currentJobId === jobId) socket.currentJobId = null;
+      socket.to(room).emit('user_left_chat', { userId });
+      console.log(`[Socket] ${socket.user.name} left room: ${room}`);
     });
 
     // ════════════════════════════════════════════════════════

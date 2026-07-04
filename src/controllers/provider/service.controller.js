@@ -12,7 +12,7 @@ export const getAllCategories = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-
+    const userRegion = req.user?.region; // Get the region of the logged-in provider
     const search = req.query.search || '';
 
     let query = {
@@ -20,7 +20,7 @@ export const getAllCategories = async (req, res) => {
         isDeleted: false,
         // Only show the provider's own market — a UK provider shouldn't be
         // offered BD categories to request against, and vice versa.
-        ...(req.user?.region && { region: req.user.region }),
+        ...(userRegion && { region: userRegion }),
     };
 
     if (search) {
@@ -39,7 +39,7 @@ export const getAllCategories = async (req, res) => {
             .lean(),
         Category.countDocuments(query)
     ]);
-    
+
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
             const activeServicesCount = await Service.countDocuments({
@@ -47,16 +47,16 @@ export const getAllCategories = async (req, res) => {
                 isActive: true,
                 isDeleted: false
             });
-            
+
             return {
                 ...category,
                 activeServicesCount
             };
         })
     );
-    
+
     const totalPages = Math.ceil(totalCount / limit);
-    
+
     res.status(200).json(
         new ApiResponse(200, {
             categories: categoriesWithCount,
@@ -74,45 +74,46 @@ export const getAllCategories = async (req, res) => {
 
 export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
-    
+   const userRegion = req.user?.region; // Get the region of the logged-in provider
     // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
         throw new ApiError(400, 'Invalid category ID format');
     }
-     
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-    
+
     const search = req.query.search || '';
-    
-    let query = { 
+
+    let query = {
         categoryId,
         isActive: true,
-        isDeleted: false
+        isDeleted: false,
+        ...(userRegion && { region: userRegion })
     };
-    
+
     if (search) {
         query.name = { $regex: search, $options: 'i' };
     }
-    
+
     // Check if category exists, is active, and belongs to the provider's
     // own market — a UK provider can't browse into a BD category by ID.
     const category = await Category.findOne({
         _id: categoryId,
         isActive: true,
         isDeleted: false,
-        ...(req.user?.region && { region: req.user.region }),
+        ...(userRegion && { region: userRegion }),
     });
 
     if (!category) {
         throw new ApiError(404, 'Category not found');
     }
-    
+
     const sortField = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
     const sort = { [sortField]: sortOrder };
-    
+
     const [services, totalCount] = await Promise.all([
         Service.find(query)
             .sort(sort)
@@ -121,9 +122,9 @@ export const getServicesByCategory = async (req, res) => {
             .lean(),
         Service.countDocuments(query)
     ]);
-    
+
     const totalPages = Math.ceil(totalCount / limit);
-    
+
     res.status(200).json(
         new ApiResponse(200, {
             category,
@@ -143,32 +144,122 @@ export const getServicesByCategory = async (req, res) => {
 export const requestService = async (req, res) => {
     try {
         const userId = req.user._id;
-        let { serviceId, price, description, availability } = req.body;
+        const userRegion = req.user?.region;
+        let {
+            serviceId,
+            categoryId,       // custom-service path only — no existing service to derive it from
+            isCustomService,
+            title,
+            description,
+            price,
+            subServices,
+            estimatedTime,
+            availability,
+        } = req.body;
 
-        // Handle serviceId as array
+        // Multipart form fields always arrive as strings.
+        const isCustom = isCustomService === true || isCustomService === 'true';
+
+        const provider = await Provider.findOne({ userId });
+        if (!provider) {
+            throw new ApiError(404, 'Provider profile not found');
+        }
+
+        const serviceImageFile = req.files?.serviceImage?.[0];
+
+        let parsedSubServices = [];
+        if (subServices) {
+            try {
+                parsedSubServices = typeof subServices === 'string' ? JSON.parse(subServices) : subServices;
+            } catch {
+                throw new ApiError(400, 'Invalid subServices format — must be JSON');
+            }
+        }
+
+        // `availability` is a list of days/slots — accept either a JSON
+        // array string or the array itself (repeated form field).
+        let parsedAvailability = [];
+        if (availability) {
+            try {
+                parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
+            } catch {
+                // Not JSON — treat as a single value.
+                parsedAvailability = [availability];
+            }
+            if (!Array.isArray(parsedAvailability)) {
+                parsedAvailability = [parsedAvailability];
+            }
+        }
+
+        // ── Path B: fully custom service, no admin template at all ────────
+        // Provider supplies everything themselves: title, cover photo,
+        // price, description. Category still comes from the admin's list.
+        if (isCustom) {
+            if (userRegion !== 'UK') {
+                throw new ApiError(403, 'Custom services are only available for UK providers');
+            }
+            if (!title || !categoryId || !price || !description) {
+                throw new ApiError(400, 'Title, category, price and description are required for a custom service');
+            }
+            if(!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) {
+                throw new ApiError(400, 'Invalid category ID format');
+            }
+            if (Number(price) < 0) {
+                throw new ApiError(400, 'Price cannot be negative');
+            }
+            if (!serviceImageFile) {
+                throw new ApiError(400, 'Service image is required for a custom service');
+            }
+
+            const category = await Category.findOne({
+                _id: categoryId,
+                isActive: true,
+                isDeleted: false,
+                region: 'UK',
+            });
+            if (!category) {
+                throw new ApiError(404, 'Category not found');
+            }
+
+            const request = await ServiceRequest.create({
+                providerId: provider._id,
+                categoryId,
+                isCustomService: true,
+                ukService: {
+                    title,
+                    serviceImage: `/uploads/service-requests/${serviceImageFile.filename}`,
+                    price: Number(price),
+                    description,
+                    subServices: parsedSubServices,
+                    ...(estimatedTime && { estimatedTime }),
+                    ...(parsedAvailability.length > 0 && { availability: parsedAvailability }),
+                },
+            });
+
+            await request.populate('categoryId', 'name icon');
+
+            return res.status(201).json(
+                new ApiResponse(201, { requests: [request], totalRequested: 1 }, 'Custom service request submitted successfully')
+            );
+        }
+
+        // ── Path A: request against an existing admin template (or, for
+        // BD, its original full-listing "just request it" flow — untouched)
         let finalServiceIds = [];
 
         if (serviceId && Array.isArray(serviceId)) {
             finalServiceIds = serviceId;
         } else if (serviceId && !Array.isArray(serviceId)) {
-            // If single ID sent as string
             finalServiceIds = [serviceId];
         } else {
             throw new ApiError(400, 'Service ID array is required');
-        }
-
-
-        // Get provider
-        const provider = await Provider.findOne({ userId });
-        if (!provider) {
-            throw new ApiError(404, 'Provider profile not found');
         }
 
         // Verify all services exist
         const services = await Service.find({
             _id: { $in: finalServiceIds },
             isDeleted: false,
-            isActive: true
+            isActive: true,
         });
 
         if (services.length !== finalServiceIds.length) {
@@ -178,15 +269,16 @@ export const requestService = async (req, res) => {
         }
 
         // A provider can only request services from their own market.
-        if (req.user?.region && services.some(s => s.region !== req.user.region)) {
+        if (userRegion && services.some(s => s.region !== userRegion)) {
             throw new ApiError(403, 'You can only request services in your own region');
         }
 
-        // UK services are templates (title + category only) — the provider
-        // supplies the actual listing details (price, description, images,
-        // etc). Since those details apply to ONE listing, a UK request can
-        // only target a single template at a time. BD keeps its original
-        // multi-service bundling behavior untouched.
+        // UK services are templates (title + category + icon only) — the
+        // provider supplies the actual listing details (price, description,
+        // cover photo, sub-services, etc). Since those details apply to ONE
+        // listing, a UK request can only target a single template at a
+        // time. BD keeps its original multi-service bundling behavior
+        // untouched (no extra fields required there).
         const isUkRequest = services.some(s => s.region === 'UK');
         if (isUkRequest) {
             if (finalServiceIds.length > 1) {
@@ -198,12 +290,15 @@ export const requestService = async (req, res) => {
             if (Number(price) < 0) {
                 throw new ApiError(400, 'Price cannot be negative');
             }
+            if (!serviceImageFile) {
+                throw new ApiError(400, 'Service image is required for this service request');
+            }
         }
 
-        if(provider.approvedServices && provider.approvedServices.length > 0){
+        if (provider.approvedServices && provider.approvedServices.length > 0) {
             const alreadyApprovedIds = provider.approvedServices.map(id => id.toString());
             const duplicateIds = finalServiceIds.filter(id => alreadyApprovedIds.includes(id));
-            if(duplicateIds.length > 0){
+            if (duplicateIds.length > 0) {
                 throw new ApiError(409, `Already have approved requests for service`);
             }
         }
@@ -216,7 +311,7 @@ export const requestService = async (req, res) => {
         });
 
         if (existingRequests.length > 0) {
-            const existingServiceIds = existingRequests.map(r => r.serviceId.toString());
+            const existingServiceIds = existingRequests.flatMap(r => r.serviceId.map(id => id.toString()));
             const newServiceIds = finalServiceIds.filter(id => !existingServiceIds.includes(id));
 
             if (newServiceIds.length === 0) {
@@ -226,9 +321,6 @@ export const requestService = async (req, res) => {
             // Only process new service IDs
             finalServiceIds = newServiceIds;
         }
-
-        const imageFiles = req.files?.images || [];
-        const imagePaths = imageFiles.map(f => `/uploads/service-requests/${f.filename}`);
 
         // Create multiple requests
         const requests = [];
@@ -241,10 +333,14 @@ export const requestService = async (req, res) => {
                 };
 
                 if (service.region === 'UK') {
-                    requestData.price = Number(price);
-                    requestData.description = description;
-                    if (availability) requestData.availability = availability;
-                    if (imagePaths.length > 0) requestData.images = imagePaths;
+                    requestData.ukService = {
+                        serviceImage: `/uploads/service-requests/${serviceImageFile.filename}`,
+                        price: Number(price),
+                        description,
+                        subServices: parsedSubServices,
+                        ...(estimatedTime && { estimatedTime }),
+                        ...(parsedAvailability.length > 0 && { availability: parsedAvailability }),
+                    };
                 }
 
                 const request = await ServiceRequest.create(requestData);
@@ -279,58 +375,88 @@ export const requestService = async (req, res) => {
 
 
 export const getMyServices = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const { status } = req.query; // optional filter
+    try {
+        const userId = req.user._id;
+        const { status } = req.query; // optional filter
 
-    const provider = await Provider.findOne({ userId })
-      .populate("userId", "name email profilePicture")
-      .populate("approvedServices", "name icon price description averageRating isActive isDeleted");
+        const provider = await Provider.findOne({ userId })
+            .populate("userId", "name email profilePicture")
+            .populate("approvedServices", "name icon price description averageRating isActive isDeleted");
 
-    if (!provider) throw new ApiError(404, "Provider profile not found");
+        if (!provider) throw new ApiError(404, "Provider profile not found");
 
-    // Build query — status filter ho to use karo, warna sab fetch karo
-    const query = { providerId: provider._id };
-    if (status) query.status = status;
+        // Build query — status filter ho to use karo, warna sab fetch karo
+        const query = { providerId: provider._id };
+        if (status) query.status = status;
 
-    const serviceRequests = await ServiceRequest.find(query)
-      .populate("serviceId", "name icon price description averageRating isActive isDeleted")
-      .lean();
+        const serviceRequests = await ServiceRequest.find(query)
+            .populate("serviceId", "name icon price description averageRating isActive isDeleted")
+            .lean();
 
-    // Har request ko format karo with its services
-    const services = serviceRequests.flatMap((request) =>
-      (request.serviceId || []).map((service) => ({
-        _id: service._id,
-        name: service.name,
-        icon: service.icon,
-        price: service.price,
-        description: service.description,
-        averageRating: service.averageRating || 0,
-        status: request.status,           // pending / approved / rejected
-        requestId: request._id,
-        rejectionReason: request.rejectionReason || null,
-        notes: request.notes || null,
-        requestedAt: request.requestedAt,
-        reviewedAt: request.reviewedAt || null,
-      }))
-    );
+        // Har request ko format karo with its services. UK listings carry
+        // the provider's own price/description/icon/image on `ukService`
+        // (preferred when present) rather than the admin template, which
+        // stays a bare title+category shell. A pending custom-service
+        // request has no Service yet at all, so it's synthesized entirely
+        // from `ukService`.
+        const services = serviceRequests.flatMap((request) => {
+            const uk = request.ukService;
 
-    return res.status(200).json(new ApiResponse(200, {
-      _id: provider._id,
-      providerName: provider.userId?.name || "Unknown",
-      providerEmail: provider.userId?.email || "Unknown",
-      profilePicture: provider.userId?.profilePicture || null,
-      totalServices: services.length,
-      services,
-    }, "Services retrieved successfully"));
+            if (request.isCustomService && (!request.serviceId || request.serviceId.length === 0)) {
+                return [{
+                    _id: request._id,
+                    name: uk?.title,
+                    icon: uk?.icon,
+                    serviceImage: uk?.serviceImage,
+                    price: uk?.price,
+                    description: uk?.description,
+                    subServices: uk?.subServices || [],
+                    averageRating: 0,
+                    isCustomService: true,
+                    status: request.status,
+                    requestId: request._id,
+                    rejectionReason: request.rejectionReason || null,
+                    notes: request.notes || null,
+                    requestedAt: request.requestedAt,
+                    reviewedAt: request.reviewedAt || null,
+                }];
+            }
 
-  } catch (error) {
-    console.error("Error getting services:", error);
-    if (error instanceof ApiError) {
-      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+            return (request.serviceId || []).map((service) => ({
+                _id: service._id,
+                name: service.name,
+                icon: uk?.icon || service.icon,
+                serviceImage: uk?.serviceImage,
+                price: uk?.price ?? service.price,
+                description: uk?.description || service.description,
+                subServices: uk?.subServices || [],
+                averageRating: service.averageRating || 0,
+                isCustomService: request.isCustomService || false,
+                status: request.status,           // pending / approved / rejected
+                requestId: request._id,
+                rejectionReason: request.rejectionReason || null,
+                notes: request.notes || null,
+                requestedAt: request.requestedAt,
+                reviewedAt: request.reviewedAt || null,
+            }));
+        });
+
+        return res.status(200).json(new ApiResponse(200, {
+            _id: provider._id,
+            providerName: provider.userId?.name || "Unknown",
+            providerEmail: provider.userId?.email || "Unknown",
+            profilePicture: provider.userId?.profilePicture || null,
+            totalServices: services.length,
+            services,
+        }, "Services retrieved successfully"));
+
+    } catch (error) {
+        console.error("Error getting services:", error);
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        }
+        return res.status(500).json(new ApiResponse(500, null, "Internal server error"));
     }
-    return res.status(500).json(new ApiResponse(500, null, "Internal server error"));
-  }
 };
 
 
@@ -381,8 +507,8 @@ export const getServiceById = async (req, res) => {
             reviews = await mongoose.model('Review').find({
                 service: targetService._id
             })
-            .populate('userId', 'name email profilePicture')
-            .lean();
+                .populate('userId', 'name email profilePicture')
+                .lean();
 
             if (reviews.length > 0) {
                 reviews.forEach(review => {
@@ -465,64 +591,64 @@ export const getServiceById = async (req, res) => {
 
 
 export const deleteService = async (req, res) => {
-  try {
-    const userId = req.user._id;
-    const { serviceId } = req.params;
+    try {
+        const userId = req.user._id;
+        const { serviceId } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(serviceId)) {
-      throw new ApiError(400, 'Invalid service ID');
+        if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+            throw new ApiError(400, 'Invalid service ID');
+        }
+
+        // 1. Provider
+        const provider = await Provider.findOne({ userId });
+        if (!provider) {
+            throw new ApiError(404, 'Provider not found');
+        }
+
+        // 2. Service Request
+        const serviceRequest = await ServiceRequest.findOne({
+            providerId: provider._id,
+            serviceId: { $in: [serviceId] }
+        });
+
+        if (!serviceRequest) {
+            throw new ApiError(404, 'Service request not found');
+        }
+
+        // 3. CHECK: koi bhi non-completed job ho to block
+        const blockingJob = await Job.findOne({
+            provider: provider._id,
+            service: serviceId,
+            status: { $nin: ['confirmed_by_user', 'confirmed_by_admin', 'cancelled'] } //  IMPORTANT
+        });
+
+        if (blockingJob) {
+            throw new ApiError(
+                400,
+                'Service cannot be deleted. Job is still in progress or not completed.'
+            );
+        }
+
+        // 4. DELETE SERVICE REQUEST 
+        await ServiceRequest.deleteOne({ _id: serviceRequest._id });
+
+        // 5. REMOVE FROM PROVIDER APPROVED SERVICES 
+        await Provider.updateOne(
+            { _id: provider._id },
+            {
+                $pull: { approvedServices: serviceId }
+            }
+        );
+
+        return res.status(200).json(
+            new ApiResponse(200, null, 'Service deleted successfully')
+        );
+
+    } catch (error) {
+        console.error('Delete Service Error:', error);
+
+        return res.status(error.statusCode || 500).json(
+            new ApiResponse(error.statusCode || 500, null, error.message)
+        );
     }
-
-    // 1. Provider
-    const provider = await Provider.findOne({ userId });
-    if (!provider) {
-      throw new ApiError(404, 'Provider not found');
-    }
-
-    // 2. Service Request
-    const serviceRequest = await ServiceRequest.findOne({
-      providerId: provider._id,
-      serviceId: { $in: [serviceId] }
-    });
-
-    if (!serviceRequest) {
-      throw new ApiError(404, 'Service request not found');
-    }
-
-    // 3. CHECK: koi bhi non-completed job ho to block
-    const blockingJob = await Job.findOne({
-      provider: provider._id,
-      service: serviceId,
-      status: { $nin: ['confirmed_by_user', 'confirmed_by_admin', 'cancelled'] } //  IMPORTANT
-    });
-
-    if (blockingJob) {
-      throw new ApiError(
-        400,
-        'Service cannot be deleted. Job is still in progress or not completed.'
-      );
-    }
-
-    // 4. DELETE SERVICE REQUEST 
-    await ServiceRequest.deleteOne({ _id: serviceRequest._id });
-
-    // 5. REMOVE FROM PROVIDER APPROVED SERVICES 
-    await Provider.updateOne(
-      { _id: provider._id },
-      {
-        $pull: { approvedServices: serviceId }
-      }
-    );
-
-    return res.status(200).json(
-      new ApiResponse(200, null, 'Service deleted successfully')
-    );
-
-  } catch (error) {
-    console.error('Delete Service Error:', error);
-
-    return res.status(error.statusCode || 500).json(
-      new ApiResponse(error.statusCode || 500, null, error.message)
-    );
-  }
 };

@@ -17,9 +17,8 @@ const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const phoneRegex = /^(\+44[1-9][0-9]{9}|\+880[1-9][0-9]{9})$/;
-
-
+const bdPhoneRegex = /^(\+880|880|0)?1[3-9][0-9]{8}$/;
+const ukPhoneRegex = /^\+44[0-9]{10}$/;
 
 function publicUserDoc(user) {
   const u = user.toObject ? user.toObject() : { ...user };
@@ -54,10 +53,11 @@ export async function register(req, res) {
   if (password.length < 8) {
     throw new ApiError(400, 'Password must be at least 8 characters.');
   }
-
-  if (!phoneRegex.test(phone)) {
-    throw new ApiError(400, 'Only UK or Bangladesh phone numbers are allowed.');
-  }
+ console.log(phone,'phone')
+ 
+   if (!bdPhoneRegex.test(phone) && !ukPhoneRegex.test(phone)) {
+     throw new ApiError(400, 'Only Bangla and UK phone numbers are allowed.');
+   }
 
   const region = phone.startsWith('+44') ? 'UK' : 'BD';
 
@@ -423,7 +423,7 @@ export async function me(req, res) {
         email: user.email,
         region: user.region,
         role: user.role,
-        contractStatus:user?.contractStatus,
+        contractStatus: user?.contractStatus,
         phone: user.phone,
         status: user.status,
         location: user.location,

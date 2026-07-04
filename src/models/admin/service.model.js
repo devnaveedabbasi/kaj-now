@@ -8,12 +8,12 @@ const serviceSchema = new mongoose.Schema({
     region: { type: String, enum: ['UK', 'BD'], default: 'BD', index: true },
     categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
     name: { type: String, required: true, trim: true, unique: true, minlength: 4, maxlength: 100 },
-    // UK services are just templates (title + category) — the provider fills
-    // in price/description/images/etc themselves on their ServiceRequest.
+    // UK services are just templates (icon + title + category) — the provider
+    // fills in price/description/images/etc themselves on their ServiceRequest.
     // BD services keep the original full-listing requirements untouched.
     icon: {
         type: String,
-        required: function () { return this.region !== 'UK'; },
+        required: true,
     },
     serviceImage: {
         type: String,

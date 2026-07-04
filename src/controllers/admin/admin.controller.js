@@ -364,11 +364,22 @@ export const getAllProviders = async (req, res) => {
         isActive: provider.userId?.isActive
       },
       category: provider.Category,
+      providerType: provider.providerType,
       documents: {
+        // BD Individual
         facePhoto: provider.facePhoto,
         idCardFront: provider.idCardFront,
         idCardBack: provider.idCardBack,
-        certificates: provider.certificates
+        certificates: provider.certificates,
+        // UK Individual
+        addressProof: provider.addressProof,
+        rightToWork: provider.rightToWork,
+        dbsCertificate: provider.dbsCertificate,
+        // UK Company
+        companyAddressProof: provider.companyAddressProof,
+        companyName: provider.companyName,
+        companyNumber: provider.companyNumber,
+        directorId: provider.directorId,
       },
       createdAt: provider.createdAt
     }));
@@ -560,13 +571,24 @@ export const approveProviderKyc = async (req, res) => {
       throw new ApiError(400, 'KYC is already approved');
     }
 
-    // Check if documents are uploaded
-    if (!provider.facePhoto || !provider.idCardFront || !provider.idCardBack) {
-      throw new ApiError(400, 'Cannot approve KYC. Required documents are missing');
-    }
-
     const providerUser = provider.userId;
     const isUK = providerUser?.region === 'UK';
+    const isCompany = provider.providerType === 'company';
+
+    // Region-aware document check
+    if (isUK && isCompany) {
+      if (!provider.companyAddressProof) {
+        throw new ApiError(400, 'Cannot approve KYC. Company Address Proof is missing');
+      }
+    } else if (isUK) {
+      if (!provider.addressProof || !provider.rightToWork) {
+        throw new ApiError(400, 'Cannot approve KYC. Address Proof or Right To Work document is missing');
+      }
+    } else {
+      if (!provider.facePhoto || !provider.idCardFront || !provider.idCardBack) {
+        throw new ApiError(400, 'Cannot approve KYC. Required documents are missing');
+      }
+    }
 
     provider.kycStatus = 'approved';
     provider.isKycCompleted = true;

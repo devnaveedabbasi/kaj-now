@@ -457,7 +457,9 @@ export const completeProfile = async (req, res) => {
   const isCompany = providerType === 'company';
 
   // COMMON REQUIRED
-  if (!serviceCategoryId) throw new ApiError(400, "Service category is required");
+  if (!isUK) {
+    if (!serviceCategoryId) throw new ApiError(400, "Service category is required");
+  }
   if (!serviceIds) throw new ApiError(400, "Services are required");
   if (!latitude || !longitude) throw new ApiError(400, "Location coordinates are required");
 
@@ -510,10 +512,10 @@ export const completeProfile = async (req, res) => {
     // UK Company — sirf companyAddressProof
     requiredFiles = ["companyAddressProof"];
   } else if (isUK && !isCompany) {
-    // UK Individual — common + addressProof + rightToWork (dbsCertificate optional)
-    requiredFiles = ["facePhoto", "idCardFront", "idCardBack", "addressProof", "rightToWork"];
+    // UK Individual — ID card / face photo nahi, sirf addressProof + rightToWork
+    requiredFiles = ["addressProof", "rightToWork"];
   } else {
-    // BD — common only
+    // BD — face photo + ID card
     requiredFiles = ["facePhoto", "idCardFront", "idCardBack"];
   }
 
@@ -531,45 +533,51 @@ export const completeProfile = async (req, res) => {
   if (!provider) throw new ApiError(404, "Provider not found");
 
   // CATEGORY VALIDATION
-  const category = await Category.findById(serviceCategoryId);
-  if (!category) throw new ApiError(404, "Invalid category");
-
+  if (!isUK) {
+    const category = await Category.findById(serviceCategoryId);
+    if (!category) throw new ApiError(404, "Invalid category");
+  }
   // SERVICES VALIDATION
   let serviceIdArray = Array.isArray(serviceIds) ? serviceIds : [serviceIds];
 
-  const services = await Service.find({
+  const serviceQuery = {
     _id: { $in: serviceIdArray },
-    categoryId: serviceCategoryId,
-  });
+    region: userRegion,
+  };
+  // UK doesn't collect a single serviceCategoryId upfront — the provider's
+  // chosen services can span categories, so only filter by category for BD.
+  if (!isUK) {
+    serviceQuery.categoryId = serviceCategoryId;
+  }
+
+  const services = await Service.find(serviceQuery);
 
   if (services.length !== serviceIdArray.length) {
     throw new ApiError(400, "Invalid services for selected category");
   }
 
-  // OPTIONAL: check duplicates request
+  // ServiceRequest.categoryId is required — for UK, derive it from the
+  // services actually selected rather than an (unsent) serviceCategoryId.
+  const requestCategoryId = isUK ? services[0]?.categoryId : serviceCategoryId;
+
   const existingRequests = await ServiceRequest.find({
     providerId: provider._id,
     serviceId: { $in: serviceIdArray },
     status: { $in: ["pending", "approved"] },
   });
 
-  if (existingRequests.length > 0) {
-    throw new ApiError(400, "Service request already exists");
-  }
-
-  // CREATE SERVICE REQUEST (ONLY ONCE VALIDATION PASSED)
   await ServiceRequest.create({
     providerId: provider._id,
     serviceId: serviceIdArray,
-    categoryId: serviceCategoryId,
+    categoryId: requestCategoryId,
   });
 
+  provider.Category = requestCategoryId;
+  provider.services = serviceIdArray;
   // UPDATE PROVIDER
   const uploadPath = "/uploads/provider/";
 
   provider.providerType = providerType || 'individual';
-  provider.Category = serviceCategoryId;
-  provider.services = serviceIdArray;
 
   if (permanentAddress) provider.permanentAddress = permanentAddress;
 
@@ -586,25 +594,24 @@ export const completeProfile = async (req, res) => {
     provider.directorId = directorId.trim();
     provider.companyAddressProof = `${uploadPath}${files.companyAddressProof[0].filename}`;
 
+  } else if (isUK) {
+    // UK Individual — no face photo / ID card
+    provider.gender = gender;
+    provider.dob = parsedDob;
+    provider.addressProof = `${uploadPath}${files.addressProof[0].filename}`;
+    provider.rightToWork = `${uploadPath}${files.rightToWork[0].filename}`;
+    if (files.dbsCertificate?.[0]) {
+      provider.dbsCertificate = `${uploadPath}${files.dbsCertificate[0].filename}`;
+    }
   } else {
-    // BD + UK Individual — common fields
+    // BD Individual — face photo + ID card
     provider.gender = gender;
     provider.dob = parsedDob;
     provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
     provider.idCardFront = `${uploadPath}${files.idCardFront[0].filename}`;
     provider.idCardBack = `${uploadPath}${files.idCardBack[0].filename}`;
-
     if (files.certificates?.length > 0) {
       provider.certificates = files.certificates.map(f => `${uploadPath}${f.filename}`);
-    }
-
-    // UK Individual extra fields
-    if (isUK) {
-      provider.addressProof = `${uploadPath}${files.addressProof[0].filename}`;
-      provider.rightToWork = `${uploadPath}${files.rightToWork[0].filename}`;
-      if (files.dbsCertificate?.[0]) {
-        provider.dbsCertificate = `${uploadPath}${files.dbsCertificate[0].filename}`;
-      }
     }
   }
 

@@ -153,6 +153,7 @@ export const getAllEligibleRequests = async (req, res) => {
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
         const search = req.query.search || '';
+        const region = req.query.region;
         // Base pipeline: approved + active/non-deleted services & categories
         const basePipeline = [
             { $match: { status: 'approved' } },
@@ -179,7 +180,9 @@ export const getAllEligibleRequests = async (req, res) => {
             {
                 $match: {
                     'categoryArr.isActive': true,
-                    'categoryArr.isDeleted': false
+                    'categoryArr.isDeleted': false,
+                    ...(region === 'UK' ? { 'categoryArr.region': 'UK' } : {}),
+                    ...(region === 'BD' ? { 'categoryArr.region': { $ne: 'UK' } } : {})
                 }
             },
             // Join provider

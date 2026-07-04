@@ -90,17 +90,15 @@ export const createService = async (req, res) => {
             throw new ApiError(409, 'Service already exists in this category');
         }
 
-        if (!isTemplate) {
-            // Handle icon upload - icon is required
-            if (!iconFile) {
-                cleanupFiles(req.files);
-                throw new ApiError(400, 'Service icon is required');
-            }
+        // Icon is required for every service, template or not.
+        if (!iconFile) {
+            cleanupFiles(req.files);
+            throw new ApiError(400, 'Service icon is required');
+        }
 
-            if(!serviceImageFile) {
-                cleanupFiles(req.files);
-                throw new ApiError(400, 'Service image is required');
-            }
+        if (!isTemplate && !serviceImageFile) {
+            cleanupFiles(req.files);
+            throw new ApiError(400, 'Service image is required');
         }
 
         const iconPath = iconFile ? `/uploads/services/icons/${iconFile.filename}` : undefined;

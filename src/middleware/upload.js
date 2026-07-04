@@ -84,7 +84,10 @@ export const uploadServiceRequestImages = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: fileFilter
 }).fields([
-  { name: 'images', maxCount: 5 },
+  // Provider's own cover photo for the listing — used for both the
+  // template path and the custom-service path (which has no separate
+  // admin-provided icon to fall back on).
+  { name: 'serviceImage', maxCount: 1 },
 ]);
 
 // Provider storage

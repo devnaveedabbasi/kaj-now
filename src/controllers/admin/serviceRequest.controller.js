@@ -147,6 +147,47 @@ export const approveServiceRequest = async (req, res) => {
         throw new ApiError(400, `Cannot approve request with status: ${request.status}`);
     }
 
+    // A custom-service request has no Service yet — the admin approving it
+    // is the moment it actually joins the real catalog. Template-based
+    // requests already reference an existing Service and skip this.
+    if (request.isCustomService && (!request.serviceId || request.serviceId.length === 0)) {
+        const category = await Category.findById(request.categoryId);
+        if (!category) {
+            throw new ApiError(404, 'Category for this request no longer exists');
+        }
+
+        const adminUser = await User.findOne({ role: 'admin' }).select('_id').lean();
+        if (!adminUser) {
+            throw new ApiError(500, 'No admin account found to own the new service');
+        }
+
+        const uk = request.ukService || {};
+        let newService;
+        try {
+            newService = await Service.create({
+                userId: adminUser._id,
+                categoryId: request.categoryId,
+                region: category.region,
+                name: uk.title,
+                // Custom-service providers only supply one photo (no
+                // separate small icon) — reuse it to satisfy Service's
+                // required `icon` field too.
+                icon: uk.serviceImage,
+                serviceImage: uk.serviceImage,
+                price: uk.price,
+                description: uk.description,
+                subServices: uk.subServices || [],
+            });
+        } catch (error) {
+            if (error.code === 11000) {
+                throw new ApiError(409, `A service named "${uk.title}" already exists — ask the provider to choose a different title`);
+            }
+            throw error;
+        }
+
+        request.serviceId = [newService._id];
+    }
+
     // Update request status
     request.status = 'approved';
     request.reviewedAt = new Date();
