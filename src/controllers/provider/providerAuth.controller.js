@@ -459,8 +459,8 @@ export const completeProfile = async (req, res) => {
   // COMMON REQUIRED
   if (!isUK) {
     if (!serviceCategoryId) throw new ApiError(400, "Service category is required");
+    if (!serviceIds) throw new ApiError(400, "Services are required");
   }
-  if (!serviceIds) throw new ApiError(400, "Services are required");
   if (!latitude || !longitude) throw new ApiError(400, "Location coordinates are required");
 
   // GENDER + DOB — company provider ke liye nahi
@@ -537,43 +537,52 @@ export const completeProfile = async (req, res) => {
     const category = await Category.findById(serviceCategoryId);
     if (!category) throw new ApiError(404, "Invalid category");
   }
-  // SERVICES VALIDATION
-  let serviceIdArray = Array.isArray(serviceIds) ? serviceIds : [serviceIds];
+  let serviceIdArray = [];
 
-  const serviceQuery = {
-    _id: { $in: serviceIdArray },
-    region: userRegion,
-  };
-  // UK doesn't collect a single serviceCategoryId upfront — the provider's
-  // chosen services can span categories, so only filter by category for BD.
-  if (!isUK) {
-    serviceQuery.categoryId = serviceCategoryId;
+if (!isUK) {
+  // CATEGORY VALIDATION
+  const category = await Category.findById(serviceCategoryId);
+  if (!category) {
+    throw new ApiError(404, "Invalid category");
   }
 
-  const services = await Service.find(serviceQuery);
+  // SERVICES VALIDATION
+  serviceIdArray = Array.isArray(serviceIds)
+    ? serviceIds
+    : [serviceIds];
+
+  const services = await Service.find({
+    _id: { $in: serviceIdArray },
+    categoryId: serviceCategoryId,
+    region: "BD",
+  });
 
   if (services.length !== serviceIdArray.length) {
     throw new ApiError(400, "Invalid services for selected category");
   }
 
-  // ServiceRequest.categoryId is required — for UK, derive it from the
-  // services actually selected rather than an (unsent) serviceCategoryId.
-  const requestCategoryId = isUK ? services[0]?.categoryId : serviceCategoryId;
-
+  // CHECK DUPLICATE
   const existingRequests = await ServiceRequest.find({
     providerId: provider._id,
     serviceId: { $in: serviceIdArray },
     status: { $in: ["pending", "approved"] },
   });
 
+  if (existingRequests.length > 0) {
+    throw new ApiError(400, "Service request already exists");
+  }
+
+  // CREATE REQUEST
   await ServiceRequest.create({
     providerId: provider._id,
     serviceId: serviceIdArray,
-    categoryId: requestCategoryId,
+    categoryId: serviceCategoryId,
   });
 
-  provider.Category = requestCategoryId;
+  // SAVE TO PROVIDER
+  provider.Category = serviceCategoryId;
   provider.services = serviceIdArray;
+}
   // UPDATE PROVIDER
   const uploadPath = "/uploads/provider/";
 
