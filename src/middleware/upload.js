@@ -218,6 +218,30 @@ export const uploadContractPdf = multer({
   }
 }).single('contractPdf');
 
+// Signed contract PDF — provider uploads their signed copy of the agreement
+const signedContractStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'public/contracts/signed';
+    ensureDirectoryExists(dir);
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    cb(null, `signed-${req.user._id}-${Date.now()}.pdf`);
+  }
+});
+
+export const uploadSignedContractPdf = multer({
+  storage: signedContractStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed'));
+    }
+  }
+}).single('signedContract');
+
 const withdrawalReceiptStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = 'public/uploads/withdrawals/receipts';

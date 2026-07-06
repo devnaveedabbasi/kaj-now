@@ -69,12 +69,15 @@ const providerSchema = new mongoose.Schema(
     providerType: { type: String, enum: ['individual', 'company'], default: 'individual' },
 
     // Contract (UK providers only)
-    contractFile: { type: String, default: '' },
-    contractStatus: { type: String, enum: ['not_required', 'pending', 'signed', 'approved'], default: 'not_required' },
-    signatureImage: { type: String, default: '' },
+    contractFile: { type: String, default: '' }, // reference copy of the global agreement, snapshotted at KYC-approval time
+    signedContractFile: { type: String, default: '' }, // provider-uploaded signed copy
+    contractStatus: { type: String, enum: ['not_required', 'pending', 'signed', 'approved', 'rejected'], default: 'not_required' },
+    signatureImage: { type: String, default: '' }, // legacy in-app drawn signature, kept for backward compatibility
     agreedToTerms: { type: Boolean, default: false },
     contractSignedAt: { type: Date },
     contractApprovedAt: { type: Date },
+    contractRejectionReason: { type: String, trim: true, default: '' },
+    contractRejectedAt: { type: Date },
 
     certificates: { type: [String], default: [] },
 

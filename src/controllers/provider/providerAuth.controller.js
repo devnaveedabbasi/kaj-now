@@ -269,6 +269,8 @@ export async function login(req, res) {
           role: user.role,
           phone: user.phone,
           status: user.status,
+          isContractStatus: provider.contractStatus,
+          region: user?.region,
           isKycCompleted: provider.isKycCompleted,
           kycStatus: provider.kycStatus,
         },

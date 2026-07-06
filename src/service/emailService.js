@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
+import fs from 'fs';
 import config from '../config/index.js';
-import { complaintReplyTemplate, noteReplyTemplate, contractPendingTemplate, contractApprovedTemplate } from '../utils/emailTemplates.js';
+import { complaintReplyTemplate, noteReplyTemplate, contractPendingTemplate, contractApprovedTemplate, contractRejectedTemplate } from '../utils/emailTemplates.js';
 
 
 const transporter = nodemailer.createTransport({
@@ -173,12 +174,15 @@ export const sendNoteReplyEmail = async (to, data) => {
 // =========================
 //  WITHDRAWAL REJECTED EMAIL
 // =========================
-export const sendContractPendingEmail = async (to, { userName }) => {
+export const sendContractPendingEmail = async (to, { userName, contractPath }) => {
     const mailOptions = {
         from: `"KajNow" <${config.email.user}>`,
         to,
         subject: 'Action Required: Sign Your KajNow Provider Contract',
         html: contractPendingTemplate({ userName }),
+        attachments: (contractPath && fs.existsSync(contractPath))
+            ? [{ filename: 'KajNow-Provider-Agreement.pdf', path: contractPath }]
+            : [],
     };
     try {
         await transporter.sendMail(mailOptions);
@@ -198,6 +202,20 @@ export const sendContractApprovedEmail = async (to, { userName }) => {
         await transporter.sendMail(mailOptions);
     } catch (error) {
         console.error('Contract approved email failed:', error);
+    }
+};
+
+export const sendContractRejectedEmail = async (to, { userName, reason }) => {
+    const mailOptions = {
+        from: `"KajNow" <${config.email.user}>`,
+        to,
+        subject: 'Your KajNow Provider Contract was Rejected',
+        html: contractRejectedTemplate({ userName, reason }),
+    };
+    try {
+        await transporter.sendMail(mailOptions);
+    } catch (error) {
+        console.error('Contract rejected email failed:', error);
     }
 };
 

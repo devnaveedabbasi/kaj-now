@@ -1,15 +1,12 @@
-import fs from 'fs';
-import path from 'path';
 import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
-import { createNotification } from '../../utils/notification.js';
 
 // GET /provider/contract
 export const getMyContract = async (req, res) => {
     try {
         const provider = await Provider.findOne({ userId: req.user._id })
-            .select('contractFile contractStatus signatureImage agreedToTerms contractSignedAt contractApprovedAt')
+            .select('contractFile signedContractFile contractStatus agreedToTerms contractSignedAt contractApprovedAt contractRejectionReason contractRejectedAt')
             .lean();
 
         if (!provider) throw new ApiError(404, 'Provider profile not found');
@@ -20,10 +17,13 @@ export const getMyContract = async (req, res) => {
         res.status(200).json(
             new ApiResponse(200, {
                 contractFile: provider.contractFile,
+                signedContractFile: provider.signedContractFile || null,
                 contractStatus: provider.contractStatus,
                 agreedToTerms: provider.agreedToTerms,
                 contractSignedAt: provider.contractSignedAt || null,
                 contractApprovedAt: provider.contractApprovedAt || null,
+                contractRejectionReason: provider.contractRejectionReason || null,
+                contractRejectedAt: provider.contractRejectedAt || null,
             }, 'Contract fetched successfully')
         );
     } catch (error) {
@@ -34,13 +34,10 @@ export const getMyContract = async (req, res) => {
     }
 };
 
-// POST /provider/contract/sign
+// POST /provider/contract/sign — provider uploads their signed copy of the contract PDF
 export const submitSignedContract = async (req, res) => {
     try {
-        const { signatureImage, agreedToTerms } = req.body;
-
-        if (!signatureImage) throw new ApiError(400, 'Signature is required');
-        if (!agreedToTerms) throw new ApiError(400, 'You must agree to the terms and conditions');
+        if (!req.file) throw new ApiError(400, 'Signed contract PDF is required');
 
         const provider = await Provider.findOne({ userId: req.user._id });
         if (!provider) throw new ApiError(404, 'Provider profile not found');
@@ -54,27 +51,24 @@ export const submitSignedContract = async (req, res) => {
         if (provider.contractStatus === 'signed') {
             throw new ApiError(400, 'Contract already submitted. Awaiting admin approval.');
         }
+        if (provider.contractStatus === 'rejected') {
+            throw new ApiError(400, 'Your contract was rejected. Please complete your KYC verification again to receive a new contract.');
+        }
 
-        // Save signature image as file
-        const sigDir = 'public/uploads/signatures';
-        if (!fs.existsSync(sigDir)) fs.mkdirSync(sigDir, { recursive: true });
-
-        const base64Data = signatureImage.replace(/^data:image\/\w+;base64,/, '');
-        const sigFileName = `sig-${provider._id}-${Date.now()}.png`;
-        const sigFilePath = path.join(sigDir, sigFileName);
-        fs.writeFileSync(sigFilePath, Buffer.from(base64Data, 'base64'));
-
-        provider.signatureImage = `uploads/signatures/${sigFileName}`;
+        provider.signedContractFile = `contracts/signed/${req.file.filename}`;
         provider.contractStatus = 'signed';
         provider.agreedToTerms = true;
         provider.contractSignedAt = new Date();
+        provider.contractRejectionReason = '';
+        provider.contractRejectedAt = undefined;
         await provider.save();
 
         res.status(200).json(
             new ApiResponse(200, {
+                signedContractFile: provider.signedContractFile,
                 contractStatus: provider.contractStatus,
                 contractSignedAt: provider.contractSignedAt
-            }, 'Contract signed successfully. Awaiting admin approval.')
+            }, 'Signed contract submitted successfully. Awaiting admin approval.')
         );
     } catch (error) {
         if (error instanceof ApiError) {

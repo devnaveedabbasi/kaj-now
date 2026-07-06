@@ -74,7 +74,7 @@ export const getAllCategories = async (req, res) => {
 
 export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
-   const userRegion = req.user?.region; // Get the region of the logged-in provider
+    const userRegion = req.user?.region; // Get the region of the logged-in provider
     // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
         throw new ApiError(400, 'Invalid category ID format');
@@ -201,7 +201,7 @@ export const requestService = async (req, res) => {
             if (!title || !categoryId || !price || !description) {
                 throw new ApiError(400, 'Title, category, price and description are required for a custom service');
             }
-            if(!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) {
+            if (!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) {
                 throw new ApiError(400, 'Invalid category ID format');
             }
             if (Number(price) < 0) {
@@ -472,7 +472,9 @@ export const getServiceById = async (req, res) => {
         const provider = await Provider.findOne({ userId: req.user._id });
         if (!provider) throw new ApiError(404, 'Provider profile not found');
 
-        const serviceRequest = await ServiceRequest.findOne({
+        // ── FLOW 1: Template service ──────────────────────────────────
+        // Param = Service _id, serviceId array ke andar match hoga
+        let serviceRequest = await ServiceRequest.findOne({
             serviceId: serviceId,
             providerId: provider._id
         })
@@ -481,11 +483,28 @@ export const getServiceById = async (req, res) => {
             .populate('categoryId', 'name icon')
             .lean();
 
+        let isCustomFlow = false;
+
+        // ── FLOW 2: Custom service (isCustomService: true) ────────────
+        // Service doc exist nahi karta, param = ServiceRequest ki apni _id
+        if (!serviceRequest) {
+            serviceRequest = await ServiceRequest.findOne({
+                _id: serviceId,
+                providerId: provider._id,
+                isCustomService: true
+            })
+                .populate('providerId', 'userId businessName businessPhone businessEmail location')
+                .populate('categoryId', 'name icon')
+                .lean();
+
+            isCustomFlow = true;
+        }
+
         if (!serviceRequest) {
             throw new ApiError(404, 'Service request not found');
         }
 
-        // Get provider user details
+        // Provider user details
         let providerUser = null;
         if (serviceRequest.providerId?.userId) {
             providerUser = await mongoose.model('User').findById(serviceRequest.providerId.userId)
@@ -493,29 +512,52 @@ export const getServiceById = async (req, res) => {
                 .lean();
         }
 
-        // Get reviews for the service
+        // ── Target service resolve karo (flow ke hisaab se) ──────────
+        let targetService;
+        let reviewServiceId; // Review query kis id pe chalegi
+
+        if (isCustomFlow) {
+            // Custom flow: saara data ukService se aayega
+            const uk = serviceRequest.ukService || {};
+            targetService = {
+                _id: serviceRequest._id,
+                name: uk.title,
+                description: uk.description,
+                icon: uk.serviceImage,
+                price: uk.price,
+                averageRating: 0,
+                subServices: uk.subServices || [],
+                estimatedTime: uk.estimatedTime,
+                availability: uk.availability || []
+            };
+            // Custom service ka koi Service doc nahi — agar reviews
+            // ServiceRequest._id pe store hote hain to ye chalega,
+            // warna reviews khali aayenge (safe)
+            reviewServiceId = serviceRequest._id;
+        } else {
+            // Template flow: populated array mein se requested service dhundo
+            targetService = serviceRequest.serviceId?.find(
+                s => s._id.toString() === serviceId
+            ) || serviceRequest.serviceId?.[0];
+            reviewServiceId = targetService?._id;
+        }
+
+        // ── Reviews ───────────────────────────────────────────────────
         let reviews = [];
         let ratingDistribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-        let totalRating = 0;
 
-        // Requested service ko array mein se dhundho
-        const targetService = serviceRequest.serviceId?.find(
-            s => s._id.toString() === serviceId
-        ) || serviceRequest.serviceId?.[0];
-
-        if (targetService) {
+        if (reviewServiceId) {
             reviews = await mongoose.model('Review').find({
-                service: targetService._id
+                service: reviewServiceId
             })
                 .populate('userId', 'name email profilePicture')
                 .lean();
 
-            if (reviews.length > 0) {
-                reviews.forEach(review => {
+            reviews.forEach(review => {
+                if (ratingDistribution[review.rating] !== undefined) {
                     ratingDistribution[review.rating]++;
-                    totalRating += review.rating;
-                });
-            }
+                }
+            });
         }
 
         const formattedReviews = reviews.map(review => ({
@@ -531,13 +573,21 @@ export const getServiceById = async (req, res) => {
 
         const response = {
             _id: serviceRequest._id,
+            isCustomService: isCustomFlow,
             name: targetService?.name || 'N/A',
             description: targetService?.description || 'No description available',
-            icon: targetService?.icon || null,
+            serviceImage: targetService?.icon || null,
             price: targetService?.price || 0,
             isActive: serviceRequest.status === 'approved',
             averageRating: targetService?.averageRating || 0,
             totalReviews: reviews.length,
+
+            // Custom flow ke extra fields (template flow mein undefined rahenge)
+            ...(isCustomFlow && {
+                subServices: targetService.subServices,
+                estimatedTime: targetService.estimatedTime,
+                availability: targetService.availability
+            }),
 
             // Provider (service owner)
             provider: {

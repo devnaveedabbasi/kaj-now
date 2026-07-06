@@ -12,7 +12,7 @@ import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
 import { createNotification } from "../../utils/notification.js";
 import { sendContractPendingEmail } from "../../service/emailService.js";
-import { getContractUrl } from "../../utils/generateContract.js";
+import { getContractUrl, getContractPath, generateContractPdfIfMissing } from "../../utils/generateContract.js";
 import Payment from '../../models/payment.model.js';
 import mongoose from "mongoose";
 
@@ -594,23 +594,28 @@ export const approveProviderKyc = async (req, res) => {
     provider.isKycCompleted = true;
 
     if (isUK) {
+      generateContractPdfIfMissing();
       const baseUrl = `${req.protocol}://${req.get('host')}`;
       provider.contractStatus = 'pending';
       provider.contractFile = getContractUrl(baseUrl);
+      provider.signedContractFile = '';
+      provider.contractRejectionReason = '';
+      provider.contractRejectedAt = undefined;
+      provider.contractApprovedAt = undefined;
     }
 
     await provider.save();
 
     if (isUK) {
-      // UK: notify to sign contract
+      // UK: notify to sign contract, and email the latest agreement PDF directly
       await createNotification({
         userId: providerUser._id,
         title: 'KYC Approved — Sign Your Contract',
-        message: 'Your KYC has been approved! Please sign the provider contract to get started.',
+        message: 'Your KYC has been approved! Please review, sign, and upload your provider contract to get started.',
         type: 'kyc',
         referenceId: provider._id
       });
-      await sendContractPendingEmail(providerUser.email, { userName: providerUser.name });
+      await sendContractPendingEmail(providerUser.email, { userName: providerUser.name, contractPath: getContractPath() });
     } else {
       // BD: fully active
       await createNotification({

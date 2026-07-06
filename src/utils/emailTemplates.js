@@ -209,3 +209,21 @@ export const contractApprovedTemplate = ({ userName }) => `
     <p style="font-size: 12px; color: #777;">If you have any questions, please contact our support team.</p>
   </div>
 `;
+
+// 🔹 Contract Rejected
+export const contractRejectedTemplate = ({ userName, reason }) => `
+  <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; padding: 30px;">
+    <h2 style="color: #1a1a2e; border-bottom: 2px solid #dc3545; padding-bottom: 10px;">
+      KajNow — Contract Rejected
+    </h2>
+    <p>Dear <strong>${userName}</strong>,</p>
+    <p>Your Provider Agreement has been <strong style="color: #dc3545;">rejected</strong>.</p>
+    <div style="background: #fdecea; border-left: 4px solid #dc3545; padding: 15px; margin: 20px 0;">
+      <p style="margin: 0; font-weight: bold;">Reason:</p>
+      <p style="margin: 5px 0 0;">${reason}</p>
+    </div>
+    <p>Please complete your KYC verification again. Once your KYC is re-approved, a new contract will be issued to you.</p>
+    <hr />
+    <p style="font-size: 12px; color: #777;">If you have any questions, please contact our support team.</p>
+  </div>
+`;
