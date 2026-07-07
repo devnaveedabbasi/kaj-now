@@ -207,7 +207,7 @@ export const getAllPaymentsAdmin = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
-    const { status, escrowStatus, startDate, endDate } = req.query;
+    const { status, escrowStatus, startDate, endDate, region } = req.query;
 
     let query = {};
 
@@ -223,6 +223,12 @@ export const getAllPaymentsAdmin = async (req, res) => {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
       if (endDate) query.createdAt.$lte = new Date(endDate);
+    }
+
+    // Payments have no region of their own — derive it from the customer.
+    if (region && ['UK', 'BD'].includes(region)) {
+      const regionCustomers = await User.find({ region }).select('_id').lean();
+      query.customerId = { $in: regionCustomers.map(u => u._id) };
     }
 
     const [payments, total] = await Promise.all([

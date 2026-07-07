@@ -15,11 +15,19 @@ import { generateWithdrawalInvoice } from '../../utils/generateWithdrawalInvoice
 // Get all withdrawals (Admin)
 export const getAllWithdrawals = async (req, res) => {
   try {
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status, page = 1, limit = 10, region } = req.query;
 
     const query = {};
     if (status && status !== "all") {
       query.status = status;
+    }
+
+    // Withdrawals have no region of their own — derive it from the
+    // requesting provider's linked user account.
+    if (region && ["UK", "BD"].includes(region)) {
+      const regionUsers = await User.find({ region, role: "provider" }).select("_id").lean();
+      const regionProviders = await Provider.find({ userId: { $in: regionUsers.map(u => u._id) } }).select("_id").lean();
+      query.providerId = { $in: regionProviders.map(p => p._id) };
     }
 
     const skip = (page - 1) * Number(limit);

@@ -90,7 +90,7 @@ export async function getMySupportUnread(req, res) {
 export async function getAllConversations(req, res) {
   try {
     const adminId = req.user._id;
-    const { role } = req.query; // optional filter
+    const { role, region } = req.query; // optional filters
 
     // Distinct roomIds with last message info
     const pipeline = [
@@ -125,6 +125,7 @@ export async function getAllConversations(req, res) {
     const userIds = grouped.map(g => g._id);
     const userQuery = { _id: { $in: userIds } };
     if (role) userQuery.role = role; // filter by role
+    if (region && ['UK', 'BD'].includes(region)) userQuery.region = region; // filter by region
 
     const users = await User.find(userQuery).select('name email role profilePicture phone');
     const userMap = {};
@@ -213,12 +214,21 @@ export async function deleteConversation(req, res) {
 export async function getAdminUnread(req, res) {
   try {
     const adminId = req.user._id;
+    const { region } = req.query;
 
-    const count = await SupportMessage.countDocuments({
+    const query = {
       receiverId: adminId,
       isRead: false,
       deletedFor: { $ne: adminId },
-    });
+    };
+
+    // Messages have no region of their own — derive it from the sender.
+    if (region && ['UK', 'BD'].includes(region)) {
+      const regionUsers = await User.find({ region }).select('_id').lean();
+      query.senderId = { $in: regionUsers.map(u => u._id) };
+    }
+
+    const count = await SupportMessage.countDocuments(query);
 
     return res.status(200).json(
       new ApiResponse(200, { unreadCount: count }, 'Admin unread count fetched')

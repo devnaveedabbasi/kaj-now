@@ -126,7 +126,7 @@ export const getAllJobs = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
-        const { status, search, providerId, customerId } = req.query;
+        const { status, search, providerId, customerId, region } = req.query;
 
         let query = {};
         if (status) {
@@ -143,6 +143,12 @@ export const getAllJobs = async (req, res) => {
             query.$or = [
                 { orderId: { $regex: search, $options: 'i' } }
             ];
+        }
+
+        // Jobs have no region of their own — derive it from the customer who booked it.
+        if (region && ['UK', 'BD'].includes(region)) {
+            const regionCustomers = await User.find({ region }).select('_id').lean();
+            query.customer = { $in: regionCustomers.map(u => u._id) };
         }
 
         const [jobs, totalCount] = await Promise.all([

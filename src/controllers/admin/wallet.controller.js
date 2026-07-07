@@ -258,21 +258,28 @@ export const getAllTransactions = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 20;
         const skip = (page - 1) * limit;
-        const { type, startDate, endDate } = req.query;
+        const { type, startDate, endDate, region } = req.query;
 
-        // let query = { paymentStatus: 'completed' };
-        
+        const hasRegionFilter = region && ['UK', 'BD'].includes(region);
+
         if (type === 'withdrawal') {
             // Get withdrawals instead of payments
-            const withdrawals = await Withdrawal.find({ status: 'completed' })
+            const withdrawalQuery = { status: 'completed' };
+            if (hasRegionFilter) {
+                const regionUsers = await User.find({ region, role: 'provider' }).select('_id').lean();
+                const regionProviders = await Provider.find({ userId: { $in: regionUsers.map(u => u._id) } }).select('_id').lean();
+                withdrawalQuery.providerId = { $in: regionProviders.map(p => p._id) };
+            }
+
+            const withdrawals = await Withdrawal.find(withdrawalQuery)
                 .populate('providerId', 'name email')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(limit);
-            
-            const total = await Withdrawal.countDocuments({ status: 'completed' });
+
+            const total = await Withdrawal.countDocuments(withdrawalQuery);
             const totalPages = Math.ceil(total / limit);
-            
+
             return res.status(200).json(
                 new ApiResponse(200, {
                     transactions: withdrawals,
@@ -287,6 +294,8 @@ export const getAllTransactions = async (req, res) => {
             );
         }
 
+        let query = {};
+
         // Date filter
         if (startDate || endDate) {
             query.createdAt = {};
@@ -294,8 +303,14 @@ export const getAllTransactions = async (req, res) => {
             if (endDate) query.createdAt.$lte = new Date(endDate);
         }
 
+        // Payments have no region of their own — derive it from the customer.
+        if (hasRegionFilter) {
+            const regionCustomers = await User.find({ region }).select('_id').lean();
+            query.customerId = { $in: regionCustomers.map(u => u._id) };
+        }
+
         const [transactions, total] = await Promise.all([
-            Payment.find()
+            Payment.find(query)
                 .populate('customerId', 'name email')
                 .populate('providerId', 'name email')
                 .populate('jobId', 'orderId service')
@@ -303,7 +318,7 @@ export const getAllTransactions = async (req, res) => {
                 .skip(skip)
                 .limit(limit)
                 .lean(),
-            Payment.countDocuments()
+            Payment.countDocuments(query)
         ]);
 
         const totalPages = Math.ceil(total / limit);
