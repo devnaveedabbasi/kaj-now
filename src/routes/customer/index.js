@@ -6,6 +6,7 @@ import serviceRoute from './service.routes.js';
 import jobRoutes from './job.routes.js';
 import reviewsRoutes from './review.routes.js';
 import noteRoutes from './note.routes.js';
+import complaintRoutes from './complain.routes.js';
 const router = Router();
 
 router.use('/auth', customerAuthRoute);
@@ -14,4 +15,5 @@ router.use('/services', serviceRoute);
 router.use('/job', jobRoutes);
 router.use('/job/review', reviewsRoutes);
 router.use('/notes', noteRoutes);
+router.use('/complaints', complaintRoutes);
 export default router;

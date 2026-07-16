@@ -1,8 +1,8 @@
-import Complaint from '../models/complaint.model.js';
-import User from '../models/User.model.js';
-import { ApiError } from '../utils/errorHandler.js';
-import { ApiResponse } from '../utils/apiResponse.js';
-import { sendComplaintReplyEmail } from '../service/emailService.js';
+import Complaint from '../../models/complaint.model.js';
+import User from '../../models/User.model.js';
+import { ApiError } from '../../utils/errorHandler.js';
+import { ApiResponse } from '../../utils/apiResponse.js';
+import { sendComplaintReplyEmail } from '../../service/emailService.js';
 
 const VALID_TYPES = ['provider_behavior', 'provider_issue', 'technical_issue',
         'service_quality', 'late_arrival', 'payment_issue', 'other'];
@@ -38,44 +38,47 @@ export async function submitComplaint(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// GET /api/complaint
-// Customer apni complaints dekhta hai
-// ─────────────────────────────────────────────────────────────
-export async function getMyComplaints(req, res) {
-  try {
-    const userId = req.user._id;
-
-    const complaints = await Complaint.find({ userId })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    return res.status(200).json(
-      new ApiResponse(200, complaints, 'Complaints fetched')
-    );
-  } catch (error) {
-    throw new ApiError(500, 'Failed to fetch complaints');
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// ADMIN: GET /api/complaint/all
-// Sab complaints — filter: ?status=pending&type=technical_issue
-// ─────────────────────────────────────────────────────────────
 export async function getAllComplaints(req, res) {
   try {
-    const { status, type } = req.query;
+    const { status, type, region, search } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
     const filter = {};
     if (status) filter.status = status;
     if (type) filter.type = type;
+    if (search) filter.description = { $regex: search, $options: 'i' };
 
-    const complaints = await Complaint.find(filter)
-      .populate('userId', 'name email phone profilePicture role')
-      .sort({ createdAt: -1 })
-      .lean();
+    // Complaints have no region of their own — derive it from the
+    // complaining user (customer or provider).
+    if (region && ['UK', 'BD'].includes(region)) {
+      const regionUsers = await User.find({ region }).select('_id').lean();
+      filter.userId = { $in: regionUsers.map(u => u._id) };
+    }
+
+    const [complaints, total] = await Promise.all([
+      Complaint.find(filter)
+        .populate('userId', 'name email phone profilePicture role')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Complaint.countDocuments(filter),
+    ]);
 
     return res.status(200).json(
-      new ApiResponse(200, complaints, 'All complaints fetched')
+      new ApiResponse(200, {
+        complaints,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(total / limit),
+          totalItems: total,
+          itemsPerPage: limit,
+          hasNextPage: page < Math.ceil(total / limit),
+          hasPrevPage: page > 1,
+        },
+      }, 'All complaints fetched')
     );
   } catch (error) {
     throw new ApiError(500, 'Failed to fetch complaints');

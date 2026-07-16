@@ -8,6 +8,19 @@ import User from '../../models/User.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import Job from '../../models/job.model.js';
 
+// UK ServiceRequests carry the provider's actual listing under the nested
+// `ukService` subdocument (price/description/serviceImage/subServices) —
+// the admin-created Service template itself has none of these (UK admins
+// only set name/icon/category). BD keeps everything on the Service doc, so
+// `$service.price` etc remain the fallback here, unchanged for BD.
+const priceExpr = { $ifNull: ['$ukService.price', '$service.price'] };
+const descriptionExpr = { $ifNull: ['$ukService.description', '$service.description'] };
+const imagesExpr = {
+    $let: {
+        vars: { img: { $ifNull: ['$ukService.serviceImage', '$service.serviceImage'] } },
+        in: { $cond: [{ $ifNull: ['$$img', false] }, ['$$img'], []] }
+    }
+};
 
 // export const getAllCategories = async (req, res) => {
 //     try {
@@ -136,7 +149,7 @@ export const getAllCategories = async (req, res) => {
 export const getServiceById = async (req, res) => {
     try {
         const { serviceId } = req.params;
-const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
+        const categoryRegion = req.user?.region === "UK" ? "UK" : "BD";
         if (!mongoose.Types.ObjectId.isValid(serviceId)) {
             return res.status(400).json(new ApiResponse(400, null, 'Invalid service ID format'));
         }
@@ -173,9 +186,14 @@ const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
         const category = await Category.findOne({
             _id: service.categoryId,
             isActive: true,
-            isDeleted: false
+            isDeleted: false,
+            region: categoryRegion
         });
 
+        if (!category) {
+            // Category doesn't exist, isn't active, or belongs to the other region.
+            return res.status(404).json(new ApiResponse(404, null, 'Service not found'));
+        }
 
         const relatedServices = await ServiceRequest.find({
             serviceId: serviceId,
@@ -209,12 +227,12 @@ const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
                     icon: targetService.icon,
                     // UK templates have no price/description of their own —
                     // fall back to what the provider submitted on the request.
-                    price: targetService.price ?? service.price,
-                    description: targetService.description ?? service.description,
-                    images: service.images || [],
+                    price: targetService.price ?? service.ukService?.price,
+                    description: targetService.description ?? service.ukService?.description,
+                    images: service.ukService?.serviceImage ? [service.ukService.serviceImage] : [],
                     averageRating: targetService.averageRating,
                     reviews: targetService.reviews || [],
-                    subServices: targetService.subServices || [],
+                    subServices: (service.ukService?.subServices?.length ? service.ukService.subServices : targetService.subServices) || [],
                     ordersCount: jobCount || 22,
                     provider: {
                         _id: service.providerId?._id,
@@ -299,6 +317,7 @@ const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
 export const getServicesByCategory = async (req, res) => {
     try {
         const { categoryId } = req.params;
+        const categoryRegion = req.user?.region === "UK" ? "UK" : "BD";
 
         if (!mongoose.Types.ObjectId.isValid(categoryId)) {
             throw new ApiError(400, 'Invalid category ID format');
@@ -307,7 +326,8 @@ export const getServicesByCategory = async (req, res) => {
         const category = await Category.findOne({
             _id: categoryId,
             isActive: true,
-            isDeleted: false
+            isDeleted: false,
+            region: categoryRegion
         });
 
         if (!category) {
@@ -396,15 +416,15 @@ export const getServicesByCategory = async (req, res) => {
                     },
 
                     price: {
-                        $first: { $ifNull: ['$price', '$service.price'] }
+                        $first: priceExpr
                     },
 
                     description: {
-                        $first: { $ifNull: ['$description', '$service.description'] }
+                        $first: descriptionExpr
                     },
 
                     images: {
-                        $first: { $ifNull: ['$images', []] }
+                        $first: imagesExpr
                     },
 
                     averageRating: {
@@ -481,6 +501,7 @@ export const getAllApprovedServices = async (req, res) => {
         const skip = (page - 1) * limit;
         const search = req.query.search || '';
         const { categoryId, minPrice, maxPrice } = req.query;
+        const categoryRegion = req.user?.region === "UK" ? "UK" : "BD";
 
         // Build pipeline
         let pipeline = [
@@ -503,13 +524,14 @@ export const getAllApprovedServices = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
-            //  FILTER: Only active and non-deleted categories and services
+            //  FILTER: Only active and non-deleted categories and services in the user's region
             {
                 $match: {
                     'service.isActive': true,
                     'service.isDeleted': false,
                     'category.isActive': true,
-                    'category.isDeleted': false
+                    'category.isDeleted': false,
+                    'category.region': categoryRegion
                 }
             },
             {
@@ -529,7 +551,11 @@ export const getAllApprovedServices = async (req, res) => {
                     as: 'user'
                 }
             },
-            { $unwind: '$user' }
+            { $unwind: '$user' },
+            // UK services have no price of their own — resolve the actual
+            // listing price up front so both filtering and the final
+            // projection use the same value.
+            { $addFields: { effectivePrice: priceExpr } }
         ];
 
         // Apply filters
@@ -544,12 +570,12 @@ export const getAllApprovedServices = async (req, res) => {
         }
 
         if (minPrice !== undefined || maxPrice !== undefined) {
-            matchConditions['service.price'] = {};
+            matchConditions['effectivePrice'] = {};
             if (minPrice !== undefined && minPrice !== '') {
-                matchConditions['service.price'].$gte = Number(minPrice);
+                matchConditions['effectivePrice'].$gte = Number(minPrice);
             }
             if (maxPrice !== undefined && maxPrice !== '') {
-                matchConditions['service.price'].$lte = Number(maxPrice);
+                matchConditions['effectivePrice'].$lte = Number(maxPrice);
             }
         }
 
@@ -571,13 +597,9 @@ export const getAllApprovedServices = async (req, res) => {
                     _id: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
-                    // UK templates carry no price/description of their own —
-                    // prefer the provider's own submitted values when present.
-                    // BD always has $service.price/description set, so this
-                    // is a no-op there.
-                    price: { $ifNull: ['$price', '$service.price'] },
-                    description: { $ifNull: ['$description', '$service.description'] },
-                    images: { $ifNull: ['$images', []] },
+                    price: '$effectivePrice',
+                    description: descriptionExpr,
+                    images: imagesExpr,
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',
@@ -619,15 +641,17 @@ export const getAllApprovedServices = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
-            //  FILTER: Only active and non-deleted categories and services
+            //  FILTER: Only active and non-deleted categories and services in the user's region
             {
                 $match: {
                     'service.isActive': true,
                     'service.isDeleted': false,
                     'category.isActive': true,
-                    'category.isDeleted': false
+                    'category.isDeleted': false,
+                    'category.region': categoryRegion
                 }
-            }
+            },
+            { $addFields: { effectivePrice: priceExpr } }
         ];
 
         if (Object.keys(matchConditions).length > 0) {
@@ -675,6 +699,7 @@ export const getAllApprovedServices = async (req, res) => {
 export const getApprovedServiceById = async (req, res) => {
     try {
         const { serviceId } = req.params;
+        const categoryRegion = req.user?.region === "UK" ? "UK" : "BD";
 
         if (!mongoose.Types.ObjectId.isValid(serviceId)) {
             throw new ApiError(400, 'Invalid service ID format');
@@ -706,13 +731,14 @@ export const getApprovedServiceById = async (req, res) => {
                 }
             },
             { $unwind: '$category' },
-            //  FILTER: Only active and non-deleted categories and services
+            //  FILTER: Only active and non-deleted categories and services in the user's region
             {
                 $match: {
                     'service.isActive': true,
                     'service.isDeleted': false,
                     'category.isActive': true,
-                    'category.isDeleted': false
+                    'category.isDeleted': false,
+                    'category.region': categoryRegion
                 }
             },
             {
@@ -738,13 +764,9 @@ export const getApprovedServiceById = async (req, res) => {
                     _id: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
-                    // UK templates carry no price/description of their own —
-                    // prefer the provider's own submitted values when present.
-                    // BD always has $service.price/description set, so this
-                    // is a no-op there.
-                    price: { $ifNull: ['$price', '$service.price'] },
-                    description: { $ifNull: ['$description', '$service.description'] },
-                    images: { $ifNull: ['$images', []] },
+                    price: priceExpr,
+                    description: descriptionExpr,
+                    images: imagesExpr,
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',
@@ -821,7 +843,7 @@ export const getApprovedServiceById = async (req, res) => {
                     _id: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
-                    price: '$service.price',
+                    price: priceExpr,
                     averageRating: '$service.averageRating'
                 }
             }
@@ -1008,9 +1030,9 @@ export const getRecommendedServices = async (req, res) => {
                         _id: req.service._id,
                         name: req.service.name,
                         icon: req.service.icon,
-                        price: req.price ?? req.service.price,
-                        description: (req.description ?? req.service.description)?.substring(0, 100),
-                        images: req.images || [],
+                        price: req.ukService?.price ?? req.service.price,
+                        description: (req.ukService?.description ?? req.service.description)?.substring(0, 100),
+                        images: req.ukService?.serviceImage ? [req.ukService.serviceImage] : [],
 
                         averageRating: req.service.averageRating || 0,
                         totalReviews: req.service.reviews?.length || 0,
@@ -1217,9 +1239,9 @@ export const getTopRatedServices = async (req, res) => {
                     _id: "$service._id",
                     name: "$service.name",
                     icon: "$service.icon",
-                    price: { $ifNull: ["$price", "$service.price"] },
-                    description: { $ifNull: ["$description", "$service.description"] },
-                    images: { $ifNull: ["$images", []] },
+                    price: priceExpr,
+                    description: descriptionExpr,
+                    images: imagesExpr,
 
                     averageRating: "$rating",
                     totalReviews: "$reviewsCount",
@@ -1360,13 +1382,9 @@ export const quickSearch = async (req, res) => {
                     _id: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
-                    // UK templates carry no price/description of their own —
-                    // prefer the provider's own submitted values when present.
-                    // BD always has $service.price/description set, so this
-                    // is a no-op there.
-                    price: { $ifNull: ['$price', '$service.price'] },
-                    description: { $ifNull: ['$description', '$service.description'] },
-                    images: { $ifNull: ['$images', []] },
+                    price: priceExpr,
+                    description: descriptionExpr,
+                    images: imagesExpr,
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',

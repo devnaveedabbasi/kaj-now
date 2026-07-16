@@ -74,12 +74,17 @@ export const deleteContractTemplate = async (req, res) => {
 // GET /admin/contracts  — list providers' signed contracts by review status
 export const getSignedContracts = async (req, res) => {
     try {
-        const { status = 'signed' } = req.query;
+        const { status = 'all' } = req.query;
         const page = parseInt(req.query.page) || 1;
         const limit = parseInt(req.query.limit) || 10;
         const skip = (page - 1) * limit;
 
-        const query = { contractStatus: status };
+        // "all" = every provider who has actually submitted something to
+        // review (signed / approved / rejected) — excludes not_required and
+        // pending, which never have a signature/PDF to show.
+        const query = status === 'all'
+            ? { contractStatus: { $in: ['signed', 'approved', 'rejected'] } }
+            : { contractStatus: status };
 
         const [providers, total] = await Promise.all([
             Provider.find(query)
