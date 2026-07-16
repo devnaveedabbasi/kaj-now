@@ -13,6 +13,7 @@ import bannerRoutes from './banner.routes.js';
 import paymentTrackingRoutes from '../payment.tracking.routes.js';
 import featuredServiceRoutes from './featuredService.routes.js';
 import contractRoutes from './contract.routes.js';
+import notesRoutes from './note.routes.js';
 const router = Router();
 
 router.use('/auth', adminAuthRoutes);
@@ -28,4 +29,5 @@ router.use('/banners', bannerRoutes);
 router.use('/payment-tracking', paymentTrackingRoutes);
 router.use('/featured-services', featuredServiceRoutes);
 router.use('/contracts', contractRoutes);
+router.use('/notes', notesRoutes);
 export default router;

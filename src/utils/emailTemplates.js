@@ -139,6 +139,41 @@ export const noteReplyTemplate = ({ userName, noteText, adminReply }) => {
   `;
 };
 
+// 🔹 5b. User Note Reply (UK support-note feature)
+export const userNoteReplyTemplate = ({ userName, note, reply, repliedAt }) => {
+  const repliedAtStr = repliedAt ? new Date(repliedAt).toLocaleString('en-GB') : '';
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; padding: 30px;">
+      <h2 style="color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px;">
+        Your Support Note Has Been Answered
+      </h2>
+
+      <p>Dear <strong>${userName}</strong>,</p>
+
+      <p>Thank you for reaching out. We have reviewed your note and here is our response.</p>
+
+      <div style="background: #f9f9f9; border-left: 4px solid #007bff; padding: 15px; margin: 20px 0;">
+        <p style="margin: 0 0 6px;"><strong>Your Note:</strong></p>
+        <p style="margin: 0; line-height: 1.7;">${note}</p>
+      </div>
+
+      <div style="background: #fff8e1; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
+        <p style="margin: 0 0 6px;"><strong>Our Response:</strong></p>
+        <p style="margin: 0; line-height: 1.7;">${reply}</p>
+        ${repliedAtStr ? `<p style="margin: 10px 0 0; font-size: 12px; color: #777;">Replied on ${repliedAtStr}</p>` : ''}
+      </div>
+
+      <p>We hope this helps. Feel free to send us another note if you need further assistance.</p>
+
+      <hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;" />
+      <p style="font-size: 12px; color: #888;">
+        Best regards,<br/>
+        <strong>KajNow Support Team</strong>
+      </p>
+    </div>
+  `;
+};
+
 // 🔹 6. Withdrawal Rejected
 export const withdrawalRejectedTemplate = ({ amount, reason }) => {
   return `

@@ -1,7 +1,7 @@
 import nodemailer from 'nodemailer';
 import fs from 'fs';
 import config from '../config/index.js';
-import { complaintReplyTemplate, noteReplyTemplate, contractPendingTemplate, contractApprovedTemplate, contractRejectedTemplate } from '../utils/emailTemplates.js';
+import { complaintReplyTemplate, noteReplyTemplate, userNoteReplyTemplate, contractPendingTemplate, contractApprovedTemplate, contractRejectedTemplate } from '../utils/emailTemplates.js';
 
 
 const transporter = nodemailer.createTransport({
@@ -167,6 +167,26 @@ export const sendNoteReplyEmail = async (to, data) => {
     } catch (error) {
         console.error('Note reply email failed:', error);
         throw new Error('Could not send note reply email.');
+    }
+};
+
+// =========================
+// 📧 USER NOTE REPLY EMAIL (UK support-note feature)
+// =========================
+export const sendUserNoteReplyEmail = async (to, data) => {
+    const { userName, note, reply, repliedAt } = data;
+
+    const mailOptions = {
+        from: `"KajNow Support" <${config.email.user}>`,
+        to,
+        subject: 'Your Support Note Has Been Answered',
+        html: userNoteReplyTemplate({ userName, note, reply, repliedAt }),
+    };
+
+    try {
+        await transporter.sendMail(mailOptions);
+    } catch (error) {
+        console.error('User note reply email failed:', error);
     }
 };
 

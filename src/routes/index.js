@@ -10,7 +10,7 @@ import notificationRoutes from './notification.routes.js';
 import chatRoutes from './chat.routes.js';
 import supportRoutes from './support.routes.js';
 import complaintRoutes from './complaint.routes.js';
-import noteRoutes from './note.routes.js';
+import noteRoutes from './admin/note.routes.js';
 
 const router = Router();
 
@@ -24,5 +24,4 @@ router.use('/chat', chatRoutes);
 router.use('/support', supportRoutes);
 router.use('/complaint', complaintRoutes);
 router.use('/note', noteRoutes);
-
 export default router;
