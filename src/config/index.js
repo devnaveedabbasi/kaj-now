@@ -30,6 +30,11 @@ export default {
         sandbox: process.env.SSLCOMMERZ_SANDBOX === 'true',
     },
 
+    /** Stripe Payment Gateway Configuration */
+    stripe: {
+        secretKey: process.env.STRIPE_SECRET_KEY,
+    },
+
     /** Required for POST /api/auth/admin/register (header X-Admin-Registration-Secret or body registrationSecret) */
     adminRegistrationSecret: process.env.ADMIN_REGISTRATION_SECRET || ''
 };

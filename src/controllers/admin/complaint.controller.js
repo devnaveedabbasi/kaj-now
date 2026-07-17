@@ -186,7 +186,7 @@ export async function updateComplaintStatus(req, res) {
 
 export async function getComplaintTypes(req, res) {
   try {
-    const types = await ComplaintType.find().sort({ createdAt: -1 }).lean();
+    const types = await ComplaintType.find().sort({ order: 1, createdAt: -1 }).lean();
     return res.status(200).json(
       new ApiResponse(200, types, 'Complaint types fetched')
     );
@@ -208,14 +208,56 @@ export async function addComplaintType(req, res) {
     const exists = await ComplaintType.findOne({ name: name.trim() });
     if (exists) throw new ApiError(400, 'Complaint type already exists');
 
-    const newType = await ComplaintType.create({ name: name.trim() });
-    
+    // New types are appended to the end of the current display order.
+    const lastType = await ComplaintType.findOne().sort({ order: -1 }).select('order').lean();
+    const nextOrder = lastType ? lastType.order + 1 : 0;
+
+    const newType = await ComplaintType.create({ name: name.trim(), order: nextOrder });
+
     return res.status(201).json(
       new ApiResponse(201, newType, 'Complaint type added successfully')
     );
   } catch (error) {
     if (error instanceof ApiError) throw error;
     throw new ApiError(500, 'Failed to add complaint type');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ADMIN: PUT /api/complaints/types/reorder
+// Admin drag-drops types on the dashboard; body: { order: [id1, id2, ...] }
+// ─────────────────────────────────────────────────────────────
+export async function reorderComplaintTypes(req, res) {
+  try {
+    const { order } = req.body;
+
+    if (!Array.isArray(order) || order.length === 0) {
+      throw new ApiError(400, 'Order array is required');
+    }
+
+    const existingTypes = await ComplaintType.find().select('_id').lean();
+    const existingIds = existingTypes.map((t) => t._id.toString());
+
+    const sameSet =
+      order.length === existingIds.length &&
+      existingIds.every((id) => order.includes(id));
+
+    if (!sameSet) {
+      throw new ApiError(400, 'Order array must include all complaint type ids exactly once');
+    }
+
+    await Promise.all(
+      order.map((id, index) => ComplaintType.findByIdAndUpdate(id, { order: index }))
+    );
+
+    const types = await ComplaintType.find().sort({ order: 1, createdAt: -1 }).lean();
+
+    return res.status(200).json(
+      new ApiResponse(200, types, 'Complaint types reordered successfully')
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to reorder complaint types');
   }
 }
 

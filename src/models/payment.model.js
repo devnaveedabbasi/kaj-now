@@ -22,6 +22,10 @@ const paymentSchema = new mongoose.Schema(
     },
 
     // ====== AMOUNT BREAKDOWN ======
+    currency: {
+      type: String,
+      default: 'BDT',
+    },
     servicePrice: {
       type: Number,
       required: true,
@@ -47,7 +51,7 @@ const paymentSchema = new mongoose.Schema(
     // 'sslcommerz' covers both card and bKash (both go through SSLCommerz)
     paymentGateway: {
       type: String,
-      enum: ['sslcommerz', 'cod', 'bank_transfer'],
+      enum: ['sslcommerz', 'cod', 'bank_transfer', 'stripe'],
       default: 'sslcommerz',
     },
 
@@ -86,6 +90,14 @@ const paymentSchema = new mongoose.Schema(
       ],
       default: 'pending',
       index: true,
+    },
+
+    // ====== STRIPE INTEGRATION ======
+    stripePaymentIntentId: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
     },
 
     // ====== SSL COMMERZ INTEGRATION ======

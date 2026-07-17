@@ -98,10 +98,19 @@ export const getFeaturedServiceRequests = async (req, res) => {
                             in: {
                                 _id: '$$s._id',
                                 name: '$$s.name',
-                                price: '$$s.price',
+                                price: { $ifNull: ['$ukService.price', '$$s.price'] },
                                 icon: '$$s.icon',
                                 averageRating: '$$s.averageRating',
-                                description: '$$s.description'
+                                description: { $ifNull: ['$ukService.description', '$$s.description'] },
+                                subServices: {
+                                    $cond: [
+                                        { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
+                                        '$ukService.subServices',
+                                        { $ifNull: ['$$s.subServices', []] }
+                                    ]
+                                },
+                                estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
+                                availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
                             }
                         }
                     }
@@ -267,9 +276,18 @@ export const getAllEligibleRequests = async (req, res) => {
                         in: {
                             _id: '$$s._id',
                             name: '$$s.name',
-                            price: '$$s.price',
+                            price: { $ifNull: ['$ukService.price', '$$s.price'] },
                             icon: '$$s.icon',
-                            description: '$$s.description'
+                            description: { $ifNull: ['$ukService.description', '$$s.description'] },
+                            subServices: {
+                                $cond: [
+                                    { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
+                                    '$ukService.subServices',
+                                    { $ifNull: ['$$s.subServices', []] }
+                                ]
+                            },
+                            estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
+                            availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
                         }
                     }
                 }

@@ -9,12 +9,14 @@ import {
   addComplaintType,
   deleteComplaintType,
   editComplaintType,
+  reorderComplaintTypes,
 } from '../../controllers/admin/complaint.controller.js';
 
 const router = Router();
 
 router.get('/types', asyncHandler(getComplaintTypes));
 router.post('/types', asyncHandler(addComplaintType));
+router.put('/types/reorder', asyncHandler(reorderComplaintTypes));
 router.put('/types/:id', asyncHandler(editComplaintType));
 router.delete('/types/:id', asyncHandler(deleteComplaintType));
 

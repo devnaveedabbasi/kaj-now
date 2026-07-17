@@ -22,6 +22,12 @@ const bookingIntentSchema = new mongoose.Schema({
     required: true,
   },
 
+  paymentGateway: {
+    type: String,
+    enum: ['sslcommerz', 'stripe'],
+    default: 'sslcommerz',
+  },
+
   // Lifecycle status of this intent
   status: {
     type: String,

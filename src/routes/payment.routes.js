@@ -4,6 +4,7 @@ import {
   paymentFailed,
   paymentCancel,
   paymentIPN,
+  verifyStripePayment,
 } from '../controllers/payment.controller.js';
 
 const router = Router();
@@ -22,5 +23,11 @@ router.get('/cancel', paymentCancel);
 router.post('/cancel', paymentCancel);
 
 router.post('/ipn', paymentIPN);   // Server-to-server — must return 200
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRIPE SYNCHRONOUS VERIFICATION route
+// Called by mobile app after Stripe SDK confirms payment
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/verify-stripe', verifyStripePayment);
 
 export default router;

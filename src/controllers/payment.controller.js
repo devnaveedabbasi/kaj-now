@@ -7,7 +7,10 @@ import Provider from '../models/provider/Provider.model.js';
 import Service from '../models/admin/service.model.js';
 import BookingIntent from '../models/bookingIntent.model.js';
 import { validateSSLCommerzPayment } from '../service/sslcommerz.js';
+import { retrieveStripePaymentIntent } from '../service/stripe.js';
 import { createNotification } from '../utils/notification.js';
+import { ApiResponse } from '../utils/apiResponse.js';
+import { ApiError } from '../utils/errorHandler.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FRONTEND_URL — where to redirect after payment callbacks
@@ -433,6 +436,107 @@ export async function paymentIPN(req, res) {
     console.error('[IPN] Error:', error);
     // Always return 200 to SSLCommerz — they retry on non-200
     return res.status(200).json({ received: true });
+  } finally {
+    session.endSession();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRIPE SYNCHRONOUS VERIFICATION
+// ─────────────────────────────────────────────────────────────────────────────
+export async function verifyStripePayment(req, res) {
+  const { paymentIntentId } = req.body;
+
+  if (!paymentIntentId) {
+    return res.status(400).json(new ApiResponse(400, null, 'paymentIntentId is required.'));
+  }
+
+  let paymentIntent;
+  try {
+    paymentIntent = await retrieveStripePaymentIntent(paymentIntentId);
+  } catch (err) {
+    console.error(`[verifyStripePayment] Fetch Error: ${err.message}`);
+    return res.status(400).json(new ApiResponse(400, null, `Stripe Error: ${err.message}`));
+  }
+
+  if (paymentIntent.status !== 'succeeded') {
+    return res.status(400).json(
+      new ApiResponse(400, { status: paymentIntent.status }, 'Payment has not succeeded yet.')
+    );
+  }
+
+  const { tranId } = paymentIntent.metadata || {};
+
+  if (!tranId) {
+    console.warn('[verifyStripePayment] No tranId in metadata for PaymentIntent:', paymentIntent.id);
+    return res.status(400).json(new ApiResponse(400, null, 'Invalid PaymentIntent metadata.'));
+  }
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const intent = await BookingIntent.findOne({ tranId }).session(session);
+
+    if (!intent) {
+      console.warn(`[verifyStripePayment] No BookingIntent found for tranId: ${tranId}`);
+      await session.abortTransaction();
+      return res.status(400).json(
+        new ApiResponse(400, null, 'BookingIntent not found or already processed.')
+      );
+    }
+
+    if (intent.status === 'completed') {
+      console.log(`[verifyStripePayment] BookingIntent already completed: ${tranId}`);
+      await session.abortTransaction();
+      return res.status(200).json(new ApiResponse(200, null, 'Payment already verified.'));
+    }
+
+    const { job, payment } = await createJobFromIntent(intent, tranId, session);
+    
+    // Update stripe specific fields on the payment
+    payment.paymentGateway = 'stripe';
+    payment.stripePaymentIntentId = paymentIntent.id;
+    payment.currency = (paymentIntent.currency || 'gbp').toUpperCase();
+    await payment.save({ session });
+
+    await session.commitTransaction();
+
+    // Notifications after successful commit
+    try {
+      await createNotification({
+        userId: job.customer,
+        title: 'Booking Confirmed (Stripe)',
+        message: `Your payment was successful and job #${job.orderId} is confirmed.`,
+        type: 'JOB_UPDATE',
+        data: { jobId: job._id },
+      });
+
+      const provider = await Provider.findById(job.provider);
+      if (provider) {
+        await createNotification({
+          userId: provider.userId,
+          title: 'New Job Booking (Stripe)',
+          message: `A new job #${job.orderId} has been assigned to you.`,
+          type: 'NEW_JOB',
+          data: { jobId: job._id },
+        });
+      }
+    } catch (notifErr) {
+      console.error('[verifyStripePayment] Notification error:', notifErr);
+    }
+
+    console.log(`[verifyStripePayment] Successfully processed Stripe payment: ${tranId}`);
+    return res.status(200).json(
+      new ApiResponse(200, { job, payment }, 'Payment verified successfully and job created.')
+    );
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('[verifyStripePayment] Processing error:', error);
+    if (error.message === 'DUPLICATE_BOOKING') {
+      return res.status(200).json(new ApiResponse(200, null, 'Duplicate booking avoided.'));
+    }
+    return res.status(500).json(new ApiResponse(500, null, 'Internal Server Error'));
   } finally {
     session.endSession();
   }

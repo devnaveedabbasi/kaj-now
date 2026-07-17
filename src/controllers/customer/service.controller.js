@@ -21,6 +21,15 @@ const imagesExpr = {
         in: { $cond: [{ $ifNull: ['$$img', false] }, ['$$img'], []] }
     }
 };
+const subServicesExpr = {
+    $cond: [
+        { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
+        '$ukService.subServices',
+        { $ifNull: ['$service.subServices', []] }
+    ]
+};
+const estimatedTimeExpr = { $ifNull: ['$ukService.estimatedTime', '$service.estimatedTime'] };
+const availabilityExpr = { $ifNull: ['$ukService.availability', '$service.availability'] };
 
 // export const getAllCategories = async (req, res) => {
 //     try {
@@ -195,7 +204,7 @@ export const getServiceById = async (req, res) => {
             return res.status(404).json(new ApiResponse(404, null, 'Service not found'));
         }
 
-        const relatedServices = await ServiceRequest.find({
+        const relatedServicesRaw = await ServiceRequest.find({
             serviceId: serviceId,
             status: 'approved',
             _id: { $ne: service._id } // optional exclude current
@@ -213,6 +222,19 @@ export const getServiceById = async (req, res) => {
                 }
             })
             .lean();
+
+        const relatedServices = relatedServicesRaw.map(sr => ({
+            ...sr,
+            serviceId: (sr.serviceId || []).map(s => ({
+                ...s,
+                price: s.price ?? sr.ukService?.price,
+                description: s.description ?? sr.ukService?.description,
+                subServices: sr.ukService?.subServices?.length ? sr.ukService.subServices : (s.subServices || []),
+                estimatedTime: sr.ukService?.estimatedTime ?? s.estimatedTime,
+                availability: sr.ukService?.availability ?? s.availability
+            }))
+        }));
+
         console.log('Related services found:', relatedServices);
         console.log('Service found:', service);
         const targetService = service.serviceId.find(
@@ -233,6 +255,8 @@ export const getServiceById = async (req, res) => {
                     averageRating: targetService.averageRating,
                     reviews: targetService.reviews || [],
                     subServices: (service.ukService?.subServices?.length ? service.ukService.subServices : targetService.subServices) || [],
+                    estimatedTime: service.ukService?.estimatedTime ?? targetService.estimatedTime,
+                    availability: service.ukService?.availability ?? targetService.availability,
                     ordersCount: jobCount || 22,
                     provider: {
                         _id: service.providerId?._id,
@@ -427,6 +451,18 @@ export const getServicesByCategory = async (req, res) => {
                         $first: imagesExpr
                     },
 
+                    subServices: {
+                        $first: subServicesExpr
+                    },
+
+                    estimatedTime: {
+                        $first: estimatedTimeExpr
+                    },
+
+                    availability: {
+                        $first: availabilityExpr
+                    },
+
                     averageRating: {
                         $first: '$service.averageRating'
                     },
@@ -600,6 +636,9 @@ export const getAllApprovedServices = async (req, res) => {
                     price: '$effectivePrice',
                     description: descriptionExpr,
                     images: imagesExpr,
+                    subServices: subServicesExpr,
+                    estimatedTime: estimatedTimeExpr,
+                    availability: availabilityExpr,
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',
@@ -1033,6 +1072,9 @@ export const getRecommendedServices = async (req, res) => {
                         price: req.ukService?.price ?? req.service.price,
                         description: (req.ukService?.description ?? req.service.description)?.substring(0, 100),
                         images: req.ukService?.serviceImage ? [req.ukService.serviceImage] : [],
+                        subServices: req.ukService?.subServices?.length ? req.ukService.subServices : (req.service.subServices || []),
+                        estimatedTime: req.ukService?.estimatedTime ?? req.service.estimatedTime,
+                        availability: req.ukService?.availability ?? req.service.availability,
 
                         averageRating: req.service.averageRating || 0,
                         totalReviews: req.service.reviews?.length || 0,
@@ -1242,6 +1284,9 @@ export const getTopRatedServices = async (req, res) => {
                     price: priceExpr,
                     description: descriptionExpr,
                     images: imagesExpr,
+                    subServices: subServicesExpr,
+                    estimatedTime: estimatedTimeExpr,
+                    availability: availabilityExpr,
 
                     averageRating: "$rating",
                     totalReviews: "$reviewsCount",
@@ -1385,6 +1430,9 @@ export const quickSearch = async (req, res) => {
                     price: priceExpr,
                     description: descriptionExpr,
                     images: imagesExpr,
+                    subServices: subServicesExpr,
+                    estimatedTime: estimatedTimeExpr,
+                    availability: availabilityExpr,
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',

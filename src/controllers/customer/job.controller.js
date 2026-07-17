@@ -9,6 +9,7 @@ import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { processSSLCommerzCardPayment, initiateSSLCommerzPayment } from '../../service/sslcommerz.js';
+import { createStripePaymentIntent } from '../../service/stripe.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import { validateCardDetails } from '../../utils/validateCardDetails.js';
@@ -167,7 +168,15 @@ export async function bookJob(req, res) {
     }
 
     // ── Price Calculation ────────────────────────────────────────────
-    const servicePrice = totalPrice || service.price;
+    let servicePrice = totalPrice || service.price;
+    if (user.region === 'UK' && !servicePrice) {
+      servicePrice = serviceRequest?.ukService?.price;
+    }
+    
+    if (servicePrice === undefined || servicePrice === null || isNaN(servicePrice)) {
+      throw new ApiError(400, 'Invalid service price.');
+    }
+
     const platformFeePercentage = parseFloat(process.env.PLATFORM_FEE_PERCENTAGE || '10');
     const platformFee = parseFloat(((platformFeePercentage / 100) * servicePrice).toFixed(2));
     const providerAmount = parseFloat((servicePrice - platformFee).toFixed(2));
@@ -273,7 +282,61 @@ export async function bookJob(req, res) {
       .toString(36)
       .substr(2, 6)}`;
 
-    // SSLCommerz MUST communicate with the backend server, NOT the mobile app.
+    // ────────────────────────────────────────────────────────────────
+    // UK REGION — Stripe Payment Flow
+    // ────────────────────────────────────────────────────────────────
+    if (user.region === 'UK') {
+      if (paymentMethod !== 'card') {
+        throw new ApiError(400, 'Only card payments are supported in the UK region.');
+      }
+
+      const paymentIntent = await createStripePaymentIntent(servicePrice, 'gbp', {
+        tranId,
+        orderId,
+        userId: user._id.toString(),
+        providerId: provider._id.toString(),
+        serviceId: service._id.toString(),
+      });
+
+      await BookingIntent.create(
+        [
+          {
+            tranId,
+            orderId,
+            userId: user._id,
+            providerId: provider._id,
+            serviceId: service._id,
+            servicePrice,
+            platformFee,
+            providerAmount,
+            paymentMethod: 'card',
+            paymentGateway: 'stripe',
+            schedule: { date: scheduleDateTime, time: schedule.time },
+          },
+        ],
+        { session }
+      );
+
+      await session.commitTransaction();
+
+      return res.status(201).json(
+        new ApiResponse(
+          201,
+          {
+            clientSecret: paymentIntent.client_secret,
+            tranId,
+            paymentMethod: 'card',
+            paymentGateway: 'stripe',
+            expiresIn: 3600,
+          },
+          'Stripe payment session created. Complete payment to confirm booking.'
+        )
+      );
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // BD REGION — SSLCommerz MUST communicate with the backend server
+    // ────────────────────────────────────────────────────────────────
     // So we use BASE_URL (the backend's URL) for success_url, fail_url, etc.
     // The backend will process the callback and THEN redirect to APP_BASE_URL.
     const BASE_URL = process.env.BASE_URL;

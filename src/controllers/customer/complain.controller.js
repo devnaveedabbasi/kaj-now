@@ -74,7 +74,7 @@ export async function getMyComplaints(req, res) {
 // ─────────────────────────────────────────────────────────────
 export async function getComplaintTypes(req, res) {
   try {
-    const types = await ComplaintType.find().sort({ createdAt: -1 }).lean();
+    const types = await ComplaintType.find().sort({ order: 1, createdAt: -1 }).lean();
     return res.status(200).json(
       new ApiResponse(200, types, 'Complaint types fetched')
     );
