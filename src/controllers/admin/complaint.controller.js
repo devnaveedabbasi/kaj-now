@@ -1,11 +1,9 @@
 import Complaint from '../../models/complaint.model.js';
+import ComplaintType from '../../models/complaintType.model.js';
 import User from '../../models/User.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { sendComplaintReplyEmail } from '../../service/emailService.js';
-
-const VALID_TYPES = ['provider_behavior', 'provider_issue', 'technical_issue',
-        'service_quality', 'late_arrival', 'payment_issue', 'other'];
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/complaint
@@ -16,8 +14,19 @@ export async function submitComplaint(req, res) {
     const { type, description } = req.body;
     const userId = req.user._id;
 
-    if (!type || !VALID_TYPES.includes(type)) {
-      throw new ApiError(400, `Invalid type. Must be one of: ${VALID_TYPES.join(', ')}`);
+    if (!type) {
+      throw new ApiError(400, 'Complaint type is required');
+    }
+    
+    // Validate type against DB
+    const validTypes = await ComplaintType.find().select('name').lean();
+    const typeExists = validTypes.some(t => t.name === type);
+    
+    if (!typeExists && validTypes.length > 0) {
+      // If there are types in DB but it doesn't match
+      throw new ApiError(400, `Invalid type. Must be one of: ${validTypes.map(t => t.name).join(', ')}`);
+    } else if (!typeExists && validTypes.length === 0) {
+      // If DB has no types, just let it pass or enforce admin to add types. Let's let it pass for now.
     }
     if (!description?.trim()) {
       throw new ApiError(400, 'Description is required');
@@ -170,3 +179,59 @@ export async function updateComplaintStatus(req, res) {
     throw new ApiError(500, 'Failed to update status');
   }
 }
+
+// ─────────────────────────────────────────────────────────────
+// COMPLAINT TYPES
+// ─────────────────────────────────────────────────────────────
+
+export async function getComplaintTypes(req, res) {
+  try {
+    const types = await ComplaintType.find().sort({ createdAt: -1 }).lean();
+    return res.status(200).json(
+      new ApiResponse(200, types, 'Complaint types fetched')
+    );
+  } catch (error) {
+    throw new ApiError(500, 'Failed to fetch complaint types');
+  }
+}
+
+export async function addComplaintType(req, res) {
+  try {
+    const { name } = req.body;
+    if (!name?.trim()) throw new ApiError(400, 'Type name is required');
+
+    const typeCount = await ComplaintType.countDocuments();
+    if (typeCount >= 10) {
+      throw new ApiError(400, 'You can only add up to 10 complaint types.');
+    }
+
+    const exists = await ComplaintType.findOne({ name: name.trim() });
+    if (exists) throw new ApiError(400, 'Complaint type already exists');
+
+    const newType = await ComplaintType.create({ name: name.trim() });
+    
+    return res.status(201).json(
+      new ApiResponse(201, newType, 'Complaint type added successfully')
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to add complaint type');
+  }
+}
+
+export async function deleteComplaintType(req, res) {
+  try {
+    const { id } = req.params;
+    const deletedType = await ComplaintType.findByIdAndDelete(id);
+    
+    if (!deletedType) throw new ApiError(404, 'Complaint type not found');
+
+    return res.status(200).json(
+      new ApiResponse(200, deletedType, 'Complaint type deleted successfully')
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to delete complaint type');
+  }
+}
+

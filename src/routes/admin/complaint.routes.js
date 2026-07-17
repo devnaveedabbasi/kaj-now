@@ -5,9 +5,16 @@ import {
   getComplaintById,
   replyToComplaint,
   updateComplaintStatus,
+  getComplaintTypes,
+  addComplaintType,
+  deleteComplaintType,
 } from '../../controllers/admin/complaint.controller.js';
 
 const router = Router();
+
+router.get('/types', asyncHandler(getComplaintTypes));
+router.post('/types', asyncHandler(addComplaintType));
+router.delete('/types/:id', asyncHandler(deleteComplaintType));
 
 router.get('/', asyncHandler(getAllComplaints));
 router.get('/:id', asyncHandler(getComplaintById));

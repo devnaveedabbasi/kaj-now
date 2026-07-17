@@ -8,10 +8,10 @@ const complaintSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    type: {
-      type: String,
-      enum: ['provider_behavior', 'provider_issue', 'technical_issue',
-        'service_quality', 'late_arrival', 'payment_issue', 'other'],
+
+    complaintType: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ComplaintType',
       required: true,
     },
     description: {
@@ -41,8 +41,3 @@ complaintSchema.index({ status: 1, createdAt: -1 });
 const Complaint = mongoose.models.Complaint || mongoose.model('Complaint', complaintSchema);
 export default Complaint;
 
-// GET /api/complaint/all
-// GET /api/complaint/all?status=pending
-// GET /api/complaint/:id
-// POST /api/complaint/:id/reply body: { reply }
-// PATCH /api/complaint/:id/status body: { status }
