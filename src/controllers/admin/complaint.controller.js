@@ -235,3 +235,30 @@ export async function deleteComplaintType(req, res) {
   }
 }
 
+export async function editComplaintType(req, res) {
+  try {
+    const { id } = req.params;
+    const { name } = req.body;
+
+    if (!name?.trim()) throw new ApiError(400, 'Type name is required');
+
+    const exists = await ComplaintType.findOne({ name: name.trim(), _id: { $ne: id } });
+    if (exists) throw new ApiError(400, 'Complaint type already exists');
+
+    const updatedType = await ComplaintType.findByIdAndUpdate(
+      id,
+      { name: name.trim() },
+      { new: true }
+    );
+
+    if (!updatedType) throw new ApiError(404, 'Complaint type not found');
+
+    return res.status(200).json(
+      new ApiResponse(200, updatedType, 'Complaint type updated successfully')
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(500, 'Failed to update complaint type');
+  }
+}
+
