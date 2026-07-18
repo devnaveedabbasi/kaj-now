@@ -31,6 +31,30 @@ export const getAdminWallet = async (req, res) => {
             });
         }
 
+        const { region } = req.query;
+        let paymentQuery = { paymentStatus: 'completed' };
+        let withdrawalQueryStatusCompleted = { status: 'completed' };
+        let withdrawalQueryStatusPending = { status: 'pending' };
+        let jobQueryAll = {};
+        let jobQueryCompleted = { status: { $in: ['confirmed_by_user', 'confirmed_by_admin'] } };
+        let jobQueryPending = { status: 'pending' };
+
+        if (region && ['UK', 'BD'].includes(region)) {
+            const regionUsers = await User.find({ region }).select('_id').lean();
+            const regionUserIds = regionUsers.map(u => u._id);
+
+            const customerFilter = { $in: regionUserIds };
+            paymentQuery.customerId = customerFilter;
+            jobQueryAll.customer = customerFilter;
+            jobQueryCompleted.customer = customerFilter;
+            jobQueryPending.customer = customerFilter;
+
+            const regionProviders = await Provider.find({ userId: { $in: regionUserIds } }).select('_id').lean();
+            const providerFilter = { $in: regionProviders.map(p => p._id) };
+            withdrawalQueryStatusCompleted.providerId = providerFilter;
+            withdrawalQueryStatusPending.providerId = providerFilter;
+        }
+
         // --- New Aggregations for Admin Stats ---
         const [
             totalPlatformFeesResult,
@@ -38,15 +62,15 @@ export const getAdminWallet = async (req, res) => {
             totalProviderWithdrawalsResult
         ] = await Promise.all([
             Payment.aggregate([
-                { $match: { paymentStatus: 'completed' } },
+                { $match: paymentQuery },
                 { $group: { _id: null, total: { $sum: '$platformFee' } } }
             ]),
             Withdrawal.aggregate([
-                { $match: { status: 'completed' } },
+                { $match: withdrawalQueryStatusCompleted },
                 { $group: { _id: null, total: { $sum: '$platformFee' } } }
             ]),
             Withdrawal.aggregate([
-                { $match: { status: 'completed' } },
+                { $match: withdrawalQueryStatusCompleted },
                 { $group: { _id: null, total: { $sum: '$payableAmount' } } }
             ])
         ]);
@@ -71,27 +95,27 @@ export const getAdminWallet = async (req, res) => {
             monthlyEarnings,
             weeklyEarnings
         ] = await Promise.all([
-            Job.countDocuments(),
-            Job.countDocuments({ status: { $in: ['confirmed_by_user', 'confirmed_by_admin'] } }),
-            Job.countDocuments({ status: 'pending' }),
+            Job.countDocuments(jobQueryAll),
+            Job.countDocuments(jobQueryCompleted),
+            Job.countDocuments(jobQueryPending),
             Payment.aggregate([
-                { $match: { paymentStatus: 'completed' } },
+                { $match: paymentQuery },
                 { $group: { _id: null, total: { $sum: '$totalAmount' } } }
             ]),
-            Withdrawal.countDocuments({ status: 'pending' }),
+            Withdrawal.countDocuments(withdrawalQueryStatusPending),
             Withdrawal.aggregate([
-                { $match: { status: 'pending' } },
+                { $match: withdrawalQueryStatusPending },
                 { $group: { _id: null, totalRequested: { $sum: '$requestedAmount' }, totalPayable: { $sum: '$payableAmount' } } }
             ]),
             Withdrawal.aggregate([
-                { $match: { status: 'completed' } },
+                { $match: withdrawalQueryStatusCompleted },
                 { $group: { _id: null, total: { $sum: '$payableAmount' } } }
             ]),
             // Monthly earnings (last 30 days)
             Payment.aggregate([
                 {
                     $match: {
-                        paymentStatus: 'completed',
+                        ...paymentQuery,
                         createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
                     }
                 },
@@ -108,7 +132,7 @@ export const getAdminWallet = async (req, res) => {
             Payment.aggregate([
                 {
                     $match: {
-                        paymentStatus: 'completed',
+                        ...paymentQuery,
                         createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
                     }
                 },
@@ -126,8 +150,11 @@ export const getAdminWallet = async (req, res) => {
         const totalPendingWithdrawalsAmount = pendingWithdrawalsAmountResult[0]?.totalRequested || 0;
         const totalPendingWithdrawalsPayable = pendingWithdrawalsAmountResult[0]?.totalPayable || 0;
 
+        let paymentFindQuery = {};
+        if (paymentQuery.customerId) paymentFindQuery.customerId = paymentQuery.customerId;
+
         // Get recent transactions with full details
-        const recentTransactions = await Payment.find()
+        const recentTransactions = await Payment.find(paymentFindQuery)
             .populate('customerId', 'name email phone')
             .populate('providerId', 'name email phone')
             .populate('jobId', 'orderId amount status')
@@ -135,8 +162,12 @@ export const getAdminWallet = async (req, res) => {
             .limit(10)
             .lean();
 console.log('Recent transactions:', recentTransactions);
+        
+        let withdrawalFindQueryPending = { status: 'pending' };
+        if (withdrawalQueryStatusPending.providerId) withdrawalFindQueryPending.providerId = withdrawalQueryStatusPending.providerId;
+
         // Get pending withdrawals with provider details
-        const pendingWithdrawalsList = await Withdrawal.find({ status: 'pending' })
+        const pendingWithdrawalsList = await Withdrawal.find(withdrawalFindQueryPending)
             .populate({
                 path: 'providerId',
                 select: 'userId bankDetails',
@@ -151,7 +182,7 @@ console.log('Recent transactions:', recentTransactions);
 
         // Get platform fee breakdown by service
         const platformFeeBreakdown = await Payment.aggregate([
-            { $match: { paymentStatus: 'completed' } },
+            { $match: paymentQuery },
             {
                 $lookup: {
                     from: 'jobs',
@@ -185,7 +216,7 @@ console.log('Recent transactions:', recentTransactions);
         const monthlyStats = await Payment.aggregate([
             {
                 $match: {
-                    paymentStatus: 'completed',
+                    ...paymentQuery,
                     createdAt: { $gte: new Date(Date.now() - 12 * 30 * 24 * 60 * 60 * 1000) }
                 }
             },
@@ -344,7 +375,7 @@ export const getAllTransactions = async (req, res) => {
 // Get platform fee statistics
 export const getPlatformFeeStats = async (req, res) => {
     try {
-        const { period = 'month' } = req.query; // day, week, month, year
+        const { period = 'month', region } = req.query; // day, week, month, year
         
         let dateFilter = {};
         const now = new Date();
@@ -366,8 +397,14 @@ export const getPlatformFeeStats = async (req, res) => {
                 dateFilter = { $gte: new Date(now.setMonth(now.getMonth() - 1)) };
         }
 
+        let matchQuery = { paymentStatus: 'completed', createdAt: dateFilter };
+        if (region && ['UK', 'BD'].includes(region)) {
+            const regionCustomers = await User.find({ region }).select('_id').lean();
+            matchQuery.customerId = { $in: regionCustomers.map(u => u._id) };
+        }
+
         const platformFees = await Payment.aggregate([
-            { $match: { paymentStatus: 'completed', createdAt: dateFilter } },
+            { $match: matchQuery },
             {
                 $group: {
                     _id: null,
@@ -381,7 +418,7 @@ export const getPlatformFeeStats = async (req, res) => {
 
         // Get top earning services by platform fee
         const topServices = await Payment.aggregate([
-            { $match: { paymentStatus: 'completed', createdAt: dateFilter } },
+            { $match: matchQuery },
             {
                 $lookup: {
                     from: 'jobs',
@@ -414,7 +451,7 @@ export const getPlatformFeeStats = async (req, res) => {
 
         // Get daily platform fee for chart
         const dailyFees = await Payment.aggregate([
-            { $match: { paymentStatus: 'completed', createdAt: dateFilter } },
+            { $match: matchQuery },
             {
                 $group: {
                     _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
@@ -458,7 +495,16 @@ export const getPlatformFeeStats = async (req, res) => {
 // Get withdrawal statistics (Admin)
 export const getWithdrawalStats = async (req, res) => {
     try {
+        const { region } = req.query;
+        let matchQuery = {};
+        if (region && ['UK', 'BD'].includes(region)) {
+            const regionUsers = await User.find({ region, role: 'provider' }).select('_id').lean();
+            const regionProviders = await Provider.find({ userId: { $in: regionUsers.map(u => u._id) } }).select('_id').lean();
+            matchQuery.providerId = { $in: regionProviders.map(p => p._id) };
+        }
+
         const withdrawals = await Withdrawal.aggregate([
+            { $match: matchQuery },
             {
                 $group: {
                     _id: '$status',
@@ -473,6 +519,7 @@ export const getWithdrawalStats = async (req, res) => {
         const monthlyWithdrawals = await Withdrawal.aggregate([
             {
                 $match: {
+                    ...matchQuery,
                     createdAt: { $gte: new Date(Date.now() - 12 * 30 * 24 * 60 * 60 * 1000) }
                 }
             },
@@ -524,6 +571,13 @@ export const getWithdrawalStats = async (req, res) => {
 // Get admin earnings overview
 export const getAdminEarningsOverview = async (req, res) => {
     try {
+        const { region } = req.query;
+        let matchQuery = { paymentStatus: 'completed' };
+        if (region && ['UK', 'BD'].includes(region)) {
+            const regionCustomers = await User.find({ region }).select('_id').lean();
+            matchQuery.customerId = { $in: regionCustomers.map(u => u._id) };
+        }
+
         // Get earnings by day for current week
         const weeklyEarnings = [];
         for (let i = 6; i >= 0; i--) {
@@ -537,7 +591,7 @@ export const getAdminEarningsOverview = async (req, res) => {
             const earnings = await Payment.aggregate([
                 {
                     $match: {
-                        paymentStatus: 'completed',
+                        ...matchQuery,
                         createdAt: { $gte: date, $lt: nextDate }
                     }
                 },
@@ -569,7 +623,7 @@ export const getAdminEarningsOverview = async (req, res) => {
             const earnings = await Payment.aggregate([
                 {
                     $match: {
-                        paymentStatus: 'completed',
+                        ...matchQuery,
                         createdAt: { $gte: startDate, $lte: endDate }
                     }
                 },
@@ -591,7 +645,7 @@ export const getAdminEarningsOverview = async (req, res) => {
 
         // Get top providers by platform fee contribution
         const topProviders = await Payment.aggregate([
-            { $match: { paymentStatus: 'completed' } },
+            { $match: matchQuery },
             {
                 $group: {
                     _id: '$providerId',
@@ -675,9 +729,16 @@ export const getAdminWalletTransactions = async (req, res) => {
             );
         }
 
+        const { region } = req.query;
+        let query = {};
+        if (region && ['UK', 'BD'].includes(region)) {
+            const regionCustomers = await User.find({ region }).select('_id').lean();
+            query.customerId = { $in: regionCustomers.map(u => u._id) };
+        }
+
         // Get all completed payments (actual transactions)
         const [transactions, total] = await Promise.all([
-            Payment.find()
+            Payment.find(query)
                 .populate('customerId', 'name email phone')
                 .populate('providerId', 'name email phone')
                 .populate('jobId', 'orderId amount status service')
@@ -685,7 +746,7 @@ export const getAdminWalletTransactions = async (req, res) => {
                 .skip(skip)
                 .limit(limit)
                 .lean(),
-            Payment.countDocuments()
+            Payment.countDocuments(query)
         ]);
 
         const totalPages = Math.ceil(total / limit);

@@ -5,6 +5,7 @@ import {
   paymentCancel,
   paymentIPN,
   verifyStripePayment,
+  getStripeConfig,
 } from '../controllers/payment.controller.js';
 
 const router = Router();
@@ -29,5 +30,11 @@ router.post('/ipn', paymentIPN);   // Server-to-server — must return 200
 // Called by mobile app after Stripe SDK confirms payment
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/verify-stripe', verifyStripePayment);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STRIPE CONFIG route
+// Returns STRIPE_PUBLISHABLE_KEY for frontend initialization
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/stripe/config', getStripeConfig);
 
 export default router;

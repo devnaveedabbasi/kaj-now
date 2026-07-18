@@ -83,6 +83,7 @@ const paymentSchema = new mongoose.Schema(
       enum: [
         'pending',
         'held_in_admin_wallet',
+        'pending_refund',
         'released_to_provider',
         'refunded_to_customer',
         'cod_pending',
@@ -134,7 +135,25 @@ const paymentSchema = new mongoose.Schema(
     // ====== REFUND INFO ======
     refundedAt: { type: Date },
     refundReason: { type: String, trim: true },
-   
+
+    // ====== MANUAL REFUND TRACKING (job cancellations) ======
+    // 'not_applicable' — no money was ever collected/held for this payment (e.g. COD, still pending)
+    // 'pending'        — job cancelled, money held by admin, refund owed to customer but not yet sent
+    // 'completed'      — admin has manually sent the refund outside the system and marked it done
+    refundStatus: {
+      type: String,
+      enum: ['not_applicable', 'pending', 'completed'],
+      default: 'not_applicable',
+      index: true,
+    },
+    refundMarkedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    refundMarkedAt: { type: Date, default: null },
+    refundNote: { type: String, trim: true, default: null },
+
     // ====== PAYMENT RELEASE TO PROVIDER ======
     releasedAt: { type: Date },
     confirmedAt: { type: Date }

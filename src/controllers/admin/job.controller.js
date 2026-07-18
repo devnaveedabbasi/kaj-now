@@ -7,7 +7,13 @@ import User from '../../models/User.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/notification.js';
+import { createActivityLog } from '../../utils/createActivityLog.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
+import {
+  NON_CANCELLABLE_JOB_STATUSES,
+  releaseEscrowForCancellation,
+  markPaymentRefundCompleted,
+} from '../../utils/jobCancellation.js';
 const ACTIVE_JOB_STATUSES = ['pending', 'accepted', 'in_progress'];
 
 function parseTimeToMinutes(timeValue) {
@@ -588,6 +594,7 @@ export const cancelJob = async (req, res) => {
 
     try {
         const { jobId } = req.params;
+        const { reason } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(jobId)) {
             throw new ApiError(400, 'Invalid job ID format');
@@ -606,13 +613,30 @@ export const cancelJob = async (req, res) => {
             throw new ApiError(400, 'Job is already cancelled');
         }
 
+        if (NON_CANCELLABLE_JOB_STATUSES.includes(job.status)) {
+            throw new ApiError(400, `Job cannot be cancelled. Current status: ${job.status}`);
+        }
+
         // Capture provider userId before cancellation clears status
         let providerUserId = null;
         if (job.provider && job.provider.userId) {
             providerUserId = getUserIdValue(job.provider.userId);
         }
 
+        // Stamp unified cancellation metadata BEFORE performJobCancellation saves
+        // the job, so it persists in the same write.
+        job.cancelledBy = 'admin';
+        job.cancelledByUserId = req.user._id;
+        job.cancellationReason = reason?.trim() || 'Cancelled by admin';
+
         const { transferAmount, adminBalance, providerBalance } = await performJobCancellation(job, session);
+
+        // Release the payment's escrow hold for manual refund tracking — this
+        // is separate from performJobCancellation() because that helper is
+        // also reused by assignProvider() for reassignment, where the
+        // customer's payment must stay held (job continues with a new provider).
+        const payment = await Payment.findOne({ jobId: job._id }).session(session);
+        await releaseEscrowForCancellation(session, payment);
 
         await session.commitTransaction();
 
@@ -644,6 +668,7 @@ export const cancelJob = async (req, res) => {
         return res.status(200).json(
             new ApiResponse(200, {
                 job,
+                payment,
                 transferAmount,
                 adminBalance,
                 providerBalance,
@@ -789,6 +814,235 @@ export const assignProvider = async (req, res) => {
         }
 
         console.error('Error assigning provider:', error);
+        return res.status(500).json(new ApiResponse(500, null, error.message));
+    } finally {
+        session.endSession();
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/admin/jobs/cancelled
+// Unified view of every cancelled job — regardless of whether it was
+// cancelled by the customer, the provider (cancel or reject), the admin,
+// or automatically by the system (cron timeout).
+// ─────────────────────────────────────────────────────────────
+export const getCancelledJobs = async (req, res) => {
+    try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const skip = (page - 1) * limit;
+        const { cancelledBy, refundStatus, region, search } = req.query;
+
+        const query = { status: { $in: ['cancelled', 'rejected_by_provider'] } };
+
+        if (cancelledBy && ['customer', 'provider', 'admin', 'system'].includes(cancelledBy)) {
+            query.cancelledBy = cancelledBy;
+        }
+
+        if (search) {
+            query.orderId = { $regex: search, $options: 'i' };
+        }
+
+        // Jobs have no region of their own — derive it from the customer who booked it.
+        if (region && ['UK', 'BD'].includes(region)) {
+            const regionCustomers = await User.find({ region }).select('_id').lean();
+            query.customer = { $in: regionCustomers.map((u) => u._id) };
+        }
+
+        if (refundStatus && ['not_applicable', 'pending', 'completed'].includes(refundStatus)) {
+            const matchingPayments = await Payment.find({ refundStatus }).select('jobId').lean();
+            query._id = { $in: matchingPayments.map((p) => p.jobId) };
+        }
+
+        const [jobs, totalCount] = await Promise.all([
+            Job.find(query)
+                .populate('customer', 'name email phone')
+                .populate({ path: 'provider', populate: { path: 'userId', select: 'name email' } })
+                .populate('service', 'name')
+                .populate('cancelledByUserId', 'name email role')
+                .sort({ cancelledAt: -1, createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Job.countDocuments(query),
+        ]);
+
+        const payments = await Payment.find({ jobId: { $in: jobs.map((j) => j._id) } }).lean();
+        const paymentByJobId = new Map(payments.map((p) => [p.jobId.toString(), p]));
+
+        const formattedJobs = jobs.map((job) => {
+            const payment = paymentByJobId.get(job._id.toString()) || null;
+            return {
+                _id: job._id,
+                orderId: job.orderId,
+                status: job.status,
+                service: job.service ? { _id: job.service._id, name: job.service.name } : null,
+                customer: job.customer
+                    ? { _id: job.customer._id, name: job.customer.name, email: job.customer.email, phone: job.customer.phone }
+                    : null,
+                provider: job.provider
+                    ? { _id: job.provider._id, name: job.provider.userId?.name, email: job.provider.userId?.email }
+                    : null,
+                amount: job.amount,
+                // Legacy jobs cancelled before this feature shipped have no cancelledBy —
+                // they could only have come from the automatic cron timeout.
+                cancelledBy: job.cancelledBy || 'system',
+                cancelledByUser: job.cancelledByUserId
+                    ? { _id: job.cancelledByUserId._id, name: job.cancelledByUserId.name, email: job.cancelledByUserId.email }
+                    : null,
+                cancellationReason: job.cancellationReason || job.rejectionReason || null,
+                cancelledAt: job.cancelledAt,
+                createdAt: job.createdAt,
+                payment: payment
+                    ? {
+                        _id: payment._id,
+                        totalAmount: payment.totalAmount,
+                        platformFee: payment.platformFee,
+                        paymentStatus: payment.paymentStatus,
+                        escrowStatus: payment.escrowStatus,
+                        refundStatus: payment.refundStatus,
+                        refundMarkedAt: payment.refundMarkedAt,
+                        refundNote: payment.refundNote,
+                        refundedAt: payment.refundedAt,
+                    }
+                    : null,
+            };
+        });
+
+        const [bySourceAgg, byRefundAgg, total] = await Promise.all([
+            Job.aggregate([
+                { $match: { status: { $in: ['cancelled', 'rejected_by_provider'] } } },
+                { $group: { _id: '$cancelledBy', count: { $sum: 1 } } },
+            ]),
+            Payment.aggregate([
+                { $match: { refundStatus: { $in: ['pending', 'completed'] } } },
+                { $group: { _id: '$refundStatus', count: { $sum: 1 } } },
+            ]),
+            Job.countDocuments({ status: { $in: ['cancelled', 'rejected_by_provider'] } }),
+        ]);
+
+        const stats = {
+            total,
+            byCustomer: 0,
+            byProvider: 0,
+            byAdmin: 0,
+            bySystem: 0,
+            refundPending: 0,
+            refundCompleted: 0,
+        };
+
+        bySourceAgg.forEach((s) => {
+            if (s._id === 'customer') stats.byCustomer = s.count;
+            else if (s._id === 'provider') stats.byProvider = s.count;
+            else if (s._id === 'admin') stats.byAdmin = s.count;
+            else stats.bySystem += s.count; // 'system' or legacy null
+        });
+
+        byRefundAgg.forEach((r) => {
+            if (r._id === 'pending') stats.refundPending = r.count;
+            if (r._id === 'completed') stats.refundCompleted = r.count;
+        });
+
+        const totalPages = Math.ceil(totalCount / limit);
+
+        return res.status(200).json(
+            new ApiResponse(200, {
+                jobs: formattedJobs,
+                stats,
+                pagination: {
+                    currentPage: page,
+                    totalPages,
+                    totalItems: totalCount,
+                    itemsPerPage: limit,
+                },
+            }, 'Cancelled jobs retrieved successfully')
+        );
+    } catch (error) {
+        console.error('Error getting cancelled jobs:', error);
+        return res.status(500).json(new ApiResponse(500, null, error.message));
+    }
+};
+
+// ─────────────────────────────────────────────────────────────
+// PATCH /api/admin/jobs/cancelled/:jobId/refund
+// Admin has manually sent the refund to the customer OUTSIDE the system
+// (bank transfer, mobile wallet, etc.) and marks it as done here. This is
+// the only step that actually reduces the admin wallet balance for a
+// cancellation — nothing is auto-sent to the customer.
+// ─────────────────────────────────────────────────────────────
+export const markRefundStatus = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const { jobId } = req.params;
+        const { note } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(jobId)) {
+            throw new ApiError(400, 'Invalid job ID format');
+        }
+
+        const job = await Job.findById(jobId).session(session);
+        if (!job) throw new ApiError(404, 'Job not found');
+
+        if (!['cancelled', 'rejected_by_provider'].includes(job.status)) {
+            throw new ApiError(400, 'Refunds can only be marked for cancelled jobs');
+        }
+
+        const payment = await Payment.findOne({ jobId: job._id }).session(session);
+        if (!payment) throw new ApiError(404, 'Payment record not found');
+
+        if (payment.refundStatus !== 'pending') {
+            throw new ApiError(400, `Refund cannot be marked. Current refund status: ${payment.refundStatus}`);
+        }
+
+        await markPaymentRefundCompleted(session, payment, {
+            adminUserId: req.user._id,
+            note: note?.trim() || null,
+        });
+
+        job.paymentStatus = 'refunded_to_customer';
+        await job.save({ session });
+
+        await session.commitTransaction();
+
+        try {
+            await createActivityLog({
+                userId: req.user._id,
+                action: 'JOB_REFUND_MARKED_SENT',
+                entityType: 'Payment',
+                entityId: payment._id,
+                details: { jobId: job._id, orderId: job.orderId, amount: payment.totalAmount, note },
+                req,
+            });
+        } catch (e) {
+            console.error('Activity log failed:', e.message);
+        }
+
+        try {
+            await createNotification({
+                userId: job.customer,
+                title: 'Refund Sent',
+                message: `Your refund of ${payment.totalAmount} for Order #${job.orderId} has been sent.`,
+                type: 'payment',
+                referenceId: job._id,
+                metadata: { orderId: job.orderId, jobId: job._id, amount: payment.totalAmount },
+            });
+        } catch (e) {
+            console.error('Notification failed:', e.message);
+        }
+
+        return res.status(200).json(
+            new ApiResponse(200, { job, payment }, 'Refund marked as sent successfully')
+        );
+    } catch (error) {
+        await session.abortTransaction();
+
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        }
+
+        console.error('Error marking refund status:', error);
         return res.status(500).json(new ApiResponse(500, null, error.message));
     } finally {
         session.endSession();

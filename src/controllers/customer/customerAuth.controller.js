@@ -53,13 +53,27 @@ export async function register(req, res) {
   if (password.length < 8) {
     throw new ApiError(400, 'Password must be at least 8 characters.');
   }
- console.log(phone,'phone')
- 
-   if (!bdPhoneRegex.test(phone) && !ukPhoneRegex.test(phone)) {
-     throw new ApiError(400, 'Only Bangla and UK phone numbers are allowed.');
-   }
+  console.log(phone, 'phone')
+  const normalizedPhone = String(phone)
+    .trim()
+    .replace(/[\s()-]/g, '');
 
-  const region = phone.startsWith('+44') ? 'UK' : 'BD';
+
+  if (
+    !bdPhoneRegex.test(normalizedPhone) &&
+    !ukPhoneRegex.test(normalizedPhone)
+  ) {
+    throw new ApiError(
+      400,
+      'Only valid Bangladesh and UK phone numbers are allowed.'
+    );
+  }
+
+  const region = normalizedPhone.startsWith('+44') ||
+    normalizedPhone.startsWith('0044')
+    ? 'UK'
+    : 'BD';
+
 
   const existing = await User.findOne({
     $or: [{ email }, { phone }],

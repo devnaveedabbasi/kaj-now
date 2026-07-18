@@ -6,6 +6,7 @@ import Wallet from '../models/wallet.model.js';
 import User from '../models/User.model.js';
 import Notification from '../models/notification.model.js';
 import { createNotification } from '../utils/notification.js';
+import { markPaymentRefundAutoCompleted } from '../utils/jobCancellation.js';
 
 /**
  * Service to handle background tasks previously handled by BullMQ/Redis
@@ -126,82 +127,39 @@ class JobSchedulerService {
       jobDoc.status = 'cancelled';
       jobDoc.cancelledAt = new Date();
       jobDoc.rejectionReason = 'Auto-cancelled: Provider did not accept within 8 hours';
+      jobDoc.cancelledBy = 'system';
+      jobDoc.cancelledByUserId = null;
+      jobDoc.cancellationReason = jobDoc.rejectionReason;
       await jobDoc.save({ session });
 
-      const customerUser = await User.findById(jobDoc.customer._id).session(session);
-      let customerWallet = await Wallet.findOne({
-        userId: customerUser._id,
-        role: 'customer',
-      }).session(session);
-
-      if (!customerWallet) {
-        [customerWallet] = await Wallet.create(
-          [{
-            userId: customerUser._id,
-            role: 'customer',
-            balance: 0,
-            totalEarnings: 0,
-            totalWithdrawn: 0,
-            totalPlatformFees: 0,
-            isActive: true,
-          }],
-          { session }
-        );
-      }
-
-      customerWallet.balance += refundAmount;
-      customerWallet.transactionHistory.push(payment._id);
-      await customerWallet.save({ session });
-
-      payment.paymentStatus = 'refunded';
-      payment.escrowStatus = 'refunded_to_customer';
-      payment.refundedAt = new Date();
-      payment.refundReason = 'Auto-cancelled: Provider timeout (8 hours)';
-      await payment.save({ session });
-
-      // Admin Wallet adjustments
-      const adminUser = await User.findOne({ role: 'admin' }).session(session);
-      if (adminUser) {
-        const adminWallet = await Wallet.findOne({
-          userId: adminUser._id,
-          role: 'admin',
-        }).session(session);
-
-        if (adminWallet) {
-          adminWallet.balance -= refundAmount;
-          adminWallet.totalHeld = (adminWallet.totalHeld || 0) - refundAmount;
-          adminWallet.transactionHistory.push(payment._id);
-          adminWallet.totalPlatformFees = (adminWallet.totalPlatformFees || 0) - (payment.platformFee || 0);
-          adminWallet.totalEarnings = (adminWallet.totalEarnings || 0) - (payment.platformFee || 0);
-          await adminWallet.save({ session });
-        }
-      }
+      // We use the same manual refund flow as when an admin cancels a job.
+      // The money stays with the platform until an admin explicitly refunds it.
+      const { releaseEscrowForCancellation } = await import('../utils/jobCancellation.js');
+      await releaseEscrowForCancellation(session, payment);
 
       await session.commitTransaction();
-      console.log(`Job cancelled and refunded: ${refundAmount} BDT`);
+      console.log(`Job cancelled (8h timeout). Refund pending admin action for: ${jobId}`);
 
       await createNotification({
         userId: customerUser._id,
-        title: 'Job Cancelled - Payment Refunded',
-        message: `Your booking (Order #${jobDoc.orderId}) was automatically cancelled. Provider did not accept within 8 hours. Refunded: ${refundAmount} BDT to your wallet.`,
+        title: 'Job Cancelled - Refund Pending',
+        message: `Your booking (Order #${jobDoc.orderId}) was automatically cancelled because the provider did not accept it within 8 hours. The amount of ${payment.totalAmount} BDT will be refunded to you manually.`,
         type: 'job',
         referenceId: jobDoc._id,
-        metadata: { orderId: jobDoc.orderId, refundAmount, reason: 'provider_timeout_8hours' },
+        metadata: { orderId: jobDoc.orderId, reason: 'provider_timeout_8hours' },
       });
 
       if (adminUser) {
         await createNotification({
           userId: adminUser._id,
-          title: 'Job Cancelled - Customer Refunded',
-          message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled. Reason: Provider timeout (8 hours). Refunded: ${refundAmount} BDT back to customer. Platform fee retained: ${payment.platformFee} BDT.`,
+          title: 'Job Cancelled - Action Required',
+          message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled (provider timeout 8 hours). A refund of ${payment.totalAmount} is pending your manual action.`,
           type: 'admin',
           referenceId: jobDoc._id,
           metadata: { 
             orderId: jobDoc.orderId, 
             customerId: customerUser._id,
             customerName: customerUser.name,
-            refundAmount, 
-            platformFee: payment.platformFee,
             reason: 'provider_timeout_8hours',
             jobId: jobDoc._id
           },
@@ -342,60 +300,47 @@ class JobSchedulerService {
       jobDoc.status = 'cancelled';
       jobDoc.cancelledAt = new Date();
       jobDoc.rejectionReason = 'Auto-cancelled: Provider did not start within 5 minutes of scheduled time';
+      jobDoc.cancelledBy = 'system';
+      jobDoc.cancelledByUserId = null;
+      jobDoc.cancellationReason = jobDoc.rejectionReason;
       await jobDoc.save({ session });
 
-      // Similar refund logic as above...
-      const customerUser = await User.findById(jobDoc.customer._id).session(session);
-      let customerWallet = await Wallet.findOne({
-        userId: customerUser._id,
-        role: 'customer',
-      }).session(session);
-
-      if (!customerWallet) {
-        [customerWallet] = await Wallet.create([{
-          userId: customerUser._id,
-          role: 'customer',
-          balance: 0,
-          isActive: true
-        }], { session });
-      }
-
-      customerWallet.balance += refundAmount;
-      customerWallet.transactionHistory.push(payment._id);
-      await customerWallet.save({ session });
-
-      payment.paymentStatus = 'refunded';
-      payment.escrowStatus = 'refunded_to_customer';
-      payment.refundedAt = new Date();
-      payment.refundReason = 'Auto-cancelled: Provider start timeout (5 mins)';
-      await payment.save({ session });
-
-      // Admin Wallet
-      const adminUser = await User.findOne({ role: 'admin' }).session(session);
-      if (adminUser) {
-        const adminWallet = await Wallet.findOne({ userId: adminUser._id, role: 'admin' }).session(session);
-        if (adminWallet) {
-          adminWallet.balance -= refundAmount;
-          adminWallet.totalHeld = (adminWallet.totalHeld || 0) - refundAmount;
-          adminWallet.transactionHistory.push(payment._id);
-          adminWallet.totalPlatformFees = (adminWallet.totalPlatformFees || 0) - (payment.platformFee || 0);
-          adminWallet.totalEarnings = (adminWallet.totalEarnings || 0) - (payment.platformFee || 0);
-          await adminWallet.save({ session });
-        }
-      }
+      // We use the same manual refund flow as when an admin cancels a job.
+      // The money stays with the platform until an admin explicitly refunds it.
+      const { releaseEscrowForCancellation } = await import('../utils/jobCancellation.js');
+      await releaseEscrowForCancellation(session, payment);
 
       await session.commitTransaction();
-      console.log(`Job cancelled (timeout) and refunded: ${refundAmount} BDT`);
+      console.log(`Job cancelled (timeout). Refund pending admin action for: ${jobId}`);
 
       // Notifications
+      const customerUser = await User.findById(jobDoc.customer._id).session(session);
       await createNotification({
         userId: customerUser._id,
-        title: 'Job Cancelled - Provider No-Show',
-        message: `Your booking Order #${jobDoc.orderId} was cancelled. Provider did not start on time. Refunded ${refundAmount} BDT.`,
+        title: 'Job Cancelled - Refund Pending',
+        message: `Your booking Order #${jobDoc.orderId} was cancelled. Provider did not start on time. The amount of ${payment.totalAmount} BDT will be refunded to you manually.`,
         type: 'job',
         referenceId: jobDoc._id,
         metadata: { orderId: jobDoc.orderId, reason: 'provider_no_show_5mins' },
       });
+
+      const adminUser = await User.findOne({ role: 'admin' }).session(session);
+      if (adminUser) {
+        await createNotification({
+          userId: adminUser._id,
+          title: 'Job Cancelled - Action Required',
+          message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled (provider did not start). A refund of ${payment.totalAmount} is pending your manual action.`,
+          type: 'admin',
+          referenceId: jobDoc._id,
+          metadata: { 
+            orderId: jobDoc.orderId, 
+            customerId: customerUser._id,
+            customerName: customerUser.name,
+            reason: 'provider_no_show_5mins',
+            jobId: jobDoc._id
+          },
+        });
+      }
 
       if (jobDoc.provider?.userId) {
         await createNotification({

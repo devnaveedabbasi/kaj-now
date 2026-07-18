@@ -98,6 +98,19 @@ const jobSchema = new mongoose.Schema(
 
     rejectionReason: { type: String, trim: true, default: null },
     disputeReason: { type: String, trim: true, default: null },
+
+    // ── Cancellation metadata (who/what cancelled the job) ──────────────
+    cancelledBy: {
+      type: String,
+      enum: ['customer', 'provider', 'admin', 'system'],
+      default: null,
+    },
+    cancelledByUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    cancellationReason: { type: String, trim: true, default: null },
   },
   { timestamps: true }
 );
@@ -105,6 +118,7 @@ const jobSchema = new mongoose.Schema(
 jobSchema.index({ customer: 1, status: 1 });
 jobSchema.index({ provider: 1, status: 1 });
 jobSchema.index({ createdAt: -1 });
+jobSchema.index({ status: 1, cancelledBy: 1 });
 
 const Job = mongoose.models.Job || mongoose.model('Job', jobSchema);
 export default Job;

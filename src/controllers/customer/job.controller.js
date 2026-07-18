@@ -14,6 +14,11 @@ import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import { validateCardDetails } from '../../utils/validateCardDetails.js';
 import BookingIntent from '../../models/bookingIntent.model.js';
+import {
+  NON_CANCELLABLE_JOB_STATUSES,
+  applyCancellationMetadata,
+  releaseEscrowForCancellation,
+} from '../../utils/jobCancellation.js';
 
 async function generateOrderId() {
   const count = await Job.countDocuments();
@@ -86,9 +91,12 @@ export async function bookJob(req, res) {
         );
       }
     }
+   // ── Fetch Documents ──────────────────────────────────────────────
+    const user = await User.findById(userId).session(session);
+    if (!user) throw new ApiError(404, 'User not found');
 
     // ── Method-specific validation ───────────────────────────────────
-    if (paymentMethod === 'card') {
+    if (paymentMethod === 'card' && user.region === "BD") {
       if (
         !cardDetails?.cardNumber ||
         !cardDetails?.expiryDate ||
@@ -103,10 +111,7 @@ export async function bookJob(req, res) {
       validateCardDetails(cardDetails);
     }
 
-    // ── Fetch Documents ──────────────────────────────────────────────
-    const user = await User.findById(userId).session(session);
-    if (!user) throw new ApiError(404, 'User not found');
-
+ 
     const service = await Service.findById(serviceId).session(session);
     if (!service || !service.isActive) throw new ApiError(404, 'Service not available');
 
@@ -172,7 +177,7 @@ export async function bookJob(req, res) {
     if (user.region === 'UK' && !servicePrice) {
       servicePrice = serviceRequest?.ukService?.price;
     }
-    
+
     if (servicePrice === undefined || servicePrice === null || isNaN(servicePrice)) {
       throw new ApiError(400, 'Invalid service price.');
     }
@@ -318,12 +323,13 @@ export async function bookJob(req, res) {
       );
 
       await session.commitTransaction();
-
+ console.log('Stripe PaymentIntent created:', paymentIntent.id, 'Client Secret:', paymentIntent.client_secret, 'intent:', paymentIntent); 
       return res.status(201).json(
         new ApiResponse(
           201,
           {
             clientSecret: paymentIntent.client_secret,
+            paymentIntentId: paymentIntent.id,
             tranId,
             paymentMethod: 'card',
             paymentGateway: 'stripe',
@@ -340,7 +346,7 @@ export async function bookJob(req, res) {
     // So we use BASE_URL (the backend's URL) for success_url, fail_url, etc.
     // The backend will process the callback and THEN redirect to APP_BASE_URL.
     const BASE_URL = process.env.BASE_URL;
- console.log(BASE_URL, process.env.BASE_URL, 'BASE_URL for SSLCommerz callbacks');
+    console.log(BASE_URL, process.env.BASE_URL, 'BASE_URL for SSLCommerz callbacks');
     const paymentData = {
       total_amount: servicePrice,
       currency: 'BDT',
@@ -704,15 +710,15 @@ export async function confirmCompletionByCustomer(req, res) {
 
       const wallet = await Wallet.findOne({ userId: payment.providerId, role: 'provider' }).session(session);
       if (!wallet) {
-      wallet = await Wallet.create([{
-        userId: payment.providerId,
-        role: 'provider',
-      }], { session });
-    }
-    wallet.totalEarnings += payment.providerAmount;
-    wallet.totalPlatformFees += payment.platformFee;
-    wallet.transactionHistory.push(payment._id);
-    await wallet.save({ session });
+        wallet = await Wallet.create([{
+          userId: payment.providerId,
+          role: 'provider',
+        }], { session });
+      }
+      wallet.totalEarnings += payment.providerAmount;
+      wallet.totalPlatformFees += payment.platformFee;
+      wallet.transactionHistory.push(payment._id);
+      await wallet.save({ session });
 
       payment.escrowStatus = 'cod_completed';
       payment.paymentStatus = 'completed';
@@ -1084,43 +1090,65 @@ export const getMyOrders = async (req, res) => {
       }
     });
 
+    // Bulk-fetch payment refund info for cancelled/rejected orders in this page
+    const paymentsByJobId = new Map();
+    const orderIdsForPayment = orders
+      .filter(o => ['cancelled', 'rejected_by_provider'].includes(o.status))
+      .map(o => o._id);
+    if (orderIdsForPayment.length > 0) {
+      const relatedPayments = await Payment.find({ jobId: { $in: orderIdsForPayment } })
+        .select('jobId totalAmount refundStatus refundedAt refundMarkedAt refundNote paymentStatus')
+        .lean();
+      relatedPayments.forEach(p => paymentsByJobId.set(p.jobId.toString(), p));
+    }
+
     // Format orders
-    const formattedOrders = orders.map(order => ({
-      _id: order._id,
-      orderId: order.orderId,
-      status: order.status,
-      paymentStatus: order.paymentStatus,
-      amount: order.amount,
-      schedule: order.schedule,
-      service: {
-        _id: order.service?._id,
-        name: order.service?.name,
-        icon: order.service?.icon,
-        price: order.service?.price,
-        description: order.service?.description,
-        averageRating: order.service?.averageRating || 0
-      },
-      provider: {
-        _id: order.provider?._id,
-        userId: order.provider?.userId?._id,
-        name: order.provider?.userId?.name,
-        email: order.provider?.userId?.email,
-        phone: order.provider?.userId?.phoneNumber,
-        profilePicture: order.provider?.userId?.profilePicture
-      },
-      timestamps: {
-        createdAt: order.createdAt,
-        acceptedAt: order.acceptedAt,
-        startedAt: order.startedAt,
-        completedByProviderAt: order.completedByProviderAt,
-        confirmedByUserAt: order.confirmedByUserAt,
-        disputedAt: order.disputedAt,
-        cancelledAt: order.cancelledAt
-      },
-      subServices: order.subServices || [],
-      rejectionReason: order.rejectionReason,
-      disputeReason: order.disputeReason
-    }));
+    const formattedOrders = orders.map(order => {
+      const payment = paymentsByJobId.get(order._id.toString()) || null;
+      return {
+        _id: order._id,
+        orderId: order.orderId,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        amount: order.amount,
+        schedule: order.schedule,
+        service: {
+          _id: order.service?._id,
+          name: order.service?.name,
+          icon: order.service?.icon,
+          price: order.service?.price,
+          description: order.service?.description,
+          averageRating: order.service?.averageRating || 0
+        },
+        provider: {
+          _id: order.provider?._id,
+          userId: order.provider?.userId?._id,
+          name: order.provider?.userId?.name,
+          email: order.provider?.userId?.email,
+          phone: order.provider?.userId?.phoneNumber,
+          profilePicture: order.provider?.userId?.profilePicture
+        },
+        timestamps: {
+          createdAt: order.createdAt,
+          acceptedAt: order.acceptedAt,
+          startedAt: order.startedAt,
+          completedByProviderAt: order.completedByProviderAt,
+          confirmedByUserAt: order.confirmedByUserAt,
+          disputedAt: order.disputedAt,
+          cancelledAt: order.cancelledAt
+        },
+        subServices: order.subServices || [],
+        rejectionReason: order.rejectionReason,
+        disputeReason: order.disputeReason,
+        cancellation: ['cancelled', 'rejected_by_provider'].includes(order.status) ? {
+          cancelledBy: order.cancelledBy || (order.status === 'rejected_by_provider' ? 'provider' : 'system'),
+          cancellationReason: order.cancellationReason || order.rejectionReason || null,
+          cancelledAt: order.cancelledAt,
+          refundStatus: payment?.refundStatus || 'not_applicable',
+          refundedAt: payment?.refundedAt || null,
+        } : null,
+      };
+    });
 
     const totalPages = Math.ceil(totalCount / limit);
 
@@ -1219,6 +1247,10 @@ export const getOrderById = async (req, res) => {
         providerAmount: payment.providerAmount,
         paymentStatus: payment.paymentStatus,
         escrowStatus: payment.escrowStatus,
+        refundStatus: payment.refundStatus,
+        refundedAt: payment.refundedAt,
+        refundMarkedAt: payment.refundMarkedAt,
+        refundNote: payment.refundNote,
         createdAt: payment.createdAt
       } : null,
       timestamps: {
@@ -1232,7 +1264,12 @@ export const getOrderById = async (req, res) => {
       },
       subServices: order.subServices || [],
       rejectionReason: order.rejectionReason,
-      disputeReason: order.disputeReason
+      disputeReason: order.disputeReason,
+      cancellation: ['cancelled', 'rejected_by_provider'].includes(order.status) ? {
+        cancelledBy: order.cancelledBy || (order.status === 'rejected_by_provider' ? 'provider' : 'system'),
+        cancellationReason: order.cancellationReason || order.rejectionReason || null,
+        cancelledAt: order.cancelledAt,
+      } : null,
     };
 
     res.status(200).json(
@@ -1249,25 +1286,110 @@ export const getOrderById = async (req, res) => {
 };
 
 
+// ─────────────────────────────────────────────────────────────
+// PATCH /api/customer/job/:jobId/cancel
+// Customer cancels a booking — only allowed before the job has started
+// (status must still be 'pending' or 'accepted'). Any money already held
+// in the admin wallet is flagged for manual refund by the admin; nothing
+// is auto-credited to the customer's wallet.
+// ─────────────────────────────────────────────────────────────
 export async function cancelJobByCustomer(req, res) {
-try{
   const session = await mongoose.startSession();
   session.startTransaction();
- const {jobId} = req.params;
-  const customerId = req.user._id;
 
-  if(!mongoose.Types.ObjectId.isValid(jobId)) {
-    throw new ApiError(400, 'Invalid job ID');
+  try {
+    const { jobId } = req.params;
+    const { reason } = req.body;
+    const customerId = req.user._id;
+
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+      throw new ApiError(400, 'Invalid job ID');
+    }
+
+    const job = await Job.findById(jobId).populate('service', 'name').session(session);
+    if (!job) {
+      throw new ApiError(404, 'Job not found');
+    }
+
+    if (job.customer.toString() !== customerId.toString()) {
+      throw new ApiError(403, 'Not authorized to cancel this job');
+    }
+
+    if (NON_CANCELLABLE_JOB_STATUSES.includes(job.status)) {
+      throw new ApiError(400, `Job cannot be cancelled. Current status: ${job.status}`);
+    }
+
+    if (job.status !== 'pending' && job.status !== 'accepted') {
+      throw new ApiError(400, `Job cannot be cancelled once it has started. Current status: ${job.status}`);
+    }
+
+    const payment = await Payment.findOne({ jobId: job._id }).session(session);
+
+    applyCancellationMetadata(job, {
+      source: 'customer',
+      byUserId: customerId,
+      reason: reason?.trim() || 'Cancelled by customer',
+    });
+    await job.save({ session });
+
+    await releaseEscrowForCancellation(session, payment);
+
+    await session.commitTransaction();
+
+    // ── Activity Log ──────────────────────────────────────────────────
+    try {
+      await createActivityLog({
+        userId: customerId,
+        action: 'JOB_CANCELLED_BY_CUSTOMER',
+        entityType: 'Job',
+        entityId: job._id,
+        details: { orderId: job.orderId, reason: job.cancellationReason },
+        req,
+      });
+    } catch (e) {
+      console.error('Activity log failed:', e.message);
+    }
+
+    // ── Notifications ─────────────────────────────────────────────────
+    try {
+      const provider = await Provider.findById(job.provider);
+      if (provider?.userId) {
+        await createNotification({
+          userId: provider.userId,
+          title: 'Booking Cancelled by Customer',
+          message: `Order #${job.orderId} for "${job.service?.name || 'the service'}" was cancelled by the customer.`,
+          type: 'job',
+          referenceId: job._id,
+          metadata: { orderId: job.orderId, jobId: job._id },
+        });
+      }
+
+      const adminUser = await User.findOne({ role: 'admin' });
+      if (adminUser) {
+        await createNotification({
+          userId: adminUser._id,
+          title: 'Job Cancelled by Customer',
+          message: `Order #${job.orderId} was cancelled by the customer.${payment?.refundStatus === 'pending' ? ` A refund of ${payment.totalAmount} is pending admin action.` : ''}`,
+          type: 'admin',
+          referenceId: job._id,
+          metadata: { orderId: job.orderId, jobId: job._id, refundStatus: payment?.refundStatus },
+        });
+      }
+    } catch (e) {
+      console.error('Notification failed:', e.message);
+    }
+
+    return res.status(200).json(
+      new ApiResponse(200, { job, payment }, 'Job cancelled successfully')
+    );
+  } catch (error) {
+    await session.abortTransaction();
+    console.error('Error cancelling job:', error);
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
+  } finally {
+    session.endSession();
   }
-
-  const job = await Job.findById(jobId).session(session);
-  if(!job) {
-    throw new ApiError(404, 'Job not found');
-  }
-
-}catch (error) {
-  console.error('Error starting session:', error);
-  return res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
-
-}
 }

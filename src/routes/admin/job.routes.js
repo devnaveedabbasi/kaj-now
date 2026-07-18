@@ -5,6 +5,8 @@ import * as jobController from '../../controllers/admin/job.controller.js';
 const router = Router();
 
 router.get('/', asyncHandler(jobController.getAllJobs));
+router.get('/cancelled', asyncHandler(jobController.getCancelledJobs));
+router.patch('/cancelled/:jobId/refund', asyncHandler(jobController.markRefundStatus));
 router.get('/available-providers/:jobId', asyncHandler(jobController.getAvailableProviders));
 router.get('/:jobId', asyncHandler(jobController.getJobById));
 router.patch('/:jobId/status', asyncHandler(jobController.updateJobStatus));

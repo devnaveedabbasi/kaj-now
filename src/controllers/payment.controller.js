@@ -541,3 +541,19 @@ export async function verifyStripePayment(req, res) {
     session.endSession();
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET STRIPE CONFIG
+// ─────────────────────────────────────────────────────────────────────────────
+export async function getStripeConfig(req, res) {
+  try {
+    const publishableKey = process.env.STRIPE_PUBLISHABLE_KEY || '';
+    if (!publishableKey) {
+      console.warn('[getStripeConfig] STRIPE_PUBLISHABLE_KEY is not set in environment variables.');
+    }
+    return res.status(200).json(new ApiResponse(200, { publishableKey }, 'Stripe configuration retrieved successfully.'));
+  } catch (error) {
+    console.error('[getStripeConfig] Error:', error);
+    return res.status(500).json(new ApiResponse(500, null, 'Internal Server Error'));
+  }
+}
