@@ -13,5 +13,6 @@ router.get('/by-category/:categoryId', asyncHandler(provider.getServicesByCatego
 // include images) — BD's existing JSON requests pass through untouched.
 router.post('/request', uploadServiceRequestImages, asyncHandler(provider.requestService));
 router.get('/:serviceId', asyncHandler(provider.getServiceById));
+router.put('/:serviceId', uploadServiceRequestImages, asyncHandler(provider.editService));
 router.delete('/:serviceId', asyncHandler(provider.deleteService));
 export default router;

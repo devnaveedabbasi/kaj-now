@@ -429,7 +429,9 @@ export const getMyServices = async (req, res) => {
                 serviceImage: uk?.serviceImage,
                 price: uk?.price ?? service.price,
                 description: uk?.description || service.description,
-                subServices: uk?.subServices || [],
+                subServices: uk?.subServices?.length ? uk.subServices : (service.subServices || []),
+                estimatedTime: uk?.estimatedTime ?? service.estimatedTime,
+                availability: uk?.availability ?? service.availability,
                 averageRating: service.averageRating || 0,
                 isCustomService: request.isCustomService || false,
                 status: request.status,           // pending / approved / rejected
@@ -536,9 +538,22 @@ export const getServiceById = async (req, res) => {
             reviewServiceId = serviceRequest._id;
         } else {
             // Template flow: populated array mein se requested service dhundo
-            targetService = serviceRequest.serviceId?.find(
+            const uk = serviceRequest.ukService || {};
+            const foundService = serviceRequest.serviceId?.find(
                 s => s._id.toString() === serviceId
             ) || serviceRequest.serviceId?.[0];
+            
+            if (foundService) {
+                targetService = {
+                    ...foundService,
+                    price: uk.price ?? foundService.price,
+                    description: uk.description || foundService.description,
+                    icon: uk.serviceImage || foundService.icon,
+                    subServices: uk.subServices?.length ? uk.subServices : (foundService.subServices || []),
+                    estimatedTime: uk.estimatedTime ?? foundService.estimatedTime,
+                    availability: uk.availability ?? foundService.availability
+                };
+            }
             reviewServiceId = targetService?._id;
         }
 
@@ -582,12 +597,9 @@ export const getServiceById = async (req, res) => {
             averageRating: targetService?.averageRating || 0,
             totalReviews: reviews.length,
 
-            // Custom flow ke extra fields (template flow mein undefined rahenge)
-            ...(isCustomFlow && {
-                subServices: targetService.subServices,
-                estimatedTime: targetService.estimatedTime,
-                availability: targetService.availability
-            }),
+            subServices: targetService?.subServices || [],
+            estimatedTime: targetService?.estimatedTime || null,
+            availability: targetService?.availability || [],
 
             // Provider (service owner)
             provider: {
@@ -638,6 +650,120 @@ export const getServiceById = async (req, res) => {
     }
 };
 
+export const editService = async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const { serviceId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(serviceId)) {
+            throw new ApiError(400, 'Invalid service ID');
+        }
+
+        const provider = await Provider.findOne({ userId });
+        if (!provider) {
+            throw new ApiError(404, 'Provider not found');
+        }
+
+        let serviceRequest = await ServiceRequest.findOne({
+            providerId: provider._id,
+            $or: [
+                { serviceId: { $in: [serviceId] } },
+                { _id: serviceId } // For pending custom services, the param might be the request _id itself
+            ]
+        });
+
+        if (!serviceRequest) {
+            throw new ApiError(404, 'Service request not found');
+        }
+
+        // Validate that no job is currently blocking edits
+        const blockingJob = await Job.findOne({
+            provider: provider._id,
+            service: serviceId, // For custom services with no serviceId, this job check might miss, but that's fine since they have no jobs if they have no Service doc yet
+            status: { $nin: ['confirmed_by_user', 'confirmed_by_admin', 'cancelled', 'rejected_by_provider'] }
+        });
+
+        if (blockingJob) {
+            throw new ApiError(
+                400,
+                'Service cannot be edited because a job is currently ongoing.'
+            );
+        }
+
+        // Parse inputs
+        const {
+            price,
+            description,
+            subServices,
+            estimatedTime,
+            availability,
+            customTitle
+        } = req.body;
+
+        let parsedSubServices = serviceRequest.ukService?.subServices || [];
+        if (subServices) {
+            try {
+                parsedSubServices = typeof subServices === 'string' ? JSON.parse(subServices) : subServices;
+            } catch (e) {
+                throw new ApiError(400, 'Invalid subServices format');
+            }
+        }
+
+        let parsedAvailability = serviceRequest.ukService?.availability || [];
+        if (availability) {
+            try {
+                parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
+            } catch (e) {
+                throw new ApiError(400, 'Invalid availability format');
+            }
+        }
+
+        // Update fields
+        if (!serviceRequest.ukService) {
+            serviceRequest.ukService = {};
+        }
+
+        if (price !== undefined) serviceRequest.ukService.price = Number(price);
+        if (description !== undefined) serviceRequest.ukService.description = description;
+        if (subServices !== undefined) serviceRequest.ukService.subServices = parsedSubServices;
+        if (estimatedTime !== undefined) serviceRequest.ukService.estimatedTime = estimatedTime;
+        if (availability !== undefined) serviceRequest.ukService.availability = parsedAvailability;
+        
+        // For custom services, they might update the title
+        if (serviceRequest.isCustomService && customTitle) {
+            serviceRequest.ukService.title = customTitle;
+        }
+
+        // Check for new image
+        let serviceImageFile = req.files?.serviceImage?.[0];
+        if (serviceImageFile) {
+            serviceRequest.ukService.serviceImage = `/uploads/service-requests/${serviceImageFile.filename}`;
+        }
+
+        // Status update
+        serviceRequest.status = 'pending';
+        serviceRequest.isUpdated = true; // Flag for admin dashboard
+        await serviceRequest.save();
+
+        // Remove from provider's approved catalog while pending
+        if (serviceRequest.serviceId && serviceRequest.serviceId.length > 0) {
+            await Provider.updateOne(
+                { _id: provider._id },
+                { $pullAll: { approvedServices: serviceRequest.serviceId } }
+            );
+        }
+
+        return res.status(200).json(
+            new ApiResponse(200, null, 'Service updated and is pending admin approval')
+        );
+    } catch (error) {
+        console.error('Edit Service Error:', error);
+        if (error instanceof ApiError) {
+            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+        }
+        return res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
+    }
+};
 
 
 export const deleteService = async (req, res) => {

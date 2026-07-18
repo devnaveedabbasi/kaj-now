@@ -190,6 +190,7 @@ export const approveServiceRequest = async (req, res) => {
 
     // Update request status
     request.status = 'approved';
+    request.isUpdated = false;
     request.reviewedAt = new Date();
     request.reviewedByAdmin = userId;
     await request.save();

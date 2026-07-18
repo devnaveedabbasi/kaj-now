@@ -23,6 +23,7 @@ const serviceRequestSchema = new mongoose.Schema({
         default: 'BD',
         index: true,
     },
+    isUpdated: { type: Boolean, default: false },
     // ── UK flow only ─────────────────────────────────────────────────
     // UK services are admin-created templates (title + category + icon) —
     // the provider fills in the rest of the listing here (see `ukService`).
