@@ -49,9 +49,19 @@ serviceSchema.methods.updateAverageRating = async function () {
         }
     ]);
 
-    this.averageRating = result.length > 0 ? Math.round(result[0].average * 10) / 10 : 0;
-    await this.save();
-    return this.averageRating;
+    const averageRating = result.length > 0
+        ? Math.round(result[0].average * 10) / 10
+        : 0;
+
+    await mongoose.model('Service').findByIdAndUpdate(
+        this._id,
+        { $set: { averageRating } },
+        { runValidators: false }
+    );
+
+    this.averageRating = averageRating;
+
+    return averageRating;
 };
 
 const Service = mongoose.model('Service', serviceSchema);

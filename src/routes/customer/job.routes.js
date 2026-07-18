@@ -9,5 +9,5 @@ router.get('/my-orders/:jobId', asyncHandler(jobController.getOrderById));
 
 router.patch('/:jobId/confirm-completion', asyncHandler(jobController.confirmCompletionByCustomer));
 router.patch('/:jobId/dispute', asyncHandler(jobController.rejectCompletion));
-
+router.patch('/:jobId/cancel', asyncHandler(jobController.cancelJobByCustomer));
 export default router;

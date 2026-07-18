@@ -1247,3 +1247,27 @@ export const getOrderById = async (req, res) => {
     }
   }
 };
+
+
+export async function cancelJobByCustomer(req, res) {
+try{
+  const session = await mongoose.startSession();
+  session.startTransaction();
+ const {jobId} = req.params;
+  const customerId = req.user._id;
+
+  if(!mongoose.Types.ObjectId.isValid(jobId)) {
+    throw new ApiError(400, 'Invalid job ID');
+  }
+
+  const job = await Job.findById(jobId).session(session);
+  if(!job) {
+    throw new ApiError(404, 'Job not found');
+  }
+
+}catch (error) {
+  console.error('Error starting session:', error);
+  return res.status(500).json(new ApiResponse(500, null, 'Internal server error'));
+
+}
+}
