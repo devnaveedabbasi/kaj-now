@@ -18,6 +18,11 @@ const bannerSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    region: {
+      type: String,
+      enum: ['UK', 'BD'],
+      default: 'BD'
+    },
     isActive: {
       type: Boolean,
       default: true,

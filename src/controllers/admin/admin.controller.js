@@ -15,6 +15,7 @@ import { sendContractPendingEmail } from "../../service/emailService.js";
 import { getContractUrl, getContractPath, generateContractPdfIfMissing } from "../../utils/generateContract.js";
 import Payment from '../../models/payment.model.js';
 import mongoose from "mongoose";
+import { REGION_CURRENCY } from '../../utils/regionFinance.js';
 
 // ==================== USER MANAGEMENT ====================
 
@@ -855,6 +856,39 @@ export const getAdminDashboardStats = async (req, res) => {
       }));
       const platformRevenue = earningsChart.reduce((sum, e) => sum + e.revenue, 0);
 
+      // Region-scoped held balance, refunds, and cancelled-job payments —
+      // computed the same way as GET /admin/wallet so the dashboard and the
+      // Wallet page always agree on these figures for a given region.
+      const regionCustomerIds = await User.find({ region }).select('_id').lean().then(users => users.map(u => u._id));
+
+      const [heldBalanceAgg, refundedAgg, pendingRefundAgg, cancelledJobsAgg] = await Promise.all([
+        Payment.aggregate([
+          { $match: { customerId: { $in: regionCustomerIds }, escrowStatus: { $in: ['held_in_admin_wallet', 'pending_refund'] } } },
+          { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+        ]),
+        Payment.aggregate([
+          { $match: { customerId: { $in: regionCustomerIds }, paymentStatus: 'refunded' } },
+          { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
+        ]),
+        Payment.aggregate([
+          { $match: { customerId: { $in: regionCustomerIds }, refundStatus: 'pending' } },
+          { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
+        ]),
+        Job.aggregate([
+          ...regionJoin,
+          { $match: { status: { $in: ['cancelled', 'rejected_by_provider'] } } },
+          { $lookup: { from: 'payments', localField: '_id', foreignField: 'jobId', as: 'payment' } },
+          { $unwind: { path: '$payment', preserveNullAndEmptyArrays: true } },
+          { $group: { _id: null, total: { $sum: '$payment.totalAmount' }, count: { $sum: 1 } } },
+        ]),
+      ]);
+
+      const heldBalance = heldBalanceAgg[0]?.total || 0;
+      const totalRefunded = refundedAgg[0]?.total || 0;
+      const pendingRefunds = pendingRefundAgg[0]?.total || 0;
+      const cancelledJobsAmount = cancelledJobsAgg[0]?.total || 0;
+      const cancelledJobsCount = cancelledJobsAgg[0]?.count || 0;
+
       const jobStatusRaw = await Job.aggregate([
         { $match: dateFilter },
         ...regionJoin,
@@ -897,13 +931,17 @@ export const getAdminDashboardStats = async (req, res) => {
           region,
 
           mainStats: {
-            // No per-region wallet ledger exists yet — admin wallet is a
-            // single global balance, so it can't be split accurately.
-            // Platform fee revenue for the period is used as the closest
-            // available region-scoped substitute.
-            totalBalance: 0,
+            // Region-scoped balance = money currently held/on-hold for this
+            // region's active escrow (not the shared global admin ledger),
+            // so UK and BD never mix and currencies (GBP vs BDT) stay separate.
+            totalBalance: heldBalance,
+            currency: REGION_CURRENCY[region],
             totalRevenue: platformRevenue,
             totalPlatformFees: platformRevenue,
+            totalRefunded,
+            pendingRefunds,
+            cancelledJobsAmount,
+            cancelledJobsCount,
             totalJobs,
             totalProviders,
             totalCustomers,

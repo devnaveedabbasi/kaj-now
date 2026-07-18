@@ -8,8 +8,14 @@ const router = Router();
 
 router.use('/categories', categoryRoute);
 router.get('/banner', asyncHandler(async (req, res) => {
+  const { region } = req.query;
+  const query = { isActive: true, isDeleted: false };
+  
+  if (region && ['UK', 'BD'].includes(region)) {
+    query.region = region;
+  }
     
-  const banners = await Banner.find({isActive: true, isDeleted: false }).sort({
+  const banners = await Banner.find(query).sort({
     createdAt: -1,
   });
 

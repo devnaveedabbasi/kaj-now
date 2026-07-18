@@ -6,29 +6,24 @@ import { asyncHandler } from "../../utils/asyncHandler.js";
 const MAX_BANNERS = 5;
 
 export const createBanner = asyncHandler(async (req, res) => {
-    // const { title, description } = req.body;
-
-  // if (!title?.trim()) {
-  //   throw new ApiError(400, "Banner title is required");
-  // }
+  const { region = 'BD' } = req.body;
 
   if (!req.file) {
     throw new ApiError(400, "Banner image is required");
   }
 
-  const count = await Banner.countDocuments({ isDeleted: false });
+  const count = await Banner.countDocuments({ isDeleted: false, region });
 
   if (count >= MAX_BANNERS) {
     throw new ApiError(
       400,
-      `Maximum ${MAX_BANNERS} banners allowed`
+      `Maximum ${MAX_BANNERS} banners allowed per region`
     );
   }
 
   const banner = await Banner.create({
-      // title: title.trim(),
-      // description: description?.trim() || "",
     image: `/uploads/banners/${req.file.filename}`,
+    region,
     isActive: true,
     isDeleted: false,
   });
@@ -40,7 +35,13 @@ export const createBanner = asyncHandler(async (req, res) => {
 
 
 export const getBanners = asyncHandler(async (req, res) => {
-  const banners = await Banner.find({ isDeleted: false }).sort({
+  const { region } = req.query;
+  const query = { isDeleted: false };
+  if (region && ['UK', 'BD'].includes(region)) {
+    query.region = region;
+  }
+
+  const banners = await Banner.find(query).sort({
     createdAt: -1,
   });
 
@@ -64,10 +65,14 @@ export const getBanners = asyncHandler(async (req, res) => {
 });
 
 export const getActiveBanners = asyncHandler(async (req, res) => {
-  const banners = await Banner.find({
-    isActive: true,
-    isDeleted: false,
-  }).sort({ createdAt: -1 });
+  const { region } = req.query;
+  const query = { isActive: true, isDeleted: false };
+  
+  if (region && ['UK', 'BD'].includes(region)) {
+    query.region = region;
+  }
+
+  const banners = await Banner.find(query).sort({ createdAt: -1 });
 
   return res.status(200).json(
     new ApiResponse(200, banners, "Active banners fetched")
@@ -76,7 +81,7 @@ export const getActiveBanners = asyncHandler(async (req, res) => {
 
 export const updateBanner = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  // const { title, description } = req.body;
+  const { region } = req.body;
 
   const banner = await Banner.findById(id);
 
@@ -84,10 +89,9 @@ export const updateBanner = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Banner not found");
   }
 
-  // if (title) banner.title = title.trim();
-  // if (description !== undefined) {
-  //   banner.description = description.trim();
-  // }
+  if (region && ['UK', 'BD'].includes(region)) {
+    banner.region = region;
+  }
 
   // IMAGE UPDATE
   if (req.file) {

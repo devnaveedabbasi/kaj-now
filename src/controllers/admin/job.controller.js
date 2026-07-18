@@ -909,16 +909,27 @@ export const getCancelledJobs = async (req, res) => {
             };
         });
 
+        // Stats must stay scoped to the same region as the list above —
+        // otherwise the summary cards would silently mix in the other
+        // region's counts even though the table itself is filtered correctly.
+        const statsJobMatch = { status: { $in: ['cancelled', 'rejected_by_provider'] } };
+        if (query.customer) {
+            statsJobMatch.customer = query.customer;
+        }
+
         const [bySourceAgg, byRefundAgg, total] = await Promise.all([
             Job.aggregate([
-                { $match: { status: { $in: ['cancelled', 'rejected_by_provider'] } } },
+                { $match: statsJobMatch },
                 { $group: { _id: '$cancelledBy', count: { $sum: 1 } } },
             ]),
-            Payment.aggregate([
-                { $match: { refundStatus: { $in: ['pending', 'completed'] } } },
-                { $group: { _id: '$refundStatus', count: { $sum: 1 } } },
+            Job.aggregate([
+                { $match: statsJobMatch },
+                { $lookup: { from: 'payments', localField: '_id', foreignField: 'jobId', as: 'payment' } },
+                { $unwind: { path: '$payment', preserveNullAndEmptyArrays: true } },
+                { $match: { 'payment.refundStatus': { $in: ['pending', 'completed'] } } },
+                { $group: { _id: '$payment.refundStatus', count: { $sum: 1 } } },
             ]),
-            Job.countDocuments({ status: { $in: ['cancelled', 'rejected_by_provider'] } }),
+            Job.countDocuments(statsJobMatch),
         ]);
 
         const stats = {

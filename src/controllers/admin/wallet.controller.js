@@ -150,6 +150,50 @@ export const getAdminWallet = async (req, res) => {
         const totalPendingWithdrawalsAmount = pendingWithdrawalsAmountResult[0]?.totalRequested || 0;
         const totalPendingWithdrawalsPayable = pendingWithdrawalsAmountResult[0]?.totalPayable || 0;
 
+        // --- Region-scoped financial breakdown (held/on-hold, refunds, cancelled jobs) ---
+        // `paymentQuery.customerId` already carries the region filter built above (or is
+        // undefined when no region was requested), so these reuse it directly.
+        const customerRegionFilter = paymentQuery.customerId;
+        const heldMatch = { ...paymentQuery, escrowStatus: { $in: ['held_in_admin_wallet', 'pending_refund'] } };
+        const refundedMatch = { paymentStatus: 'refunded' };
+        const pendingRefundMatch = { refundStatus: 'pending' };
+        if (customerRegionFilter) {
+            refundedMatch.customerId = customerRegionFilter;
+            pendingRefundMatch.customerId = customerRegionFilter;
+        }
+        const cancelledJobMatch = { ...jobQueryAll, status: { $in: ['cancelled', 'rejected_by_provider'] } };
+
+        const [heldBalanceResult, refundedResult, pendingRefundResult, cancelledJobsResult] = await Promise.all([
+            Payment.aggregate([
+                { $match: heldMatch },
+                { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+            ]),
+            Payment.aggregate([
+                { $match: refundedMatch },
+                { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
+            ]),
+            Payment.aggregate([
+                { $match: pendingRefundMatch },
+                { $group: { _id: null, total: { $sum: '$totalAmount' }, count: { $sum: 1 } } },
+            ]),
+            Job.aggregate([
+                { $match: cancelledJobMatch },
+                { $lookup: { from: 'payments', localField: '_id', foreignField: 'jobId', as: 'payment' } },
+                { $unwind: { path: '$payment', preserveNullAndEmptyArrays: true } },
+                { $group: { _id: null, total: { $sum: '$payment.totalAmount' }, count: { $sum: 1 } } },
+            ]),
+        ]);
+
+        const heldBalance = heldBalanceResult[0]?.total || 0;
+        const totalRefunded = refundedResult[0]?.total || 0;
+        const refundedCount = refundedResult[0]?.count || 0;
+        const pendingRefundsTotal = pendingRefundResult[0]?.total || 0;
+        const pendingRefundsCount = pendingRefundResult[0]?.count || 0;
+        const cancelledJobsAmount = cancelledJobsResult[0]?.total || 0;
+        const cancelledJobsCount = cancelledJobsResult[0]?.count || 0;
+        const isRegionScoped = region && ['UK', 'BD'].includes(region);
+        const currency = isRegionScoped ? (region === 'UK' ? 'GBP' : 'BDT') : null;
+
         let paymentFindQuery = {};
         if (paymentQuery.customerId) paymentFindQuery.customerId = paymentQuery.customerId;
 
@@ -253,13 +297,28 @@ console.log('Recent transactions:', recentTransactions);
 
         return res.status(200).json(
             new ApiResponse(200, {
+                region: isRegionScoped ? region : null,
+                currency,
                 wallet: {
-                    balance: adminWallet.balance,
+                    // Region-scoped requests report the money currently held/on-hold for
+                    // that region instead of the single combined admin ledger, so UK and
+                    // BD figures (and currencies — GBP vs BDT) never mix. The unscoped
+                    // (no region) call keeps the original combined balance for backward
+                    // compatibility.
+                    balance: isRegionScoped ? heldBalance : adminWallet.balance,
+                    heldBalance,
                     totalEarnings: adminNetEarning, // Platform fees from payments + withdrawals
                     totalPlatformFees,
+                    totalProcessedAmount: totalPayments[0]?.total || 0,
                     withdrawnPlatformFees,
                     totalProviderWithdrawals,
-                    totalWithdrawn: adminWallet.totalWithdrawn,
+                    totalWithdrawn: isRegionScoped ? totalProviderWithdrawals : adminWallet.totalWithdrawn,
+                    totalRefunded,
+                    refundedCount,
+                    pendingRefunds: pendingRefundsTotal,
+                    pendingRefundsCount,
+                    cancelledJobsAmount,
+                    cancelledJobsCount,
                 },
                 pendingWithdrawals: {
                     count: pendingWithdrawalsCount,

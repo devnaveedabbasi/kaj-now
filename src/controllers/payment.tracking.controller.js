@@ -308,9 +308,17 @@ export const getRefundHistory = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
+    const { region } = req.query;
+
+    const query = { paymentStatus: 'refunded' };
+    // Payments have no region of their own — derive it from the customer.
+    if (region && ['UK', 'BD'].includes(region)) {
+      const regionCustomers = await User.find({ region }).select('_id').lean();
+      query.customerId = { $in: regionCustomers.map(u => u._id) };
+    }
 
     const [refunds, total] = await Promise.all([
-      Payment.find({ paymentStatus: 'refunded' })
+      Payment.find(query)
         .populate({
           path: 'customerId',
           select: 'name email'
@@ -327,7 +335,7 @@ export const getRefundHistory = async (req, res) => {
         .skip(skip)
         .limit(limit)
         .lean(),
-      Payment.countDocuments({ paymentStatus: 'refunded' })
+      Payment.countDocuments(query)
     ]);
 
     const formattedRefunds = refunds.map(refund => ({

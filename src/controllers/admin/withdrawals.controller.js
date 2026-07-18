@@ -49,8 +49,11 @@ export const getAllWithdrawals = async (req, res) => {
       Withdrawal.countDocuments(query),
     ]);
 
-    //  FIXED STATS
+    //  FIXED STATS — must stay scoped to the same region as the list above,
+    // otherwise the summary cards would silently mix in the other region's
+    // withdrawals even though the table itself is filtered correctly.
     const statsAgg = await Withdrawal.aggregate([
+      ...(query.providerId ? [{ $match: { providerId: query.providerId } }] : []),
       {
         $group: {
           _id: "$status",

@@ -1,4 +1,4 @@
-﻿import bcrypt from 'bcryptjs';
+import bcrypt from 'bcryptjs';
 import User from '../../models/User.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import { sendOtpEmail } from '../../service/emailService.js';
@@ -744,14 +744,19 @@ export const updateProfile = async (req, res) => {
 
 
     if (phone) {
-      if (!phoneRegex.test(phone)) {
-        throw new ApiError(400, 'Invalid phone number');
+      const normalizedPhone = String(phone)
+        .trim()
+        .replace(/[\s()-]/g, '');
+
+      if (!bdPhoneRegex.test(normalizedPhone) && !ukPhoneRegex.test(normalizedPhone)) {
+        throw new ApiError(400, 'Only valid Bangladesh and UK phone numbers are allowed.');
       }
-      const existingUser = await User.findOne({ phone, _id: { $ne: userId } });
+      
+      const existingUser = await User.findOne({ phone: normalizedPhone, _id: { $ne: userId } });
       if (existingUser) {
         throw new ApiError(409, 'Phone number already registered');
       }
-      user.phone = phone;
+      user.phone = normalizedPhone;
     }
 
     // Update profile picture
