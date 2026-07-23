@@ -137,6 +137,9 @@ class JobSchedulerService {
       const { releaseEscrowForCancellation } = await import('../utils/jobCancellation.js');
       await releaseEscrowForCancellation(session, payment);
 
+      const customerUser = jobDoc.customer;
+      const adminUser = await User.findOne({ role: 'admin' }).session(session);
+
       await session.commitTransaction();
       console.log(`Job cancelled (8h timeout). Refund pending admin action for: ${jobId}`);
 

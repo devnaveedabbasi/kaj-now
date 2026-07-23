@@ -16,7 +16,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['service', 'payment', 'system', 'kyc', 'job','wallet', 'withdrawal','admin'],
+    enum: ['service', 'payment', 'system', 'kyc', 'job','wallet', 'withdrawal','admin', 'JOB_UPDATE', 'NEW_JOB'],
   },
   referenceId: mongoose.Schema.Types.ObjectId,
   isRead: {

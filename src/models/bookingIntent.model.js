@@ -49,6 +49,17 @@ const bookingIntentSchema = new mongoose.Schema({
     cvv: String,
   },
 
+  // UK only — snapshot of sub-services chosen at booking time.
+  // Stored here so the Stripe webhook can write them to Job.subServices
+  // without re-querying the ServiceRequest.
+  // Empty array = no sub-services selected (fully optional).
+  selectedSubServices: [
+    {
+      name: { type: String },
+      price: { type: Number },
+    }
+  ],
+
   // 1-hour TTL — MongoDB auto-deletes after expiry
   expiresAt: {
     type: Date,

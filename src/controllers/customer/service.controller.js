@@ -23,7 +23,7 @@ const imagesExpr = {
 };
 const subServicesExpr = {
     $cond: [
-        { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
+        { $and: [{ $isArray: '$ukService.subServices' }, { $gt: [{ $size: '$ukService.subServices' }, 0] }] },
         '$ukService.subServices',
         { $ifNull: ['$service.subServices', []] }
     ]
@@ -94,61 +94,44 @@ const availabilityExpr = { $ifNull: ['$ukService.availability', '$service.availa
 export const getAllCategories = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        const limit = parseInt(req.query.limit) || 50;
         const skip = (page - 1) * limit;
         const search = req.query.search || '';
         const sortField = req.query.sortBy || 'createdAt';
         const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-        const sort = { [sortField]: sortOrder };
 
-        // User ki region
-        const userRegion = req.user?.region; // 'United Kingdom' ya 'Bangladesh'
-        const categoryRegion = req.user?.region === "UK" ? "UK" : "BD";
-        const aggregationPipeline = [
-            { $match: { status: 'approved' } },
-            {
-                $lookup: {
-                    from: 'categories',
-                    localField: 'categoryId',
-                    foreignField: '_id',
-                    as: 'category'
-                }
-            },
-            { $unwind: '$category' },
-            {
-                $match: {
-                    'category.isActive': true,
-                    'category.isDeleted': false,
-                    // Region filter
-                    "category.region": categoryRegion,
+        const categoryRegion = req.user?.region === 'UK' ? 'UK' : 'BD';
 
-                }
-            },
-            ...(search ? [{ $match: { 'category.name': { $regex: search, $options: 'i' } } }] : []),
-            {
-                $group: {
-                    _id: '$categoryId',
-                    name: { $first: '$category.name' },
-                    icon: { $first: '$category.icon' },
-                    createdAt: { $first: '$category.createdAt' },
-                    updatedAt: { $first: '$category.updatedAt' },
-                    serviceCount: { $sum: 1 }
-                }
-            },
-            { $sort: sort },
-            { $skip: skip },
-            { $limit: limit },
-        ];
+        // ── Query Category directly ─────────────────────────────────────────
+        // Never derive categories from ServiceRequest — that would make categories
+        // disappear whenever no providers happen to be available (e.g. today's day
+        // filter, zero approved requests, etc.).  Categories are a first-class
+        // admin-managed entity and must always be visible.
+        const query = {
+            isActive: true,
+            isDeleted: false,
+            region: categoryRegion,
+            ...(search ? { name: { $regex: search, $options: 'i' } } : {}),
+        };
 
-        const categories = await ServiceRequest.aggregate(aggregationPipeline);
+        const [categories, total] = await Promise.all([
+            Category.find(query)
+                .sort({ [sortField]: sortOrder })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Category.countDocuments(query),
+        ]);
 
         res.status(200).json({
             success: true,
-            categories: categories,
+            categories,
             pagination: {
-                page: page,
-                limit: limit
-            }
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -338,10 +321,27 @@ export const getServiceById = async (req, res) => {
 // }
 
 // Get services by category from ServiceRequest only
+
+
+
+
 export const getServicesByCategory = async (req, res) => {
     try {
         const { categoryId } = req.params;
-        const categoryRegion = req.user?.region === "UK" ? "UK" : "BD";
+        const categoryRegion = req.user?.region;   // e.g. 'UK' or 'BD'
+
+        // ── Current UK weekday ────────────────────────────────────────────────
+        // Always derived from the real UK clock (handles BST/GMT automatically).
+        // Result: 'monday', 'tuesday', ..., 'sunday'  (lowercase)
+        const ukDay = new Intl.DateTimeFormat('en-GB', {
+            weekday: 'long',
+            timeZone: 'Europe/London',
+        }).format(new Date()).toLowerCase();
+
+        // ── DEBUG: log key values so we can verify filter is firing ──────────
+        console.log('[getServicesByCategory] categoryRegion =', JSON.stringify(categoryRegion));
+        console.log('[getServicesByCategory] ukDay =', ukDay);
+        console.log('[getServicesByCategory] isUK =', String(categoryRegion).toUpperCase() === 'UK');
 
         if (!mongoose.Types.ObjectId.isValid(categoryId)) {
             throw new ApiError(400, 'Invalid category ID format');
@@ -426,6 +426,22 @@ export const getServicesByCategory = async (req, res) => {
                 }
             },
 
+            // ── UK: filter by availability day (pre-group) ────────────────────
+            // Now that getAllCategories queries Category directly, filtering here
+            // is safe — categories NEVER disappear regardless of this stage.
+            // MongoDB regex on an array field checks every element automatically.
+            // Empty/missing availability arrays correctly evaluate to no-match.
+            // BD: stage is skipped entirely — BD services have no availability.
+            ...(String(categoryRegion).toUpperCase() === 'UK'
+                ? [{
+                    $match: {
+                        'ukService.availability': {
+                            $regex: new RegExp(`^${ukDay}$`, 'i')
+                        }
+                    }
+                }]
+                : []),
+
             // GROUP BY SERVICE
             {
                 $group: {
@@ -474,11 +490,17 @@ export const getServicesByCategory = async (req, res) => {
                             email: '$providerUser.email',
                             phone: '$providerUser.phone',
                             profilePicture: '$providerUser.profilePicture',
-                            location: '$provider.location'
+                            location: '$provider.location',
+                            // Per-provider UK listing details
+                            availability: '$ukService.availability',
+                            price: priceExpr,
+                            subServices: subServicesExpr,
+                            serviceRequestId: '$_id',
                         }
                     }
                 }
             },
+
 
             {
                 $sort: {
@@ -486,6 +508,14 @@ export const getServicesByCategory = async (req, res) => {
                 }
             }
         ]);
+
+        // DEBUG
+        console.log('[getServicesByCategory] total services returned:', services.length);
+        if (services[0]) {
+            console.log('[getServicesByCategory] providers[0] availability:',
+                JSON.stringify((services[0].providers || []).map(p => ({ id: p._id, availability: p.availability })))
+            );
+        }
 
         res.status(200).json(
             new ApiResponse(

@@ -104,6 +104,18 @@ export const createService = async (req, res) => {
         const iconPath = iconFile ? `/uploads/services/icons/${iconFile.filename}` : undefined;
         const serviceImagePath = serviceImageFile ? `/uploads/services/images/${serviceImageFile.filename}` : undefined;
 
+        let parsedSubServices = [];
+        if (req.body.subServices) {
+            try {
+                parsedSubServices = typeof req.body.subServices === 'string'
+                    ? JSON.parse(req.body.subServices)
+                    : req.body.subServices;
+            } catch (err) {
+                cleanupFiles(req.files);
+                throw new ApiError(400, 'Invalid subServices format');
+            }
+        }
+
         const newServiceData = {
             userId,
             categoryId,
@@ -116,6 +128,7 @@ export const createService = async (req, res) => {
             // so omit the field entirely when there's nothing to save —
             // matters for UK templates, which have no description at all.
             ...(description && { description }),
+            subServices: parsedSubServices
         };
 
         const newService = await Service.create(newServiceData);
@@ -377,13 +390,26 @@ export const updateService = async (req, res) => {
 
        
 
+        let parsedSubServices;
+        if (req.body.subServices) {
+            try {
+                parsedSubServices = typeof req.body.subServices === 'string'
+                    ? JSON.parse(req.body.subServices)
+                    : req.body.subServices;
+            } catch (err) {
+                cleanupFiles(req.files);
+                throw new ApiError(400, 'Invalid subServices format');
+            }
+        }
+
         // Prepare update data
         const updateData = {
             ...(name && { name }),
             ...(categoryId && { categoryId }),
             ...(iconFile && { icon: iconPath }),
             ...(price !== undefined && { price: Number(price) }),
-            ...(description !== undefined && { description })
+            ...(description !== undefined && { description }),
+            ...(parsedSubServices !== undefined && { subServices: parsedSubServices })
         };
 
         // Update the service

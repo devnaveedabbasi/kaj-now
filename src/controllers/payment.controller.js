@@ -63,6 +63,9 @@ async function createJobFromIntent(intent, tran_id, session) {
         paymentStatus: 'held_in_escrow',
         paymentMethod: intent.paymentMethod,
         schedule: intent.schedule,
+        // Sub-services selected by customer at booking time (UK only).
+        // Empty array for BD bookings or when none were chosen.
+        subServices: intent.selectedSubServices || [],
       },
     ],
     { session }
@@ -516,7 +519,7 @@ export async function verifyStripePayment(req, res) {
       if (provider) {
         await createNotification({
           userId: provider.userId,
-          title: 'New Job Booking (Stripe)',
+          title: 'New Job Booking',
           message: `A new job #${job.orderId} has been assigned to you.`,
           type: 'NEW_JOB',
           data: { jobId: job._id },

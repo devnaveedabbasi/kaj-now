@@ -10,9 +10,16 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 export const getFeaturedServiceRequests = async (req, res) => {
     try {
         const userRegion = req.user?.region || 'BD';
-        const regionFilter = userRegion === 'UK'
+        const isUK = String(userRegion).toUpperCase() === 'UK';
+        const regionFilter = isUK
             ? { 'userArr.region': 'UK' }
             : { 'userArr.region': { $nin: ['UK'] } };
+
+        // Compute current day of week in UK timezone
+        const ukDay = new Intl.DateTimeFormat('en-GB', {
+            weekday: 'long',
+            timeZone: 'Europe/London',
+        }).format(new Date()).toLowerCase();
 
         const [popularDocs, recommendedDocs] = await Promise.all([
             PopularService.find().lean(),
@@ -39,6 +46,15 @@ export const getFeaturedServiceRequests = async (req, res) => {
                     status: 'approved'
                 }
             },
+            ...(isUK
+                ? [{
+                    $match: {
+                        'ukService.availability': {
+                            $regex: new RegExp(`^${ukDay}$`, 'i')
+                        }
+                    }
+                }]
+                : []),
             {
                 $lookup: {
                     from: 'services',
@@ -92,27 +108,45 @@ export const getFeaturedServiceRequests = async (req, res) => {
                         location: '$providerArr.location'
                     },
                     services: {
-                        $map: {
-                            input: '$services',
-                            as: 's',
-                            in: {
-                                _id: '$$s._id',
-                                name: '$$s.name',
-                                price: { $ifNull: ['$ukService.price', '$$s.price'] },
-                                icon: '$$s.icon',
-                                averageRating: '$$s.averageRating',
-                                description: { $ifNull: ['$ukService.description', '$$s.description'] },
-                                subServices: {
-                                    $cond: [
-                                        { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
-                                        '$ukService.subServices',
-                                        { $ifNull: ['$$s.subServices', []] }
-                                    ]
-                                },
-                                estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
-                                availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
+                        $cond: [
+                            { $eq: ['$isCustomService', true] },
+                            [
+                                {
+                                    _id: '$_id',
+                                    name: '$ukService.title',
+                                    price: '$ukService.price',
+                                    icon: { $ifNull: ['$ukService.serviceImage', '$categoryArr.icon'] },
+                                    averageRating: 0,
+                                    description: '$ukService.description',
+                                    subServices: { $ifNull: ['$ukService.subServices', []] },
+                                    estimatedTime: '$ukService.estimatedTime',
+                                    availability: '$ukService.availability'
+                                }
+                            ],
+                            {
+                                $map: {
+                                    input: '$services',
+                                    as: 's',
+                                    in: {
+                                        _id: '$$s._id',
+                                        name: '$$s.name',
+                                        price: { $ifNull: ['$ukService.price', '$$s.price'] },
+                                        icon: '$$s.icon',
+                                        averageRating: '$$s.averageRating',
+                                        description: { $ifNull: ['$ukService.description', '$$s.description'] },
+                                        subServices: {
+                                            $cond: [
+                                                { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
+                                                '$ukService.subServices',
+                                                { $ifNull: ['$$s.subServices', []] }
+                                            ]
+                                        },
+                                        estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
+                                        availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
+                                    }
+                                }
                             }
-                        }
+                        ]
                     }
                 }
             }
@@ -269,27 +303,44 @@ export const getAllEligibleRequests = async (req, res) => {
                         profilePicture: '$userArr.profilePicture'
                     }
                 },
-                serviceId: {
-                    $map: {
-                        input: '$services',
-                        as: 's',
-                        in: {
-                            _id: '$$s._id',
-                            name: '$$s.name',
-                            price: { $ifNull: ['$ukService.price', '$$s.price'] },
-                            icon: '$$s.icon',
-                            description: { $ifNull: ['$ukService.description', '$$s.description'] },
-                            subServices: {
-                                $cond: [
-                                    { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
-                                    '$ukService.subServices',
-                                    { $ifNull: ['$$s.subServices', []] }
-                                ]
-                            },
-                            estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
-                            availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
+                 serviceId: {
+                    $cond: [
+                        { $eq: ['$isCustomService', true] },
+                        [
+                            {
+                                _id: '$_id',
+                                name: '$ukService.title',
+                                price: '$ukService.price',
+                                icon: { $ifNull: ['$ukService.serviceImage', '$categoryArr.icon'] },
+                                description: '$ukService.description',
+                                subServices: { $ifNull: ['$ukService.subServices', []] },
+                                estimatedTime: '$ukService.estimatedTime',
+                                availability: '$ukService.availability'
+                            }
+                        ],
+                        {
+                            $map: {
+                                input: '$services',
+                                as: 's',
+                                in: {
+                                    _id: '$$s._id',
+                                    name: '$$s.name',
+                                    price: { $ifNull: ['$ukService.price', '$$s.price'] },
+                                    icon: '$$s.icon',
+                                    description: { $ifNull: ['$ukService.description', '$$s.description'] },
+                                    subServices: {
+                                        $cond: [
+                                            { $and: [ { $isArray: '$ukService.subServices' }, { $gt: [ { $size: '$ukService.subServices' }, 0 ] } ] },
+                                            '$ukService.subServices',
+                                            { $ifNull: ['$$s.subServices', []] }
+                                        ]
+                                    },
+                                    estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
+                                    availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
+                                }
+                            }
                         }
-                    }
+                    ]
                 }
             }
         };

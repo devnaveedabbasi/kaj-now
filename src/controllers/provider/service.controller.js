@@ -6,7 +6,7 @@ import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import Job from '../../models/job.model.js';
-
+import User from '../../models/user.model.js';
 
 export const getAllCategories = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
@@ -42,15 +42,36 @@ export const getAllCategories = async (req, res) => {
 
     const categoriesWithCount = await Promise.all(
         categories.map(async (category) => {
-            const activeServicesCount = await Service.countDocuments({
-                categoryId: category._id,
-                isActive: true,
-                isDeleted: false
-            });
+            // Count only admin-created service templates via a JOIN-based
+            // aggregation — verifies user.role === 'admin' inline so we
+            // never accidentally count a provider-owned service.
+            const countResult = await Service.aggregate([
+                {
+                    $match: {
+                        categoryId: category._id,
+                        isActive: true,
+                        isDeleted: false,
+                    }
+                },
+                {
+                    $lookup: {
+                        from: 'users',
+                        localField: 'userId',
+                        foreignField: '_id',
+                        as: 'createdBy',
+                    }
+                },
+                {
+                    $match: { 'createdBy.role': 'admin' }
+                },
+                {
+                    $count: 'total'
+                }
+            ]);
 
             return {
                 ...category,
-                activeServicesCount
+                activeServicesCount: countResult[0]?.total || 0
             };
         })
     );
@@ -75,6 +96,7 @@ export const getAllCategories = async (req, res) => {
 export const getServicesByCategory = async (req, res) => {
     const { categoryId } = req.params;
     const userRegion = req.user?.region; // Get the region of the logged-in provider
+
     // Validate ObjectId
     if (!mongoose.Types.ObjectId.isValid(categoryId)) {
         throw new ApiError(400, 'Invalid category ID format');
@@ -83,22 +105,10 @@ export const getServicesByCategory = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
-
     const search = req.query.search || '';
 
-    let query = {
-        categoryId,
-        isActive: true,
-        isDeleted: false,
-        ...(userRegion && { region: userRegion })
-    };
-
-    if (search) {
-        query.name = { $regex: search, $options: 'i' };
-    }
-
-    // Check if category exists, is active, and belongs to the provider's
-    // own market — a UK provider can't browse into a BD category by ID.
+    // Guard: category must exist, be active, and belong to the provider's
+    // own region — a UK provider can't browse a BD category by ID.
     const category = await Category.findOne({
         _id: categoryId,
         isActive: true,
@@ -110,19 +120,67 @@ export const getServicesByCategory = async (req, res) => {
         throw new ApiError(404, 'Category not found');
     }
 
+    // ── Aggregation: JOIN services → users and verify role === 'admin' ────
+    // This is the ONLY safe approach — we do NOT trust the userId value alone.
+    // A $lookup against the users collection verifies the creator's role inline
+    // in a single query, so no provider-owned service can ever slip through.
+    const categoryObjectId = new mongoose.Types.ObjectId(categoryId);
+
+    const matchStage = {
+        categoryId: categoryObjectId,
+        isActive: true,
+        isDeleted: false,
+        ...(userRegion && { region: userRegion }),
+    };
+
+    if (search) {
+        matchStage.name = { $regex: search, $options: 'i' };
+    }
+
     const sortField = req.query.sortBy || 'createdAt';
     const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-    const sort = { [sortField]: sortOrder };
 
-    const [services, totalCount] = await Promise.all([
-        Service.find(query)
-            .sort(sort)
-            .skip(skip)
-            .limit(limit)
-            .lean(),
-        Service.countDocuments(query)
+    const pipeline = [
+        // Step 1: pre-filter by category / region / active / deleted
+        { $match: matchStage },
+
+        // Step 2: JOIN with users collection to fetch the creator's role
+        {
+            $lookup: {
+                from: 'users',
+                localField: 'userId',
+                foreignField: '_id',
+                as: 'createdBy',
+            }
+        },
+
+        // Step 3: keep ONLY services whose creator has role === 'admin'
+        // (eliminates every provider-created or custom service)
+        {
+            $match: { 'createdBy.role': 'admin' }
+        },
+
+        // Step 4: strip the joined user array from the output
+        {
+            $project: { createdBy: 0 }
+        },
+    ];
+
+    // Run paginated results + total count in parallel
+    const [services, countResult] = await Promise.all([
+        Service.aggregate([
+            ...pipeline,
+            { $sort: { [sortField]: sortOrder } },
+            { $skip: skip },
+            { $limit: limit },
+        ]),
+        Service.aggregate([
+            ...pipeline,
+            { $count: 'total' },
+        ]),
     ]);
 
+    const totalCount = countResult[0]?.total || 0;
     const totalPages = Math.ceil(totalCount / limit);
 
     res.status(200).json(
@@ -542,7 +600,7 @@ export const getServiceById = async (req, res) => {
             const foundService = serviceRequest.serviceId?.find(
                 s => s._id.toString() === serviceId
             ) || serviceRequest.serviceId?.[0];
-            
+
             if (foundService) {
                 targetService = {
                     ...foundService,
@@ -728,7 +786,7 @@ export const editService = async (req, res) => {
         if (subServices !== undefined) serviceRequest.ukService.subServices = parsedSubServices;
         if (estimatedTime !== undefined) serviceRequest.ukService.estimatedTime = estimatedTime;
         if (availability !== undefined) serviceRequest.ukService.availability = parsedAvailability;
-        
+
         // For custom services, they might update the title
         if (serviceRequest.isCustomService && customTitle) {
             serviceRequest.ukService.title = customTitle;

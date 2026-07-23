@@ -38,7 +38,7 @@ export const getAllServiceRequests = async (req, res) => {
                 name: { $regex: search, $options: 'i' }
             }).select('_id')
         ]);
-        
+
         const userIds = matchingUsers.map(u => u._id);
         const matchingProviders = await Provider.find({ userId: { $in: userIds } }).select('_id');
         const providerIds = matchingProviders.map(p => p._id);
@@ -49,7 +49,7 @@ export const getAllServiceRequests = async (req, res) => {
             { serviceId: { $in: serviceIds } }
         ];
     }
-    
+
     let sortQuery = {};
     sortQuery[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
@@ -147,46 +147,18 @@ export const approveServiceRequest = async (req, res) => {
         throw new ApiError(400, `Cannot approve request with status: ${request.status}`);
     }
 
-    // A custom-service request has no Service yet — the admin approving it
-    // is the moment it actually joins the real catalog. Template-based
-    // requests already reference an existing Service and skip this.
-    if (request.isCustomService && (!request.serviceId || request.serviceId.length === 0)) {
-        const category = await Category.findById(request.categoryId);
-        if (!category) {
-            throw new ApiError(404, 'Category for this request no longer exists');
-        }
-
-        const adminUser = await User.findOne({ role: 'admin' }).select('_id').lean();
-        if (!adminUser) {
-            throw new ApiError(500, 'No admin account found to own the new service');
-        }
-
-        const uk = request.ukService || {};
-        let newService;
-        try {
-            newService = await Service.create({
-                userId: adminUser._id,
-                categoryId: request.categoryId,
-                region: category.region,
-                name: uk.title,
-                // Custom-service providers only supply one photo (no
-                // separate small icon) — reuse it to satisfy Service's
-                // required `icon` field too.
-                icon: uk.serviceImage,
-                serviceImage: uk.serviceImage,
-                price: uk.price,
-                description: uk.description,
-                subServices: uk.subServices || [],
-            });
-        } catch (error) {
-            if (error.code === 11000) {
-                throw new ApiError(409, `A service named "${uk.title}" already exists — ask the provider to choose a different title`);
-            }
-            throw error;
-        }
-
-        request.serviceId = [newService._id];
-    }
+    // ── Custom service requests ────────────────────────────────────────────
+    // These stay ONLY in the ServiceRequest model. We must NEVER create a
+    // Service document for them — doing so would pollute the admin-template
+    // catalog and expose a provider's custom service as a template to every
+    // other provider via getServicesByCategory.
+    //
+    // All provider-facing data (title, price, description, image) already
+    // lives in request.ukService. No Service doc is needed.
+    //
+    // ── Template-based requests ───────────────────────────────────────────
+    // serviceId already points at the admin-created Service template.
+    // Nothing extra to create — just update the status below.
 
     // Update request status
     request.status = 'approved';
@@ -195,20 +167,18 @@ export const approveServiceRequest = async (req, res) => {
     request.reviewedByAdmin = userId;
     await request.save();
 
-    // Update provider's arrays
+    // For template-based requests (serviceId is set), track the admin
+    // template IDs in provider.approvedServices so the duplicate-request
+    // guard in requestService keeps working correctly.
+    // Custom service requests have no serviceId, so we skip this entirely.
     const provider = await Provider.findById(request.providerId);
+    if (provider && !request.isCustomService && request.serviceId && request.serviceId.length > 0) {
+        const serviceIds = request.serviceId.map(id => id.toString());
+        const existing = provider.approvedServices.map(id => id.toString());
+        provider.approvedServices = [...new Set([...existing, ...serviceIds])];
+        await provider.save();
+    }
 
-if (provider) {
-  const serviceIds = request.serviceId.map(id => id.toString());
-
-  const existing = provider.approvedServices.map(id => id.toString());
-
-  provider.approvedServices = [
-    ...new Set([...existing, ...serviceIds])
-  ];
-
-  await provider.save();
-}
     // Populate the updated request
     await request.populate([
         {

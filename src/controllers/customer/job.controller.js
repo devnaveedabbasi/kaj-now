@@ -40,9 +40,8 @@ export async function bookJob(req, res) {
       cardDetails,
       schedule,
       paymentMethod,
-      subServices,
-      totalPrice,
     } = req.body;
+    const subServiceIds = req.body.subServiceIds || req.body.subserviceIds || [];
 
     // ── Supported Methods ────────────────────────────────────────────
     const SUPPORTED_METHODS = ['card', 'cod', 'bkash', 'nagad', 'rocket', 'bank'];
@@ -50,10 +49,13 @@ export async function bookJob(req, res) {
       throw new ApiError(400, `paymentMethod must be one of: ${SUPPORTED_METHODS.join(', ')}`);
     }
 
+
     // ── Schedule Validation ──────────────────────────────────────────
     if (!schedule?.date || !schedule?.time) {
       throw new ApiError(400, 'Schedule date and time required');
     }
+
+
 
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     if (!dateRegex.test(schedule.date)) {
@@ -91,7 +93,12 @@ export async function bookJob(req, res) {
         );
       }
     }
-   // ── Fetch Documents ──────────────────────────────────────────────
+
+    if (subServiceIds && !Array.isArray(subServiceIds)) {
+      throw new ApiError(400, 'subServiceIds must be an array of sub-service IDs');
+    }
+    console.log(subServiceIds, 'subserviceIds')
+    // ── Fetch Documents ──────────────────────────────────────────────
     const user = await User.findById(userId).session(session);
     if (!user) throw new ApiError(404, 'User not found');
 
@@ -111,7 +118,7 @@ export async function bookJob(req, res) {
       validateCardDetails(cardDetails);
     }
 
- 
+
     const service = await Service.findById(serviceId).session(session);
     if (!service || !service.isActive) throw new ApiError(404, 'Service not available');
 
@@ -121,7 +128,7 @@ export async function bookJob(req, res) {
       status: 'approved',
     }).session(session);
     if (!serviceRequest) throw new ApiError(400, 'Provider not found for this service');
-
+    console.log(serviceRequest, 'serviceRequest')
     const provider = await Provider.findById(providerId).session(session);
     if (!provider) throw new ApiError(404, 'Provider not found');
 
@@ -173,9 +180,48 @@ export async function bookJob(req, res) {
     }
 
     // ── Price Calculation ────────────────────────────────────────────
-    let servicePrice = totalPrice || service.price;
-    if (user.region === 'UK' && !servicePrice) {
-      servicePrice = serviceRequest?.ukService?.price;
+    // BD : servicePrice = service.price (unchanged, sub-services not applicable)
+    // UK : servicePrice = ukService.price (provider's base) + Σ selected sub-service prices
+    //      Sub-services are optional — zero selected is fine.
+    //      Price is always computed server-side from ServiceRequest data.
+    let servicePrice;
+    let selectedSubServices = []; // UK only; empty for BD
+
+    if (user.region === 'UK') {
+      const basePrice = serviceRequest?.ukService?.price || 0;
+    console.log(serviceRequest?.ukService, 'serviceRequest.ukService')
+    console.log(basePrice, 'basePrice')
+      if (subServiceIds && subServiceIds.length > 0) {
+        const ids = Array.isArray(subServiceIds) ? subServiceIds : [subServiceIds];
+        const availableSubs = serviceRequest?.ukService?.subServices || [];
+        for (const subId of ids) {
+          const found = availableSubs.find(s => s._id.toString() === subId.toString());
+          if (!found) throw new ApiError(400, `Sub-service not found on this provider listing: ${subId}`);
+          selectedSubServices.push({ name: found.name, price: found.price });
+        }
+      }
+
+      const subTotal = selectedSubServices.reduce((sum, s) => sum + s.price, 0);
+      servicePrice = basePrice + subTotal;
+      console.log(selectedSubServices, 'selectedSubServices')
+      console.log(servicePrice, 'servicePrice')
+      console.log(basePrice, subTotal, 'basePrice, subTotal')
+    } else {
+      // BD region
+      const basePrice = service.price || 0;
+
+      if (subServiceIds && subServiceIds.length > 0) {
+        const ids = Array.isArray(subServiceIds) ? subServiceIds : [subServiceIds];
+        const availableSubs = service.subServices || [];
+        for (const subId of ids) {
+          const found = availableSubs.find(s => s._id.toString() === subId.toString());
+          if (!found) throw new ApiError(400, `Sub-service not found on this service: ${subId}`);
+          selectedSubServices.push({ name: found.name, price: found.price });
+        }
+      }
+
+      const subTotal = selectedSubServices.reduce((sum, s) => sum + s.price, 0);
+      servicePrice = basePrice + subTotal;
     }
 
     if (servicePrice === undefined || servicePrice === null || isNaN(servicePrice)) {
@@ -203,7 +249,7 @@ export async function bookJob(req, res) {
             paymentStatus: 'pending',
             paymentMethod: 'cod',
             schedule: { date: scheduleDateTime, time: schedule.time },
-            subServices: subServices || [],
+            subServices: selectedSubServices,
           },
         ],
         { session }
@@ -317,13 +363,15 @@ export async function bookJob(req, res) {
             paymentMethod: 'card',
             paymentGateway: 'stripe',
             schedule: { date: scheduleDateTime, time: schedule.time },
+            // UK only: snapshot so Stripe webhook can write sub-services to Job
+            selectedSubServices,
           },
         ],
         { session }
       );
 
       await session.commitTransaction();
- console.log('Stripe PaymentIntent created:', paymentIntent.id, 'Client Secret:', paymentIntent.client_secret, 'intent:', paymentIntent); 
+      console.log('Stripe PaymentIntent created:', paymentIntent.id, 'Client Secret:', paymentIntent.client_secret, 'intent:', paymentIntent);
       return res.status(201).json(
         new ApiResponse(
           201,
@@ -408,7 +456,7 @@ export async function bookJob(req, res) {
             paymentStatus: 'held_in_escrow',
             paymentMethod: 'card',
             schedule: { date: scheduleDateTime, time: schedule.time },
-            subServices: subServices || [],
+            subServices: selectedSubServices,
           },
         ],
         { session }
@@ -489,6 +537,7 @@ export async function bookJob(req, res) {
       providerAmount,
       paymentMethod,
       schedule: { date: scheduleDateTime, time: schedule.time },
+      selectedSubServices,
     });
 
     await session.commitTransaction();

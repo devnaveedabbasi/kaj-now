@@ -17,104 +17,104 @@ import {
   markPaymentRefundAutoCompleted,
 } from '../../utils/jobCancellation.js';
 
-export async function rejectJob(req, res) {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+// export async function rejectJob(req, res) {
+//   const session = await mongoose.startSession();
+//   session.startTransaction();
 
-  try {
-    const { jobId } = req.params;
-    const { reason } = req.body;
-    const userId = req.user._id;
+//   try {
+//     const { jobId } = req.params;
+//     const { reason } = req.body;
+//     const userId = req.user._id;
 
-    if (!mongoose.Types.ObjectId.isValid(jobId)) throw new ApiError(400, 'Invalid job ID');
-    if (!reason) throw new ApiError(400, 'Rejection reason is required');
+//     if (!mongoose.Types.ObjectId.isValid(jobId)) throw new ApiError(400, 'Invalid job ID');
+//     if (!reason) throw new ApiError(400, 'Rejection reason is required');
 
-    const provider = await Provider.findOne({ userId }).session(session);
-    if (!provider) throw new ApiError(404, 'Provider profile not found');
+//     const provider = await Provider.findOne({ userId }).session(session);
+//     if (!provider) throw new ApiError(404, 'Provider profile not found');
 
-    const job = await Job.findById(jobId).populate('service', 'name').session(session);
-    if (!job) throw new ApiError(404, 'Job not found');
+//     const job = await Job.findById(jobId).populate('service', 'name').session(session);
+//     if (!job) throw new ApiError(404, 'Job not found');
 
-    if (job.provider.toString() !== provider._id.toString()) {
-      throw new ApiError(403, 'Not authorized to reject this job');
-    }
+//     if (job.provider.toString() !== provider._id.toString()) {
+//       throw new ApiError(403, 'Not authorized to reject this job');
+//     }
 
-    if (job.status !== 'pending') {
-      throw new ApiError(400, `Job cannot be rejected in current status: ${job.status}`);
-    }
+//     if (job.status !== 'pending') {
+//       throw new ApiError(400, `Job cannot be rejected in current status: ${job.status}`);
+//     }
 
-    const payment = await Payment.findOne({ jobId }).session(session);
-    if (!payment) throw new ApiError(404, 'Payment record not found');
+//     const payment = await Payment.findOne({ jobId }).session(session);
+//     if (!payment) throw new ApiError(404, 'Payment record not found');
 
-    // ── Refund Logic ────────────────────────────────────────────────────────
-    // When job is rejected, return full amount to customer
-    // We use the same manual refund flow as when an admin cancels a job.
-    // The money stays with the platform until an admin explicitly refunds it.
-    await releaseEscrowForCancellation(session, payment);
+//     // ── Refund Logic ────────────────────────────────────────────────────────
+//     // When job is rejected, return full amount to customer
+//     // We use the same manual refund flow as when an admin cancels a job.
+//     // The money stays with the platform until an admin explicitly refunds it.
+//     await releaseEscrowForCancellation(session, payment);
 
-    // Update job
-    job.status = 'rejected_by_provider';
-    job.rejectionReason = reason;
-    job.cancelledAt = new Date();
-    // Unified cancellation metadata so this surfaces in the admin Cancelled Jobs view
-    job.cancelledBy = 'provider';
-    job.cancelledByUserId = userId;
-    job.cancellationReason = `Rejected by provider: ${reason}`;
-    await job.save({ session });
+//     // Update job
+//     job.status = 'rejected_by_provider';
+//     job.rejectionReason = reason;
+//     job.cancelledAt = new Date();
+//     // Unified cancellation metadata so this surfaces in the admin Cancelled Jobs view
+//     job.cancelledBy = 'provider';
+//     job.cancelledByUserId = userId;
+//     job.cancellationReason = `Rejected by provider: ${reason}`;
+//     await job.save({ session });
 
-    await session.commitTransaction();
+//     await session.commitTransaction();
 
-    // ── Activity Log ────────────────────────────────────────────────────────
-    await createActivityLog({
-      userId,
-      action: 'JOB_REJECTED_BY_PROVIDER',
-      entityType: 'Job',
-      entityId: job._id,
-      details: { reason, orderId: job.orderId },
-      req
-    });
+//     // ── Activity Log ────────────────────────────────────────────────────────
+//     await createActivityLog({
+//       userId,
+//       action: 'JOB_REJECTED_BY_PROVIDER',
+//       entityType: 'Job',
+//       entityId: job._id,
+//       details: { reason, orderId: job.orderId },
+//       req
+//     });
 
-    // ── Notifications ────────────────────────────────────────────────────────
-    const customerUser = await User.findById(job.customer);
-    await createNotification({
-      userId: job.customer,
-      title: 'Booking Rejected & Refund Pending',
-      message: `The provider rejected your booking for "${job.service?.name}" (Order #${job.orderId}). A refund of BDT ${payment.totalAmount} is pending and will be processed manually.`,
-      type: 'payment',
-      referenceId: job._id,
-      metadata: { reason, orderId: job.orderId }
-    });
+//     // ── Notifications ────────────────────────────────────────────────────────
+//     const customerUser = await User.findById(job.customer);
+//     await createNotification({
+//       userId: job.customer,
+//       title: 'Booking Rejected & Refund Pending',
+//       message: `The provider rejected your booking for "${job.service?.name}" (Order #${job.orderId}). A refund of BDT ${payment.totalAmount} is pending and will be processed manually.`,
+//       type: 'payment',
+//       referenceId: job._id,
+//       metadata: { reason, orderId: job.orderId }
+//     });
 
-    // ✅ NOTIFY ADMIN ABOUT PROVIDER REJECTION AND REFUND
-    const adminUser2 = await User.findOne({ role: 'admin' });
-    if (adminUser2) {
-      const providerUser = await User.findById(userId);
-      await createNotification({
-        userId: adminUser2._id,
-        title: 'Job Rejected by Provider - Action Required',
-        message: `Order #${job.orderId} from customer "${customerUser?.name}" was rejected by provider "${providerUser?.name}". Reason: ${reason}. A refund of ${payment.totalAmount} BDT is pending your manual action.`,
-        type: 'admin',
-        referenceId: job._id,
-        metadata: {
-          orderId: job.orderId,
-          customerId: job.customer,
-          customerName: customerUser?.name,
-          providerId: provider._id,
-          providerName: providerUser?.name,
-          reason: reason,
-          jobId: job._id
-        },
-      });
-    }
+//     // ✅ NOTIFY ADMIN ABOUT PROVIDER REJECTION AND REFUND
+//     const adminUser2 = await User.findOne({ role: 'admin' });
+//     if (adminUser2) {
+//       const providerUser = await User.findById(userId);
+//       await createNotification({
+//         userId: adminUser2._id,
+//         title: 'Job Rejected by Provider - Action Required',
+//         message: `Order #${job.orderId} from customer "${customerUser?.name}" was rejected by provider "${providerUser?.name}". Reason: ${reason}. A refund of ${payment.totalAmount} BDT is pending your manual action.`,
+//         type: 'admin',
+//         referenceId: job._id,
+//         metadata: {
+//           orderId: job.orderId,
+//           customerId: job.customer,
+//           customerName: customerUser?.name,
+//           providerId: provider._id,
+//           providerName: providerUser?.name,
+//           reason: reason,
+//           jobId: job._id
+//         },
+//       });
+//     }
 
-    return res.status(200).json({ success: true, message: 'Job rejected. Refund is pending admin action.' });
-  } catch (error) {
-    await session.abortTransaction();
-    return res.status(error.statusCode || 500).json({ success: false, message: error.message });
-  } finally {
-    session.endSession();
-  }
-}
+//     return res.status(200).json({ success: true, message: 'Job rejected. Refund is pending admin action.' });
+//   } catch (error) {
+//     await session.abortTransaction();
+//     return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+//   } finally {
+//     session.endSession();
+//   }
+// }
 
 
 
@@ -125,6 +125,9 @@ export async function rejectJob(req, res) {
 // refund-tracking flow: money stays with admin until an admin explicitly
 // marks the refund as sent.
 // ─────────────────────────────────────────────────────────────
+
+
+
 export async function cancelJobByProvider(req, res) {
   const session = await mongoose.startSession();
   session.startTransaction();
