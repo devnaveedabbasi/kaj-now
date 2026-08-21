@@ -7,8 +7,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { updateUserLocation } from '../../utils/updateUserLocation.js';
 import { deleteFile } from '../../utils/deleteFiles.js';
-import fs from 'fs';
-import path from 'path';
+import { uploadMediaBuffer } from '../../service/s3Media.service.js';
 const SALT_ROUNDS = 10;
 const OTP_TTL_MS = 10 * 60 * 1000;
 // const OTP_TTL_MS = 1 * 60 * 1000; // 1 minute
@@ -468,6 +467,7 @@ export const updateMyLocation = async (req, res) => {
 
 
 export const updateProfile = async (req, res) => {
+  let uploadedProfileUrl = null;
   try {
     const userId = req.user._id;
     const { name, email, phone } = req.body;
@@ -526,11 +526,13 @@ export const updateProfile = async (req, res) => {
 
     // Update profile picture
     if (files.profilePicture && files.profilePicture[0]) {
-      if (user.profilePicture) {
-        const oldPath = path.join(process.cwd(), 'public', user.profilePicture.replace(process.env.BASE_URL, ''));
-        deleteFile(oldPath);
-      }
-      user.profilePicture = `/uploads/users/${files.profilePicture[0].filename}`;
+      const oldProfilePicture = user.profilePicture;
+      uploadedProfileUrl = (await uploadMediaBuffer({ ...files.profilePicture[0], folder: 'media/images/users' })).url;
+      user.profilePicture = uploadedProfileUrl;
+      await user.save();
+      uploadedProfileUrl = null;
+      await deleteFile(oldProfilePicture);
+      return res.status(200).json(new ApiResponse(200, { user: { _id: user._id, name: user.name, email: user.email, phone: user.phone, profilePicture: user.profilePicture } }, 'Profile updated successfully'));
     }
 
     await user.save();
@@ -547,9 +549,10 @@ export const updateProfile = async (req, res) => {
       }, 'Profile updated successfully')
     );
   } catch (error) {
+    if (uploadedProfileUrl) await deleteFile(uploadedProfileUrl);
     // Clean up uploaded file on error
     if (req.files?.profilePicture) {
-      deleteFile(req.files.profilePicture[0].path);
+      // Multer memory storage leaves no local file to remove.
     }
 
     if (error instanceof ApiError) {

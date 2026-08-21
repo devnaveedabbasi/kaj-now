@@ -1,21 +1,12 @@
 import Category from '../../models/admin/category.model.js';
 import Service from '../../models/admin/service.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
-import fs from 'fs';
-import path from 'path';
+import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 
 // Helper function to delete old image
-const deleteOldImage = (imagePath) => {
-    try {
-        if (imagePath && fs.existsSync(imagePath)) {
-            fs.unlinkSync(imagePath);
-        }
-    } catch (error) {
-        console.error('Error deleting old image:', error);
-    }
-};
+const deleteOldImage = (mediaUrl) => deleteMedia(mediaUrl).catch((error) => console.error('Error deleting S3 image:', error.message));
 
 
 // Create Category
@@ -24,16 +15,10 @@ export const createCategory = async (req, res) => {
     const userId = req.user._id;
 
     if (!name) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
-        }
         throw new ApiError(400, 'Category name is required');
     }
 
     if (region && !['UK', 'BD'].includes(region)) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
-        }
         throw new ApiError(400, 'Invalid region');
     }
 
@@ -43,20 +28,19 @@ export const createCategory = async (req, res) => {
     });
 
     if (existingCategory) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
-        }
         throw new ApiError(409, 'Category already exists');
     }
 
+    const uploaded = req.file ? await uploadMediaBuffer({ ...req.file, folder: 'media/images/categories' }) : null;
     const categoryData = {
         userId,
         name,
         region: region || 'BD',
-        icon: req.file ? `/uploads/categories/${req.file.filename}` : null,
+        icon: uploaded?.url || null,
     };
-
-    const category = await Category.create(categoryData);
+    let category;
+    try { category = await Category.create(categoryData); }
+    catch (error) { if (uploaded) await deleteOldImage(uploaded.url); throw error; }
 
     res.status(201).json(
         new ApiResponse(201, category, 'Category created successfully')
@@ -224,9 +208,6 @@ export const updateCategory = async (req, res) => {
     const category = await Category.findOne({ _id: id, userId });
 
     if (!category) {
-        if (req.file) {
-            fs.unlinkSync(req.file.path);
-        }
         throw new ApiError(404, 'Category not found');
     }
 
@@ -238,9 +219,6 @@ export const updateCategory = async (req, res) => {
             _id: { $ne: id }
         });
         if (existingCategory) {
-            if (req.file) {
-                fs.unlinkSync(req.file.path);
-            }
             throw new ApiError(409, 'Category name already exists');
         }
         category.name = name;
@@ -248,11 +226,13 @@ export const updateCategory = async (req, res) => {
 
     // Update image if new file uploaded
     if (req.file) {
-        if (category.icon) {
-            const oldImagePath = path.join('public', category.icon);
-            deleteOldImage(oldImagePath);
-        }
-        category.icon = `/uploads/categories/${req.file.filename}`;
+        const uploaded = await uploadMediaBuffer({ ...req.file, folder: 'media/images/categories' });
+        const oldIcon = category.icon;
+        category.icon = uploaded.url;
+        try { await category.save(); }
+        catch (error) { await deleteOldImage(uploaded.url); throw error; }
+        await deleteOldImage(oldIcon);
+        return res.status(200).json(new ApiResponse(200, category, 'Category updated successfully'));
     }
 
     await category.save();
@@ -354,16 +334,14 @@ export const hardDeleteCategory = async (req, res) => {
 
     // Delete category image
     if (category.icon) {
-        const imagePath = path.join('public', category.icon);
-        deleteOldImage(imagePath);
+        await deleteOldImage(category.icon);
     }
 
     // Hard delete all subcategories under this category
     const subCategories = await Service.find({ userId, categoryId: category._id });
     for (const service of subCategories) {
         if (service.icon) {
-            const imagePath = path.join('public', service.icon);
-            deleteOldImage(imagePath);
+            await deleteOldImage(service.icon);
         }
     }
     await Service.deleteMany({ userId, categoryId: category._id });

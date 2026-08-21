@@ -1,36 +1,16 @@
 import Category from '../../models/admin/category.model.js';
 import Service from '../../models/admin/service.model.js';
-import fs from 'fs';
-import path from 'path';
+import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import Review from '../../models/reviews.model.js';
 // Helper function to delete old image
-const deleteOldImage = (imagePath) => {
-    try {
-        if (imagePath && fs.existsSync(imagePath)) {
-            fs.unlinkSync(imagePath);
-        }
-    } catch (error) {
-        console.error('Error deleting old image:', error);
-    }
-};
+const deleteOldImage = (mediaUrl) => deleteMedia(mediaUrl).catch((error) => console.error('Error deleting S3 image:', error.message));
 
 // Helper function to cleanup files
 const cleanupFiles = (files) => {
-    if (!files) return;
-    
-    if (files.icon) {
-        files.icon.forEach(file => {
-            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-        });
-    }
-    if (files.images) {
-        files.images.forEach(file => {
-            if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-        });
-    }
+    // Memory-storage uploads have no local files. Controller catches delete S3 objects after upload.
 };
 
 // Create service
@@ -101,8 +81,13 @@ export const createService = async (req, res) => {
             throw new ApiError(400, 'Service image is required');
         }
 
-        const iconPath = iconFile ? `/uploads/services/icons/${iconFile.filename}` : undefined;
-        const serviceImagePath = serviceImageFile ? `/uploads/services/images/${serviceImageFile.filename}` : undefined;
+        const uploadedMedia = [];
+        const iconUpload = iconFile && await uploadMediaBuffer({ ...iconFile, folder: 'media/images/services/icons' });
+        const imageUpload = serviceImageFile && await uploadMediaBuffer({ ...serviceImageFile, folder: 'media/images/services' });
+        if (iconUpload) uploadedMedia.push(iconUpload.url);
+        if (imageUpload) uploadedMedia.push(imageUpload.url);
+        const iconPath = iconUpload?.url;
+        const serviceImagePath = imageUpload?.url;
 
         let parsedSubServices = [];
         if (req.body.subServices) {
@@ -112,6 +97,7 @@ export const createService = async (req, res) => {
                     : req.body.subServices;
             } catch (err) {
                 cleanupFiles(req.files);
+                await Promise.all(uploadedMedia.map(deleteOldImage));
                 throw new ApiError(400, 'Invalid subServices format');
             }
         }
@@ -131,7 +117,9 @@ export const createService = async (req, res) => {
             subServices: parsedSubServices
         };
 
-        const newService = await Service.create(newServiceData);
+        let newService;
+        try { newService = await Service.create(newServiceData); }
+        catch (error) { await Promise.all(uploadedMedia.map(deleteOldImage)); throw error; }
         
         // Populate category details
         await newService.populate('categoryId', 'name icon');
@@ -342,7 +330,7 @@ export const updateService = async (req, res) => {
         const { name, categoryId, price ,description} = req.body;
 
         const iconFile = req.files?.icon?.[0];
-        const newImageFiles = req.files?.images || [];
+        const serviceImageFile = req.files?.serviceImage?.[0];
 
         // Find existing service
         const existingService = await Service.findOne({ _id: id, userId, isDeleted: false });
@@ -379,14 +367,13 @@ export const updateService = async (req, res) => {
 
         // Handle icon update
         let iconPath = existingService.icon;
+        let serviceImagePath = existingService.serviceImage;
+        const uploadedMedia = [];
         if (iconFile) {
-            // Delete old icon file if it exists
-            if (existingService.icon) {
-                const oldIconPath = path.join(process.cwd(), 'public', existingService.icon);
-                deleteOldImage(oldIconPath);
-            }
-            iconPath = `/uploads/services/icons/${iconFile.filename}`;
+            const uploaded = await uploadMediaBuffer({ ...iconFile, folder: 'media/images/services/icons' });
+            uploadedMedia.push(uploaded.url); iconPath = uploaded.url;
         }
+        if (serviceImageFile) { const uploaded = await uploadMediaBuffer({ ...serviceImageFile, folder: 'media/images/services' }); uploadedMedia.push(uploaded.url); serviceImagePath = uploaded.url; }
 
        
 
@@ -398,6 +385,7 @@ export const updateService = async (req, res) => {
                     : req.body.subServices;
             } catch (err) {
                 cleanupFiles(req.files);
+                await Promise.all(uploadedMedia.map(deleteOldImage));
                 throw new ApiError(400, 'Invalid subServices format');
             }
         }
@@ -407,18 +395,22 @@ export const updateService = async (req, res) => {
             ...(name && { name }),
             ...(categoryId && { categoryId }),
             ...(iconFile && { icon: iconPath }),
+            ...(serviceImageFile && { serviceImage: serviceImagePath }),
             ...(price !== undefined && { price: Number(price) }),
             ...(description !== undefined && { description }),
             ...(parsedSubServices !== undefined && { subServices: parsedSubServices })
         };
 
         // Update the service
-        const updatedService = await Service.findByIdAndUpdate(
+        let updatedService;
+        try { updatedService = await Service.findByIdAndUpdate(
             id,
             updateData,
             { new: true, runValidators: true }
-        ).populate('categoryId', 'name icon isActive isDeleted')
-         .populate('reviews');
+        ).populate('categoryId', 'name icon isActive isDeleted').populate('reviews'); }
+        catch (error) { await Promise.all(uploadedMedia.map(deleteOldImage)); throw error; }
+        if (iconFile) await deleteOldImage(existingService.icon);
+        if (serviceImageFile) await deleteOldImage(existingService.serviceImage);
 
         if (!updatedService) {
             throw new ApiError(404, 'Service not found');
@@ -471,8 +463,7 @@ export const deleteServiceImage = async (req, res) => {
         }
 
         // Delete physical file
-        const imagePath = path.join(process.cwd(), 'public', imageToDelete);
-        deleteOldImage(imagePath);
+        await deleteOldImage(imageToDelete);
 
         // Remove from array
         service.images.splice(imageIndex, 1);
@@ -609,16 +600,12 @@ export const hardDeleteService = async (req, res) => {
 
         // Delete service icon
         if (serviceData.icon) {
-            const iconPath = path.join('public', serviceData.icon);
-            deleteOldImage(iconPath);
+            await deleteOldImage(serviceData.icon);
         }
 
         // Delete all service images
         if (serviceData.images && serviceData.images.length > 0) {
-            serviceData.images.forEach(image => {
-                const imagePath = path.join('public', image);
-                deleteOldImage(imagePath);
-            });
+            await Promise.all(serviceData.images.map(deleteOldImage));
         }
 
         await Service.deleteOne({ _id: id, userId });

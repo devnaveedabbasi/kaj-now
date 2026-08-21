@@ -5,6 +5,7 @@ import Category from '../../models/admin/category.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 import Job from '../../models/job.model.js';
 import User from '../../models/User.model.js';
 
@@ -285,7 +286,7 @@ export const requestService = async (req, res) => {
                 isCustomService: true,
                 ukService: {
                     title,
-                    serviceImage: `/uploads/service-requests/${serviceImageFile.filename}`,
+                    serviceImage: (await uploadMediaBuffer({ ...serviceImageFile, folder: 'media/images/service-requests' })).url,
                     price: Number(price),
                     description,
                     subServices: parsedSubServices,
@@ -392,7 +393,7 @@ export const requestService = async (req, res) => {
 
                 if (service.region === 'UK') {
                     requestData.ukService = {
-                        serviceImage: `/uploads/service-requests/${serviceImageFile.filename}`,
+                        serviceImage: (await uploadMediaBuffer({ ...serviceImageFile, folder: 'media/images/service-requests' })).url,
                         price: Number(price),
                         description,
                         subServices: parsedSubServices,
@@ -794,14 +795,17 @@ export const editService = async (req, res) => {
 
         // Check for new image
         let serviceImageFile = req.files?.serviceImage?.[0];
+        let oldServiceImage = null;
         if (serviceImageFile) {
-            serviceRequest.ukService.serviceImage = `/uploads/service-requests/${serviceImageFile.filename}`;
+            oldServiceImage = serviceRequest.ukService.serviceImage;
+            serviceRequest.ukService.serviceImage = (await uploadMediaBuffer({ ...serviceImageFile, folder: 'media/images/service-requests' })).url;
         }
 
         // Status update
         serviceRequest.status = 'pending';
         serviceRequest.isUpdated = true; // Flag for admin dashboard
         await serviceRequest.save();
+        if (oldServiceImage) await deleteMedia(oldServiceImage);
 
         // Remove from provider's approved catalog while pending
         if (serviceRequest.serviceId && serviceRequest.serviceId.length > 0) {

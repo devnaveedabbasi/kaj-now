@@ -1,5 +1,4 @@
 import express from "express";
-import path from "path";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import connectDb from "./config/db.js";
@@ -9,7 +8,6 @@ import requestLogger from "./middleware/requestLogger.js";
 import { ApiError } from "./utils/errorHandler.js";
 import errorHandler from "./middleware/errorHandler.js";
 import { initSocket } from "./config/socket.js";
-import { generateContractPdfIfMissing } from "./utils/generateContract.js";
 
 const app = express();
 const server = createServer(app);
@@ -64,10 +62,6 @@ app.options(/.*/, cors(corsOptions));
 // Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use("/uploads", express.static(path.join(process.cwd(), "public/uploads")));
-app.use("/contracts", express.static(path.join(process.cwd(), "public/contracts")));
-
-generateContractPdfIfMissing();
 app.use(requestLogger);
 
 // Health check

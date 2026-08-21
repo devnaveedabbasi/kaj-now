@@ -320,13 +320,7 @@ export const getWithdrawalReceipt = async (req, res) => {
             throw new ApiError(404, 'Receipt not found');
         }
 
-        const receiptPath = path.join(process.cwd(), 'public', withdrawal.receiptImage);
-        
-        if (!fs.existsSync(receiptPath)) {
-            throw new ApiError(404, 'Receipt file not found');
-        }
-
-        return res.sendFile(receiptPath);
+        return res.redirect(withdrawal.receiptImage);
     } catch (error) {
         if (error instanceof ApiError) {
             return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));

@@ -1,5 +1,4 @@
 import nodemailer from 'nodemailer';
-import fs from 'fs';
 import config from '../config/index.js';
 import { complaintReplyTemplate, noteReplyTemplate, userNoteReplyTemplate, contractPendingTemplate, contractApprovedTemplate, contractRejectedTemplate } from '../utils/emailTemplates.js';
 
@@ -82,7 +81,7 @@ export const sendOtpEmail = async (to, otp) => {
 // 💰 WITHDRAWAL APPROVED EMAIL
 // =========================
 export const sendWithdrawalApprovedEmail = async (to, data) => {
-    const { amount, transactionId, fileName, filePath } = data;
+    const { amount, transactionId, fileName, buffer } = data;
 
     const mailOptions = {
         from: `"Kaj Now" <${config.email.user}>`,
@@ -105,12 +104,7 @@ export const sendWithdrawalApprovedEmail = async (to, data) => {
                 <p style="font-size: 12px; color: #888;">Thank you for using our platform.</p>
             </div>
         `,
-        attachments: [
-            {
-                filename: fileName,
-                path: filePath,
-            },
-        ],
+        attachments: buffer ? [{ filename: fileName, content: buffer, contentType: 'application/pdf' }] : [],
     };
 
     try {
@@ -194,15 +188,12 @@ export const sendUserNoteReplyEmail = async (to, data) => {
 // =========================
 //  WITHDRAWAL REJECTED EMAIL
 // =========================
-export const sendContractPendingEmail = async (to, { userName, contractPath }) => {
+export const sendContractPendingEmail = async (to, { userName, contractUrl }) => {
     const mailOptions = {
         from: `"KajNow" <${config.email.user}>`,
         to,
         subject: 'Action Required: Sign Your KajNow Provider Contract',
-        html: contractPendingTemplate({ userName }),
-        attachments: (contractPath && fs.existsSync(contractPath))
-            ? [{ filename: 'KajNow-Provider-Agreement.pdf', path: contractPath }]
-            : [],
+        html: `${contractPendingTemplate({ userName })}${contractUrl ? `<p><a href="${contractUrl}">Download the provider agreement</a></p>` : ''}`,
     };
     try {
         await transporter.sendMail(mailOptions);

@@ -12,7 +12,7 @@ import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
 import { createNotification } from "../../utils/notification.js";
 import { sendContractPendingEmail } from "../../service/emailService.js";
-import { getContractUrl, getContractPath, generateContractPdfIfMissing } from "../../utils/generateContract.js";
+import { getContractUrl, generateContractPdfIfMissing } from "../../utils/generateContract.js";
 import Payment from '../../models/payment.model.js';
 import mongoose from "mongoose";
 import { REGION_CURRENCY } from '../../utils/regionFinance.js';
@@ -595,10 +595,9 @@ export const approveProviderKyc = async (req, res) => {
     provider.isKycCompleted = true;
 
     if (isUK) {
-      generateContractPdfIfMissing();
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      await generateContractPdfIfMissing();
       provider.contractStatus = 'pending';
-      provider.contractFile = getContractUrl(baseUrl);
+      provider.contractFile = getContractUrl();
       provider.signedContractFile = '';
       provider.contractRejectionReason = '';
       provider.contractRejectedAt = undefined;
@@ -616,7 +615,7 @@ export const approveProviderKyc = async (req, res) => {
         type: 'kyc',
         referenceId: provider._id
       });
-      await sendContractPendingEmail(providerUser.email, { userName: providerUser.name, contractPath: getContractPath() });
+      await sendContractPendingEmail(providerUser.email, { userName: providerUser.name, contractUrl: provider.contractFile });
     } else {
       // BD: fully active
       await createNotification({

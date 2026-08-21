@@ -144,3 +144,7 @@ dist
 
 # Firebase private key
 src/config/firebase/firebase-service-account.json
+
+# Local media storage directories
+public/uploads/
+public/contracts/

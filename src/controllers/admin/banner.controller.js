@@ -2,6 +2,7 @@ import Banner from "../../models/admin/banner.model.js";
 import { ApiError } from "../../utils/errorHandler.js";
 import { ApiResponse } from "../../utils/apiResponse.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 
 const MAX_BANNERS = 5;
 
@@ -21,12 +22,14 @@ export const createBanner = asyncHandler(async (req, res) => {
     );
   }
 
-  const banner = await Banner.create({
-    image: `/uploads/banners/${req.file.filename}`,
+  const uploaded = await uploadMediaBuffer({ ...req.file, folder: 'media/images/banners' });
+  let banner;
+  try { banner = await Banner.create({
+    image: uploaded.url,
     region,
     isActive: true,
     isDeleted: false,
-  });
+  }); } catch (error) { await deleteMedia(uploaded.url); throw error; }
 
   return res.status(201).json(
     new ApiResponse(201, banner, "Banner created successfully")
@@ -95,7 +98,12 @@ export const updateBanner = asyncHandler(async (req, res) => {
 
   // IMAGE UPDATE
   if (req.file) {
-    banner.image = `/uploads/banners/${req.file.filename}`;
+    const uploaded = await uploadMediaBuffer({ ...req.file, folder: 'media/images/banners' });
+    const oldImage = banner.image;
+    banner.image = uploaded.url;
+    try { await banner.save(); } catch (error) { await deleteMedia(uploaded.url); throw error; }
+    await deleteMedia(oldImage);
+    return res.status(200).json(new ApiResponse(200, banner, "Banner updated successfully"));
   }
 
   await banner.save();
@@ -119,6 +127,7 @@ export const deleteBanner = asyncHandler(async (req, res) => {
   banner.isActive = false;
 
   await banner.save();
+  await deleteMedia(banner.image);
 
   return res.status(200).json(
     new ApiResponse(200, null, "Banner deleted successfully")

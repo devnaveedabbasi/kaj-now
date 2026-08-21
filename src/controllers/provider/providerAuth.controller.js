@@ -6,8 +6,7 @@ import { signToken } from '../../utils/jwt.js';
 import { generateNumericOtp } from '../../utils/otp.js';
 import Category from '../../models/admin/category.model.js';
 import Service from '../../models/admin/service.model.js';
-import path from 'path';
-import fs from 'fs';
+import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
@@ -21,15 +20,7 @@ const phoneRegex = /^(?:\+44\d{10}|(?:\+880|880|0)?1[3-9]\d{8})$/;
 const bdPhoneRegex = /^(\+880|880|0)?1[3-9][0-9]{8}$/;
 const ukPhoneRegex = /^\+44[0-9]{10}$/;
 
-const deleteFile = (filePath) => {
-  try {
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-  } catch (error) {
-    console.error('Error deleting file:', error);
-  }
-};
+const deleteFile = (mediaUrl) => deleteMedia(mediaUrl).catch((error) => console.error('Error deleting S3 media:', error.message));
 
 function publicUserDoc(user) {
   const u = user.toObject ? user.toObject() : { ...user };
@@ -586,7 +577,7 @@ if (!isUK) {
   provider.services = serviceIdArray;
 }
   // UPDATE PROVIDER
-  const uploadPath = "/uploads/provider/";
+  const uploadDocument = async (file) => (await uploadMediaBuffer({ ...file, folder: 'media/documents/provider' })).url;
 
   provider.providerType = providerType || 'individual';
 
@@ -603,26 +594,26 @@ if (!isUK) {
     provider.companyName = companyName.trim();
     provider.companyNumber = companyNumber.trim();
     provider.directorId = directorId.trim();
-    provider.companyAddressProof = `${uploadPath}${files.companyAddressProof[0].filename}`;
+    provider.companyAddressProof = await uploadDocument(files.companyAddressProof[0]);
 
   } else if (isUK) {
     // UK Individual — no face photo / ID card
     provider.gender = gender;
     provider.dob = parsedDob;
-    provider.addressProof = `${uploadPath}${files.addressProof[0].filename}`;
-    provider.rightToWork = `${uploadPath}${files.rightToWork[0].filename}`;
+    provider.addressProof = await uploadDocument(files.addressProof[0]);
+    provider.rightToWork = await uploadDocument(files.rightToWork[0]);
     if (files.dbsCertificate?.[0]) {
-      provider.dbsCertificate = `${uploadPath}${files.dbsCertificate[0].filename}`;
+      provider.dbsCertificate = await uploadDocument(files.dbsCertificate[0]);
     }
   } else {
     // BD Individual — face photo + ID card
     provider.gender = gender;
     provider.dob = parsedDob;
-    provider.facePhoto = `${uploadPath}${files.facePhoto[0].filename}`;
-    provider.idCardFront = `${uploadPath}${files.idCardFront[0].filename}`;
-    provider.idCardBack = `${uploadPath}${files.idCardBack[0].filename}`;
+    provider.facePhoto = await uploadDocument(files.facePhoto[0]);
+    provider.idCardFront = await uploadDocument(files.idCardFront[0]);
+    provider.idCardBack = await uploadDocument(files.idCardBack[0]);
     if (files.certificates?.length > 0) {
-      provider.certificates = files.certificates.map(f => `${uploadPath}${f.filename}`);
+      provider.certificates = await Promise.all(files.certificates.map(uploadDocument));
     }
   }
 
@@ -695,6 +686,7 @@ export async function me(req, res) {
 
 
 export const updateProfile = async (req, res) => {
+  let uploadedProfileUrl = null;
   try {
     const userId = req.user._id;
     const { name, email, phone, permanentAddress, dob, gender, location } = req.body;
@@ -761,11 +753,11 @@ export const updateProfile = async (req, res) => {
 
     // Update profile picture
     if (files.profilePicture && files.profilePicture[0]) {
-      if (user.profilePicture) {
-        const oldPath = path.join(process.cwd(), 'public', user.profilePicture.replace(process.env.BASE_URL, ''));
-        deleteFile(oldPath);
-      }
-      user.profilePicture = `/uploads/provider/${files.profilePicture[0].filename}`;
+      const oldProfilePicture = user.profilePicture;
+      uploadedProfileUrl = (await uploadMediaBuffer({ ...files.profilePicture[0], folder: 'media/images/providers' })).url;
+      user.profilePicture = uploadedProfileUrl;
+      // Saved below with the remaining profile fields; old object is deleted only afterwards.
+      user.$locals.oldProfilePicture = oldProfilePicture;
     }
 
     // Update Provider fields
@@ -800,6 +792,8 @@ export const updateProfile = async (req, res) => {
 
     await user.save();
     await provider.save();
+    if (user.$locals.oldProfilePicture) await deleteFile(user.$locals.oldProfilePicture);
+    uploadedProfileUrl = null;
 
     res.status(200).json(
       new ApiResponse(200, {
@@ -819,9 +813,10 @@ export const updateProfile = async (req, res) => {
       }, 'Profile updated successfully')
     );
   } catch (error) {
+    if (uploadedProfileUrl) await deleteFile(uploadedProfileUrl);
     // Clean up uploaded file on error
     if (req.files?.profilePicture) {
-      deleteFile(req.files.profilePicture[0].path);
+      // Multer uses memory storage; no local file remains to clean up.
     }
 
     if (error instanceof ApiError) {

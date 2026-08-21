@@ -1,5 +1,4 @@
-import fs from 'fs';
-import path from 'path';
+import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
@@ -63,17 +62,16 @@ export const submitSignedContract = async (req, res) => {
         const { signatureImage } = req.body;
 
         if (req.file) {
-            provider.signedContractFile = `/contracts/signed/${req.file.filename}`;
+            const uploaded = await uploadMediaBuffer({ ...req.file, folder: 'media/documents/contracts/signed' });
+            await deleteMedia(provider.signedContractFile);
+            provider.signedContractFile = uploaded.url;
         } else if (signatureImage) {
-            const sigDir = 'public/uploads/signatures';
-            if (!fs.existsSync(sigDir)) fs.mkdirSync(sigDir, { recursive: true });
-
             const base64Data = signatureImage.replace(/^data:image\/\w+;base64,/, '');
-            const sigFileName = `sig-${provider._id}-${Date.now()}.png`;
-            const sigFilePath = path.join(sigDir, sigFileName);
-            fs.writeFileSync(sigFilePath, Buffer.from(base64Data, 'base64'));
-
-            provider.signatureImage = `/uploads/signatures/${sigFileName}`;
+            const buffer = Buffer.from(base64Data, 'base64');
+            if (!buffer.length || buffer.length > 5 * 1024 * 1024) throw new ApiError(400, 'Invalid or oversized signature image');
+            const uploaded = await uploadMediaBuffer({ buffer, originalname: 'signature.png', mimetype: 'image/png', folder: 'media/images/signatures' });
+            await deleteMedia(provider.signatureImage);
+            provider.signatureImage = uploaded.url;
         } else {
             throw new ApiError(400, 'A signature image or a signed contract PDF is required');
         }

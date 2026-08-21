@@ -1,11 +1,11 @@
 import mongoose from 'mongoose';
-import fs from 'fs';
 import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/notification.js';
 import { sendContractApprovedEmail, sendContractRejectedEmail } from '../../service/emailService.js';
-import { getContractPath, generateContractPdfIfMissing } from '../../utils/generateContract.js';
+import { generateContractPdfIfMissing, getContractUrl } from '../../utils/generateContract.js';
+import { deleteMedia, mediaExists, uploadMediaAtKey } from '../../service/s3Media.service.js';
 
 const CONTRACT_SELECT_FIELDS = 'contractFile signedContractFile contractStatus signatureImage agreedToTerms contractSignedAt contractApprovedAt contractRejectionReason contractRejectedAt providerType';
 
@@ -14,8 +14,8 @@ export const uploadContractTemplate = async (req, res) => {
     try {
         if (!req.file) throw new ApiError(400, 'PDF file is required');
 
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        const contractUrl = `${baseUrl}/contracts/kajnow_provider_agreement.pdf`;
+        const uploaded = await uploadMediaAtKey({ key: 'media/documents/contracts/kajnow_provider_agreement.pdf', buffer: req.file.buffer, mimetype: req.file.mimetype });
+        const contractUrl = uploaded.url;
 
         res.status(200).json(
             new ApiResponse(200, { contractUrl }, 'Contract template uploaded successfully')
@@ -31,15 +31,13 @@ export const uploadContractTemplate = async (req, res) => {
 // GET /admin/contracts/template — current global template status
 export const getContractTemplateStatus = async (req, res) => {
     try {
-        const contractPath = getContractPath();
-        const exists = fs.existsSync(contractPath);
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const exists = await mediaExists('media/documents/contracts/kajnow_provider_agreement.pdf');
 
         res.status(200).json(
             new ApiResponse(200, {
                 exists,
-                contractUrl: exists ? `${baseUrl}/contracts/kajnow_provider_agreement.pdf` : null,
-                updatedAt: exists ? fs.statSync(contractPath).mtime : null
+                contractUrl: exists ? getContractUrl() : null,
+                updatedAt: null
             }, 'Contract template status fetched')
         );
     } catch (error) {
@@ -51,14 +49,13 @@ export const getContractTemplateStatus = async (req, res) => {
 // A default boilerplate agreement is regenerated so the KYC-approval flow always has a file to send.
 export const deleteContractTemplate = async (req, res) => {
     try {
-        const contractPath = getContractPath();
-
-        if (!fs.existsSync(contractPath)) {
+        const contractUrl = getContractUrl();
+        if (!(await mediaExists('media/documents/contracts/kajnow_provider_agreement.pdf'))) {
             throw new ApiError(404, 'No contract template found to delete');
         }
 
-        fs.unlinkSync(contractPath);
-        generateContractPdfIfMissing();
+        await deleteMedia(contractUrl);
+        await generateContractPdfIfMissing();
 
         res.status(200).json(
             new ApiResponse(200, null, 'Contract template deleted. A default agreement has been restored.')

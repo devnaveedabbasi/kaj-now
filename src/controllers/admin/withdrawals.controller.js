@@ -7,10 +7,9 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
-import fs from 'fs';
-import path from 'path';
 import { sendWithdrawalApprovedEmail } from '../../service/emailService.js';
 import { generateWithdrawalInvoice } from '../../utils/generateWithdrawalInvoice.js';
+import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 
 // Get all withdrawals (Admin)
 export const getAllWithdrawals = async (req, res) => {
@@ -114,6 +113,7 @@ export const getAllWithdrawals = async (req, res) => {
 export const approveWithdrawal = async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
+    let uploadedReceiptUrl = null;
 
     try {
         const { withdrawalId } = req.params;
@@ -121,10 +121,6 @@ export const approveWithdrawal = async (req, res) => {
         const receiptFile = req.file; // Multer file object
 
         if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
-            // Clean up uploaded file if exists
-            if (receiptFile && fs.existsSync(receiptFile.path)) {
-                fs.unlinkSync(receiptFile.path);
-            }
             throw new ApiError(400, 'Invalid withdrawal ID');
         }
 
@@ -134,23 +130,16 @@ export const approveWithdrawal = async (req, res) => {
 
         const withdrawal = await Withdrawal.findById(withdrawalId).session(session);
         if (!withdrawal) {
-            // Clean up uploaded file
-            if (receiptFile && fs.existsSync(receiptFile.path)) {
-                fs.unlinkSync(receiptFile.path);
-            }
             throw new ApiError(404, 'Withdrawal not found');
         }
 
         if (withdrawal.status !== 'pending') {
-            // Clean up uploaded file
-            if (receiptFile && fs.existsSync(receiptFile.path)) {
-                fs.unlinkSync(receiptFile.path);
-            }
             throw new ApiError(400, `Withdrawal already ${withdrawal.status}`);
         }
 
-        // Save receipt path
-        const receiptPath = `/uploads/withdrawals/receipts/${receiptFile.filename}`;
+        const receiptUpload = await uploadMediaBuffer({ ...receiptFile, folder: 'media/documents/withdrawal-receipts' });
+        const receiptPath = receiptUpload.url;
+        uploadedReceiptUrl = receiptPath;
 
         // Update withdrawal status
         withdrawal.status = 'completed';
@@ -180,13 +169,15 @@ export const approveWithdrawal = async (req, res) => {
         }
 
         await session.commitTransaction();
+        // Database now owns this S3 reference; later notification/email failures must not delete it.
+        uploadedReceiptUrl = null;
 
 
         // 🔹 Get provider
         const provider = await Provider.findById(withdrawal.providerId).populate('userId');
 
         // 🔹 Generate PDF
-        const { filePath, fileName, url } = await generateWithdrawalInvoice(withdrawal, provider);
+        const { fileName, url, buffer } = await generateWithdrawalInvoice(withdrawal, provider);
 
         // 🔹 Save invoice URL (optional)
         withdrawal.invoiceUrl = url;
@@ -196,7 +187,7 @@ export const approveWithdrawal = async (req, res) => {
             amount: withdrawal.requestedAmount,
             transactionId: withdrawal.transactionId,
             fileName,
-            filePath
+            buffer
         });
 
         if (provider) {
@@ -218,17 +209,13 @@ export const approveWithdrawal = async (req, res) => {
             new ApiResponse(200, {
                 withdrawal: {
                     ...withdrawal.toObject(),
-                    receiptUrl: `${process.env.BASE_URL}${receiptPath}`
+                    receiptUrl: receiptPath
                 }
             }, 'Withdrawal approved successfully')
         );
     } catch (error) {
         await session.abortTransaction();
-
-        // Clean up uploaded file on error
-        if (req.file && fs.existsSync(req.file.path)) {
-            fs.unlinkSync(req.file.path);
-        }
+        if (uploadedReceiptUrl) await deleteMedia(uploadedReceiptUrl).catch(() => {});
 
         if (error instanceof ApiError) {
             return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
@@ -366,13 +353,7 @@ export const getWithdrawalReceipt = async (req, res) => {
             throw new ApiError(404, 'Receipt not found');
         }
 
-        const receiptPath = path.join(process.cwd(), 'public', withdrawal.receiptImage);
-
-        if (!fs.existsSync(receiptPath)) {
-            throw new ApiError(404, 'Receipt file not found');
-        }
-
-        return res.sendFile(receiptPath);
+        return res.redirect(withdrawal.receiptImage);
     } catch (error) {
         if (error instanceof ApiError) {
             return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));

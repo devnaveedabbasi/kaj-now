@@ -1,23 +1,20 @@
 import PDFDocument from 'pdfkit';
-import fs from 'fs';
-import path from 'path';
+import { PassThrough } from 'stream';
+import { mediaExists, publicS3Url, uploadMediaAtKey } from '../service/s3Media.service.js';
 
-const CONTRACT_DIR = 'public/contracts';
-const CONTRACT_PATH = `${CONTRACT_DIR}/kajnow_provider_agreement.pdf`;
+const CONTRACT_KEY = 'media/documents/contracts/kajnow_provider_agreement.pdf';
 
-export const getContractPath = () => CONTRACT_PATH;
+export const getContractPath = () => CONTRACT_KEY; // Legacy export; this is now an S3 key, never a local path.
 
-export const getContractUrl = (baseUrl) => `${baseUrl}/contracts/kajnow_provider_agreement.pdf`;
+export const getContractUrl = () => publicS3Url(CONTRACT_KEY);
 
-export const generateContractPdfIfMissing = () => {
-    if (fs.existsSync(CONTRACT_PATH)) return;
-
-    if (!fs.existsSync(CONTRACT_DIR)) {
-        fs.mkdirSync(CONTRACT_DIR, { recursive: true });
-    }
+export const generateContractPdfIfMissing = async () => {
+    if (await mediaExists(CONTRACT_KEY)) return publicS3Url(CONTRACT_KEY);
 
     const doc = new PDFDocument({ margin: 60 });
-    const stream = fs.createWriteStream(CONTRACT_PATH);
+    const stream = new PassThrough();
+    const chunks = [];
+    stream.on('data', (chunk) => chunks.push(chunk));
     doc.pipe(stream);
 
     // Header
@@ -98,9 +95,10 @@ export const generateContractPdfIfMissing = () => {
     doc.moveDown(5);
     doc.text('Date: _________________________', 60);
 
+    const finished = new Promise((resolve, reject) => { stream.on('end', resolve); stream.on('error', reject); });
     doc.end();
-
-    stream.on('finish', () => {
-        console.log('Contract PDF generated at:', CONTRACT_PATH);
-    });
+    await finished;
+    const uploaded = await uploadMediaAtKey({ key: CONTRACT_KEY, buffer: Buffer.concat(chunks), mimetype: 'application/pdf' });
+    console.log('Contract PDF uploaded to S3:', uploaded.key);
+    return uploaded.url;
 };

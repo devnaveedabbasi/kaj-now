@@ -1,6 +1,8 @@
-import fs from 'fs';
 import path from 'path';
 import PDFDocument from 'pdfkit';
+import fs from 'fs';
+import { PassThrough } from 'stream';
+import { uploadMediaBuffer } from '../service/s3Media.service.js';
 
 // ─── Brand palette ────────────────────────────────────────────────────────────
 const C = {
@@ -58,14 +60,12 @@ function labelValue(doc, lx, vx, y, label, value, opts = {}) {
 export const generateWithdrawalInvoice = (withdrawal, provider) => {
   return new Promise((resolve, reject) => {
     try {
-      const dirPath = path.join(process.cwd(), 'public/uploads/invoices');
-      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-
       const fileName = `invoice-${withdrawal._id}.pdf`;
-      const filePath = path.join(dirPath, fileName);
 
       const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: `Invoice ${withdrawal._id}` } });
-      const stream = fs.createWriteStream(filePath);
+      const stream = new PassThrough();
+      const chunks = [];
+      stream.on('data', (chunk) => chunks.push(chunk));
       doc.pipe(stream);
 
       const ML = 50, MR = 545, CW = MR - ML;
@@ -198,10 +198,14 @@ export const generateWithdrawalInvoice = (withdrawal, provider) => {
         .text('✓  Approved & Processed by KajNow Admin', ML + 14, NT_Y + 10);
       doc.restore();
 
-      doc.end();
-
-      stream.on('finish', () => resolve({ filePath, fileName, url: `/uploads/invoices/${fileName}` }));
+      stream.on('end', async () => {
+        try {
+          const uploaded = await uploadMediaBuffer({ buffer: Buffer.concat(chunks), originalname: fileName, mimetype: 'application/pdf', folder: 'media/documents/invoices' });
+          resolve({ fileName, url: uploaded.url, buffer: Buffer.concat(chunks) });
+        } catch (error) { reject(error); }
+      });
       stream.on('error', reject);
+      doc.end();
 
     } catch (err) {
       reject(err);
