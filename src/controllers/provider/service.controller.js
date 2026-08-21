@@ -6,7 +6,7 @@ import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import Job from '../../models/job.model.js';
-import User from '../../models/user.model.js';
+import User from '../../models/User.model.js';
 
 export const getAllCategories = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
