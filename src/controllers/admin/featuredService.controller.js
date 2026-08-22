@@ -115,7 +115,8 @@ export const getFeaturedServiceRequests = async (req, res) => {
                                     _id: '$_id',
                                     name: '$ukService.title',
                                     price: '$ukService.price',
-                                    icon: { $ifNull: ['$ukService.serviceImage', '$categoryArr.icon'] },
+                                    icon: { $ifNull: ['$ukService.icon', '$categoryArr.icon'] },
+                                    serviceImage: { $ifNull: ['$ukService.serviceImage', null] },
                                     averageRating: 0,
                                     description: '$ukService.description',
                                     subServices: { $ifNull: ['$ukService.subServices', []] },
@@ -132,6 +133,7 @@ export const getFeaturedServiceRequests = async (req, res) => {
                                         name: '$$s.name',
                                         price: { $ifNull: ['$ukService.price', '$$s.price'] },
                                         icon: '$$s.icon',
+                                        serviceImage: { $ifNull: ['$ukService.serviceImage', '$$s.serviceImage'] },
                                         averageRating: '$$s.averageRating',
                                         description: { $ifNull: ['$ukService.description', '$$s.description'] },
                                         subServices: {
@@ -311,7 +313,8 @@ export const getAllEligibleRequests = async (req, res) => {
                                 _id: '$_id',
                                 name: '$ukService.title',
                                 price: '$ukService.price',
-                                icon: { $ifNull: ['$ukService.serviceImage', '$categoryArr.icon'] },
+                                icon: { $ifNull: ['$ukService.icon', '$categoryArr.icon'] },
+                                serviceImage: { $ifNull: ['$ukService.serviceImage', null] },
                                 description: '$ukService.description',
                                 subServices: { $ifNull: ['$ukService.subServices', []] },
                                 estimatedTime: '$ukService.estimatedTime',
@@ -327,6 +330,7 @@ export const getAllEligibleRequests = async (req, res) => {
                                     name: '$$s.name',
                                     price: { $ifNull: ['$ukService.price', '$$s.price'] },
                                     icon: '$$s.icon',
+                                    serviceImage: { $ifNull: ['$ukService.serviceImage', '$$s.serviceImage'] },
                                     description: { $ifNull: ['$ukService.description', '$$s.description'] },
                                     subServices: {
                                         $cond: [

@@ -57,6 +57,18 @@ const errorHandler = (err, req, res, next) => {
   }
 
   // ========================
+  // 🔴 Payload Too Large (Multer / Body Parser)
+  // ========================
+  if (err.code === "LIMIT_FILE_SIZE" || err.type === "entity.too.large" || err.status === 413) {
+    return res.status(413).json({
+      success: false,
+      code: 413,
+      message: "File size too large. Maximum allowed size is 5MB.",
+      data: null,
+    });
+  }
+
+  // ========================
   // 🔴 Final fallback
   // ========================
   return res.status(500).json({
