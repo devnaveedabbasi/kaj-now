@@ -1,10 +1,10 @@
-import  {ApiError} from '../utils/errorHandler.js';
+import { ApiError } from '../utils/errorHandler.js';
 
 const errorHandler = (err, req, res, next) => {
-  console.error("🔥 Error:", err);
+  console.error(" Error:", err);
 
   // ========================
-  // 🔴 Mongoose Validation
+  //  Mongoose Validation
   // ========================
   if (err.name === "ValidationError") {
     const errors = Object.values(err.errors).map(e => e.message);
@@ -19,7 +19,7 @@ const errorHandler = (err, req, res, next) => {
   }
 
   // ========================
-  // 🔴 Cast Error (invalid ID)
+  //  Cast Error (invalid ID)
   // ========================
   if (err.name === "CastError") {
     return res.status(400).json({
@@ -31,7 +31,7 @@ const errorHandler = (err, req, res, next) => {
   }
 
   // ========================
-  // 🔴 Duplicate Key
+  //  Duplicate Key
   // ========================
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue)[0];
@@ -45,7 +45,7 @@ const errorHandler = (err, req, res, next) => {
   }
 
   // ========================
-  // 🔴 Custom ApiError
+  //  Custom ApiError
   // ========================
   if (err instanceof ApiError) {
     return res.status(err.statusCode).json({
@@ -57,7 +57,7 @@ const errorHandler = (err, req, res, next) => {
   }
 
   // ========================
-  // 🔴 Payload Too Large (Multer / Body Parser)
+  //  Payload Too Large (Multer / Body Parser)
   // ========================
   if (err.code === "LIMIT_FILE_SIZE" || err.type === "entity.too.large" || err.status === 413) {
     return res.status(413).json({
@@ -69,7 +69,7 @@ const errorHandler = (err, req, res, next) => {
   }
 
   // ========================
-  // 🔴 Final fallback
+  //  Final fallback
   // ========================
   return res.status(500).json({
     success: false,

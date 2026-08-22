@@ -12,6 +12,20 @@ import { initSocket } from "./config/socket.js";
 const app = express();
 const server = createServer(app);
 
+app.use((req, res, next) => {
+  const start = Date.now();
+
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+
+    console.log(
+      `[API] ${req.method} ${req.originalUrl} → ${res.statusCode} ${duration}ms IP=${req.ip}`
+    );
+  });
+
+  next();
+});
+
 // ── Socket.IO Setup ───────────────────────────────────────────
 const io = new Server(server, {
   cors: {
@@ -122,29 +136,7 @@ app.use((req, res, next) => {
 // ----------------------
 // GLOBAL ERROR HANDLER
 // ----------------------
-app.use((err, req, res, next) => {
-  let error = err;
-
-  if (!(error instanceof ApiError)) {
-    const statusCode = error.statusCode || 500;
-    const message = error.message || "Internal Server Error";
-    error = new ApiError(statusCode, message, error.errors || []);
-  }
-
-  const response = {
-    code: error.statusCode,
-    message: error.message,
-    success: error.success,
-    ...(process.env.NODE_ENV === "development" && {
-      stack: error.stack,
-      errors: error.errors,
-    }),
-  };
-
-  console.error("Error:", response);
-
-  res.status(error.statusCode).json(response);
-});
+app.use(errorHandler);
 
 // DB connect
 connectDb();

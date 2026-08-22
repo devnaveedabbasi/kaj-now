@@ -7,7 +7,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/notification.js';
 
-const MIN_WITHDRAWAL_AMOUNT=500
+const MIN_WITHDRAWAL_AMOUNT = 500
 // Request withdrawal
 export const requestWithdrawal = async (req, res) => {
   const session = await mongoose.startSession();
@@ -55,7 +55,7 @@ export const requestWithdrawal = async (req, res) => {
       throw new ApiError(400, `Insufficient balance. Available: ${wallet.balance}`);
     }
 
-    // 🔥 Idempotency / duplicate protection (basic)
+    //  Idempotency / duplicate protection (basic)
     const existingPending = await Withdrawal.findOne({
       providerId: provider._id,
       requestedAmount: amount,
@@ -169,162 +169,162 @@ export const requestWithdrawal = async (req, res) => {
 };
 // Get my withdrawal history (Provider)
 export const getMyWithdrawals = async (req, res) => {
-    try {
-        const userId = req.user._id;
-        const { status, page = 1, limit = 10 } = req.query;
+  try {
+    const userId = req.user._id;
+    const { status, page = 1, limit = 10 } = req.query;
 
-        const provider = await Provider.findOne({ userId });
-        if (!provider) {
-            throw new ApiError(404, 'Provider profile not found');
-        }
-
-        let query = { providerId: provider._id };
-        if (status && status !== 'all') {
-            query.status = status;
-        }
-
-        const skip = (page - 1) * limit;
-
-        const [withdrawals, total] = await Promise.all([
-            Withdrawal.find(query)
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .lean(),
-            Withdrawal.countDocuments(query)
-        ]);
-
-        //  AGGREGATION WITH CORRECT FIELDS
-        const stats = await Withdrawal.aggregate([
-            { $match: { providerId: provider._id } },
-            {
-                $group: {
-                    _id: '$status',
-                    totalRequested: { $sum: '$requestedAmount' },
-                    totalFees: { $sum: '$platformFee' },
-                    totalPayable: { $sum: '$payableAmount' },
-                    count: { $sum: 1 }
-                }
-            }
-        ]);
-
-        //  FIXED STATS STRUCTURE
-        const withdrawalStats = {
-            totalRequested: 0,
-            totalFees: 0,
-            totalPaid: 0, // what user actually receives
-            pending: 0,
-            completed: 0,
-            rejected: 0
-        };
-
-        stats.forEach(stat => {
-            if (stat._id === 'pending') {
-                withdrawalStats.pending = stat.count;
-                withdrawalStats.totalRequested += stat.totalRequested;
-                withdrawalStats.totalFees += stat.totalFees;
-            }
-
-            if (stat._id === 'completed') {
-                withdrawalStats.completed = stat.count;
-                withdrawalStats.totalRequested += stat.totalRequested;
-                withdrawalStats.totalFees += stat.totalFees;
-                withdrawalStats.totalPaid += stat.totalPayable; //  actual money received
-            }
-
-            if (stat._id === 'rejected') {
-                withdrawalStats.rejected = stat.count;
-            }
-        });
-
-        const totalPages = Math.ceil(total / limit);
-
-        return res.status(200).json(
-            new ApiResponse(200, {
-                withdrawals,
-                stats: withdrawalStats,
-                pagination: {
-                    currentPage: parseInt(page),
-                    totalPages,
-                    totalItems: total,
-                    itemsPerPage: parseInt(limit)
-                }
-            }, 'Withdrawal history retrieved successfully')
-        );
-
-    } catch (error) {
-        if (error instanceof ApiError) {
-            return res.status(error.statusCode)
-                .json(new ApiResponse(error.statusCode, null, error.message));
-        }
-        return res.status(500)
-            .json(new ApiResponse(500, null, error.message));
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+      throw new ApiError(404, 'Provider profile not found');
     }
+
+    let query = { providerId: provider._id };
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [withdrawals, total] = await Promise.all([
+      Withdrawal.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Withdrawal.countDocuments(query)
+    ]);
+
+    //  AGGREGATION WITH CORRECT FIELDS
+    const stats = await Withdrawal.aggregate([
+      { $match: { providerId: provider._id } },
+      {
+        $group: {
+          _id: '$status',
+          totalRequested: { $sum: '$requestedAmount' },
+          totalFees: { $sum: '$platformFee' },
+          totalPayable: { $sum: '$payableAmount' },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    //  FIXED STATS STRUCTURE
+    const withdrawalStats = {
+      totalRequested: 0,
+      totalFees: 0,
+      totalPaid: 0, // what user actually receives
+      pending: 0,
+      completed: 0,
+      rejected: 0
+    };
+
+    stats.forEach(stat => {
+      if (stat._id === 'pending') {
+        withdrawalStats.pending = stat.count;
+        withdrawalStats.totalRequested += stat.totalRequested;
+        withdrawalStats.totalFees += stat.totalFees;
+      }
+
+      if (stat._id === 'completed') {
+        withdrawalStats.completed = stat.count;
+        withdrawalStats.totalRequested += stat.totalRequested;
+        withdrawalStats.totalFees += stat.totalFees;
+        withdrawalStats.totalPaid += stat.totalPayable; //  actual money received
+      }
+
+      if (stat._id === 'rejected') {
+        withdrawalStats.rejected = stat.count;
+      }
+    });
+
+    const totalPages = Math.ceil(total / limit);
+
+    return res.status(200).json(
+      new ApiResponse(200, {
+        withdrawals,
+        stats: withdrawalStats,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalItems: total,
+          itemsPerPage: parseInt(limit)
+        }
+      }, 'Withdrawal history retrieved successfully')
+    );
+
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode)
+        .json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500)
+      .json(new ApiResponse(500, null, error.message));
+  }
 };
 
 // Get withdrawal by ID
 export const getWithdrawalById = async (req, res) => {
-    try {
-        const { withdrawalId } = req.params;
-        const userId = req.user._id;
+  try {
+    const { withdrawalId } = req.params;
+    const userId = req.user._id;
 
-        if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
-            throw new ApiError(400, 'Invalid withdrawal ID');
-        }
-
-        const provider = await Provider.findOne({ userId });
-        if (!provider) {
-            throw new ApiError(404, 'Provider profile not found');
-        }
-
-        const withdrawal = await Withdrawal.findOne({ _id: withdrawalId, providerId: provider._id });
-        if (!withdrawal) {
-            throw new ApiError(404, 'Withdrawal not found');
-        }
-
-        return res.status(200).json(
-            new ApiResponse(200, withdrawal, 'Withdrawal details retrieved successfully')
-        );
-    } catch (error) {
-        if (error instanceof ApiError) {
-            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        }
-        return res.status(500).json(new ApiResponse(500, null, error.message));
+    if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
+      throw new ApiError(400, 'Invalid withdrawal ID');
     }
+
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+      throw new ApiError(404, 'Provider profile not found');
+    }
+
+    const withdrawal = await Withdrawal.findOne({ _id: withdrawalId, providerId: provider._id });
+    if (!withdrawal) {
+      throw new ApiError(404, 'Withdrawal not found');
+    }
+
+    return res.status(200).json(
+      new ApiResponse(200, withdrawal, 'Withdrawal details retrieved successfully')
+    );
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500).json(new ApiResponse(500, null, error.message));
+  }
 };
 
 export const getWithdrawalReceipt = async (req, res) => {
-    try {
-        const { withdrawalId } = req.params;
-        const userId = req.user._id;
+  try {
+    const { withdrawalId } = req.params;
+    const userId = req.user._id;
 
-        if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
-            throw new ApiError(400, 'Invalid withdrawal ID');
-        }
-
-        const provider = await Provider.findOne({ userId });
-        if (!provider) {
-            throw new ApiError(404, 'Provider profile not found');
-        }
-
-        const withdrawal = await Withdrawal.findOne({ 
-            _id: withdrawalId, 
-            providerId: provider._id 
-        });
-
-        if (!withdrawal) {
-            throw new ApiError(404, 'Withdrawal not found');
-        }
-
-        if (!withdrawal.receiptImage) {
-            throw new ApiError(404, 'Receipt not found');
-        }
-
-        return res.redirect(withdrawal.receiptImage);
-    } catch (error) {
-        if (error instanceof ApiError) {
-            return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
-        }
-        return res.status(500).json(new ApiResponse(500, null, error.message));
+    if (!mongoose.Types.ObjectId.isValid(withdrawalId)) {
+      throw new ApiError(400, 'Invalid withdrawal ID');
     }
+
+    const provider = await Provider.findOne({ userId });
+    if (!provider) {
+      throw new ApiError(404, 'Provider profile not found');
+    }
+
+    const withdrawal = await Withdrawal.findOne({
+      _id: withdrawalId,
+      providerId: provider._id
+    });
+
+    if (!withdrawal) {
+      throw new ApiError(404, 'Withdrawal not found');
+    }
+
+    if (!withdrawal.receiptImage) {
+      throw new ApiError(404, 'Receipt not found');
+    }
+
+    return res.redirect(withdrawal.receiptImage);
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    }
+    return res.status(500).json(new ApiResponse(500, null, error.message));
+  }
 };

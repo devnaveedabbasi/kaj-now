@@ -51,7 +51,7 @@ export async function register(req, res) {
     throw new ApiError(400, 'Only Bangladesh phone numbers is allowed.');
   }
 
-  // 🔥 CHECK IF ADMIN ALREADY EXISTS
+  //  CHECK IF ADMIN ALREADY EXISTS
   const existingAdmin = await User.findOne({ role: "admin" });
 
   if (existingAdmin) {
@@ -152,8 +152,8 @@ export async function verifyEmail(req, res) {
   await user.save();
 
   const token = signToken(user._id, user.role);
-  user.token=token;
-await user.save();
+  user.token = token;
+  await user.save();
   const fresh = await User.findById(user._id);
   res.status(200).json(
     new ApiResponse(
@@ -232,8 +232,8 @@ export async function login(req, res) {
   }
 
   const token = signToken(user._id, user.role);
-  user.token=token;
-await user.save();
+  user.token = token;
+  await user.save();
   res.status(200).json(
     new ApiResponse(
       200,
