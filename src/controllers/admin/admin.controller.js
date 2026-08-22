@@ -720,12 +720,12 @@ export const rejectProviderKyc = async (req, res) => {
       throw new ApiError(404, 'Provider not found');
     }
 
-    // Check if already pending or rejected
-    if (provider.kycStatus === 'pending') {
-      throw new ApiError(400, 'KYC is already pending');
+    // Check if already rejected
+    if (provider.kycStatus === 'rejected') {
+      throw new ApiError(400, 'KYC is already rejected');
     }
 
-    provider.kycStatus = 'pending';
+    provider.kycStatus = 'rejected';
     provider.isKycCompleted = false;
     await provider.save();
 
