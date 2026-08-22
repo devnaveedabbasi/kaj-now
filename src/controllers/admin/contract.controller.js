@@ -166,9 +166,16 @@ export const approveContract = async (req, res) => {
             referenceId: provider._id
         });
 
+
         // Email
         await sendContractApprovedEmail(provider.userId.email, { userName: provider.userId.name });
-
+        await createNotification({
+            userId: provider.userId._id,
+            title: 'Contract Approved!',
+            message: 'Your provider contract has been approved. You can now start accepting jobs!',
+            type: 'kyc',
+            referenceId: provider._id
+        });
         res.status(200).json(
             new ApiResponse(200, {
                 providerId: provider._id,

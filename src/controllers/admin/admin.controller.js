@@ -407,17 +407,17 @@ export const getProviderStats = async (req, res) => {
     const { region } = req.query;
     const regionStages = region && ["UK", "BD"].includes(region)
       ? [
-          {
-            $lookup: {
-              from: "users",
-              localField: "userId",
-              foreignField: "_id",
-              as: "ownerUser",
-            },
+        {
+          $lookup: {
+            from: "users",
+            localField: "userId",
+            foreignField: "_id",
+            as: "ownerUser",
           },
-          { $unwind: "$ownerUser" },
-          { $match: { "ownerUser.region": region } },
-        ]
+        },
+        { $unwind: "$ownerUser" },
+        { $match: { "ownerUser.region": region } },
+      ]
       : [];
 
     const stats = await Provider.aggregate([
@@ -611,7 +611,7 @@ export const approveProviderKyc = async (req, res) => {
       await createNotification({
         userId: providerUser._id,
         title: 'KYC Approved — Sign Your Contract',
-        message: 'Your KYC has been approved! Please review, sign, and upload your provider contract to get started.',
+        message: 'Your KYC has been approved! Please review your provider contract to get started.',
         type: 'kyc',
         referenceId: provider._id
       });
