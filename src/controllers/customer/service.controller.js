@@ -153,7 +153,7 @@ export const getServiceById = async (req, res) => {
             .populate({
                 path: 'serviceId',
                 match: { _id: new mongoose.Types.ObjectId(serviceId) },  // sirf wahi service jo maangi hai
-                select: 'name price icon averageRating description reviews subServices'
+                select: 'name price icon serviceImage averageRating description reviews subServices'
             })
             .populate({
                 path: 'providerId',
@@ -194,7 +194,7 @@ export const getServiceById = async (req, res) => {
         })
             .populate({
                 path: 'serviceId',
-                select: 'name price icon averageRating description'
+                select: 'name price icon serviceImage averageRating description'
             })
             .populate({
                 path: 'providerId',
@@ -210,6 +210,7 @@ export const getServiceById = async (req, res) => {
             ...sr,
             serviceId: (sr.serviceId || []).map(s => ({
                 ...s,
+                serviceImage: sr.ukService?.serviceImage || s.serviceImage,
                 price: s.price ?? sr.ukService?.price,
                 description: s.description ?? sr.ukService?.description,
                 subServices: sr.ukService?.subServices?.length ? sr.ukService.subServices : (s.subServices || []),
@@ -230,11 +231,12 @@ export const getServiceById = async (req, res) => {
                     _id: targetService._id,
                     name: targetService.name,
                     icon: targetService.icon,
+                    serviceImage: service.ukService?.serviceImage || targetService.serviceImage,
                     // UK templates have no price/description of their own —
                     // fall back to what the provider submitted on the request.
                     price: targetService.price ?? service.ukService?.price,
                     description: targetService.description ?? service.ukService?.description,
-                    images: service.ukService?.serviceImage ? [service.ukService.serviceImage] : [],
+                    serviceImage: service.ukService?.serviceImage ? [service.ukService.serviceImage] : (targetService.serviceImage ? [targetService.serviceImage] : []),
                     averageRating: targetService.averageRating,
                     reviews: targetService.reviews || [],
                     subServices: (service.ukService?.subServices?.length ? service.ukService.subServices : targetService.subServices) || [],
