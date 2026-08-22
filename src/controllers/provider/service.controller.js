@@ -440,7 +440,7 @@ export const getMyServices = async (req, res) => {
 
         const provider = await Provider.findOne({ userId })
             .populate("userId", "name email profilePicture")
-            .populate("approvedServices", "name icon price description averageRating isActive isDeleted");
+            .populate("approvedServices", "name icon serviceImage price description averageRating isActive isDeleted");
 
         if (!provider) throw new ApiError(404, "Provider profile not found");
 
@@ -449,7 +449,7 @@ export const getMyServices = async (req, res) => {
         if (status) query.status = status;
 
         const serviceRequests = await ServiceRequest.find(query)
-            .populate("serviceId", "name icon price description averageRating isActive isDeleted")
+            .populate("serviceId", "name icon serviceImage price description averageRating isActive isDeleted")
             .lean();
 
         // Har request ko format karo with its services. UK listings carry
@@ -485,7 +485,7 @@ export const getMyServices = async (req, res) => {
                 _id: service._id,
                 name: service.name,
                 icon: uk?.icon || service.icon,
-                serviceImage: uk?.serviceImage,
+                serviceImage: uk?.serviceImage || service.serviceImage,
                 price: uk?.price ?? service.price,
                 description: uk?.description || service.description,
                 subServices: uk?.subServices?.length ? uk.subServices : (service.subServices || []),
