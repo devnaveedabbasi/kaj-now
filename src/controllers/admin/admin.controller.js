@@ -593,6 +593,7 @@ export const approveProviderKyc = async (req, res) => {
 
     provider.kycStatus = 'approved';
     provider.isKycCompleted = true;
+    provider.kycRejectionReason = '';
 
     if (isUK) {
       await generateContractPdfIfMissing();
@@ -727,6 +728,7 @@ export const rejectProviderKyc = async (req, res) => {
 
     provider.kycStatus = 'rejected';
     provider.isKycCompleted = false;
+    provider.kycRejectionReason = reason;
     await provider.save();
 
     // Send notification

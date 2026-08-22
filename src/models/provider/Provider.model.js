@@ -90,6 +90,11 @@ const providerSchema = new mongoose.Schema(
       enum: ["pending", "approved", "suspended", "rejected"],
       default: "pending"
     },
+    kycRejectionReason: {
+      type: String,
+      trim: true,
+      default: ''
+    },
     bankDetails: {
       accountHolderName: { type: String, trim: true, default: '' },
       bankName: { type: String, trim: true, default: '' },
