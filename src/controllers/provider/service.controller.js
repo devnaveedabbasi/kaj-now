@@ -540,7 +540,7 @@ export const getServiceById = async (req, res) => {
             providerId: provider._id
         })
             .populate('providerId', 'userId businessName businessPhone businessEmail location')
-            .populate('serviceId', 'name price icon description categoryId averageRating')
+            .populate('serviceId', 'name price icon serviceImage description categoryId averageRating')
             .populate('categoryId', 'name icon')
             .lean();
 
@@ -584,7 +584,8 @@ export const getServiceById = async (req, res) => {
                 _id: serviceRequest._id,
                 name: uk.title,
                 description: uk.description,
-                icon: uk.serviceImage,
+                icon: uk.icon || null,
+                serviceImage: uk.serviceImage || null,
                 price: uk.price,
                 averageRating: 0,
                 subServices: uk.subServices || [],
@@ -608,6 +609,7 @@ export const getServiceById = async (req, res) => {
                     price: uk.price ?? foundService.price,
                     description: uk.description || foundService.description,
                     icon: uk.serviceImage || foundService.icon,
+                    serviceImage: uk.serviceImage || foundService.serviceImage,
                     subServices: uk.subServices?.length ? uk.subServices : (foundService.subServices || []),
                     estimatedTime: uk.estimatedTime ?? foundService.estimatedTime,
                     availability: uk.availability ?? foundService.availability
@@ -650,7 +652,8 @@ export const getServiceById = async (req, res) => {
             isCustomService: isCustomFlow,
             name: targetService?.name || 'N/A',
             description: targetService?.description || 'No description available',
-            serviceImage: targetService?.icon || null,
+            serviceImage: targetService?.serviceImage || null,
+            icon: targetService?.icon || null,
             price: targetService?.price || 0,
             isActive: serviceRequest.status === 'approved',
             averageRating: targetService?.averageRating || 0,

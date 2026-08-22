@@ -63,7 +63,7 @@ export const getAllServiceRequests = async (req, res) => {
                     select: 'name email'
                 }
             })
-            .populate('serviceId', 'name icon price')
+            .populate('serviceId', 'name icon serviceImage price')
             .populate('categoryId', 'name')
             .populate('reviewedByAdmin', 'name email')
             .sort(sortQuery)
@@ -121,7 +121,7 @@ export const getServiceRequestById = async (req, res) => {
                 select: 'name email profilePicture'
             }
         })
-        .populate('serviceId', 'name icon price description')
+        .populate('serviceId', 'name icon serviceImage price description')
         .populate('categoryId', 'name icon')
         .populate('reviewedByAdmin', 'name email');
 
@@ -186,7 +186,7 @@ export const approveServiceRequest = async (req, res) => {
             select: 'userId',
             populate: { path: 'userId', select: 'name email profilePicture' }
         },
-        { path: 'serviceId', select: 'name icon price' },
+        { path: 'serviceId', select: 'name icon serviceImage price' },
         { path: 'categoryId', select: 'name' },
         { path: 'reviewedByAdmin', select: 'name email profilePicture' }
     ]);
@@ -228,7 +228,7 @@ export const rejectServiceRequest = async (req, res) => {
             select: 'userId',
             populate: { path: 'userId', select: 'name email profilePicture' }
         },
-        { path: 'serviceId', select: 'name icon price' },
+        { path: 'serviceId', select: 'name icon serviceImage price' },
         { path: 'categoryId', select: 'name' },
         { path: 'reviewedByAdmin', select: 'name email profilePicture' }
     ]);
@@ -251,7 +251,7 @@ export const getAllServiceAssignments = async (req, res) => {
                     select: 'name email'
                 }
             })
-            .populate('serviceId', 'name icon price')
+            .populate('serviceId', 'name icon serviceImage price')
             .populate('categoryId', 'name')
             .populate('reviewedByAdmin', 'name email')
             .sort({ reviewedAt: -1 })
