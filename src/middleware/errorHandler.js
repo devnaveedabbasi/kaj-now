@@ -63,7 +63,7 @@ const errorHandler = (err, req, res, next) => {
     return res.status(413).json({
       success: false,
       code: 413,
-      message: "File size too large. Maximum allowed size is 5MB.",
+      message: "File size too large. Maximum allowed size is 15MB.",
       data: null,
     });
   }

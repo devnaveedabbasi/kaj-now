@@ -2,7 +2,7 @@ import multer from 'multer';
 
 const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const DOCUMENT_MIMES = new Set([...IMAGE_MIMES, 'application/pdf']);
-const uploader = ({ maxSize = 5 * 1024 * 1024, documents = true } = {}) => multer({
+const uploader = ({ maxSize = 15 * 1024 * 1024, documents = true } = {}) => multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: maxSize },
   fileFilter: (_req, file, cb) => (documents ? DOCUMENT_MIMES : IMAGE_MIMES).has(file.mimetype)
