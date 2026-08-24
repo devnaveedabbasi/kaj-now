@@ -43,6 +43,7 @@ export async function bookJob(req, res) {
     } = req.body;
     const subServiceIds = req.body.subServiceIds || req.body.subserviceIds || [];
 
+    console.log(req.body, 'body')
     // ── Supported Methods ────────────────────────────────────────────
     const SUPPORTED_METHODS = ['card', 'cod', 'bkash', 'nagad', 'rocket', 'bank'];
     if (!paymentMethod || !SUPPORTED_METHODS.includes(paymentMethod)) {
@@ -189,8 +190,8 @@ export async function bookJob(req, res) {
 
     if (user.region === 'UK') {
       const basePrice = serviceRequest?.ukService?.price || 0;
-    console.log(serviceRequest?.ukService, 'serviceRequest.ukService')
-    console.log(basePrice, 'basePrice')
+      console.log(serviceRequest?.ukService, 'serviceRequest.ukService')
+      console.log(basePrice, 'basePrice')
       if (subServiceIds && subServiceIds.length > 0) {
         const ids = Array.isArray(subServiceIds) ? subServiceIds : [subServiceIds];
         const availableSubs = serviceRequest?.ukService?.subServices || [];
@@ -1101,7 +1102,7 @@ export const getMyOrders = async (req, res) => {
             select: 'name email profilePicture phoneNumber'
           }
         })
-        .populate('service', 'name icon price description averageRating')
+        .populate('service', 'name icon serviceImage price description averageRating')
         .populate('customer', 'name email profilePicture')
         .sort(sort)
         .skip(skip)
@@ -1165,6 +1166,7 @@ export const getMyOrders = async (req, res) => {
           _id: order.service?._id,
           name: order.service?.name,
           icon: order.service?.icon,
+          serviceImage: order.service?.serviceImage,
           price: order.service?.price,
           description: order.service?.description,
           averageRating: order.service?.averageRating || 0
@@ -1247,7 +1249,7 @@ export const getOrderById = async (req, res) => {
           select: 'name email profilePicture phoneNumber'
         }
       })
-      .populate('service', 'name icon price description averageRating')
+      .populate('service', 'name icon serviceImage price description averageRating')
       .populate('customer', 'name email profilePicture')
       .lean();
 
@@ -1270,6 +1272,7 @@ export const getOrderById = async (req, res) => {
         _id: order.service?._id,
         name: order.service?.name,
         icon: order.service?.icon,
+        serviceImage: order.service?.serviceImage,
         price: order.service?.price,
         description: order.service?.description,
         averageRating: order.service?.averageRating || 0

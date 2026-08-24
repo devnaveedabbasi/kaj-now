@@ -9,6 +9,7 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 import { createNotification } from '../../utils/notification.js';
 import { createActivityLog } from '../../utils/createActivityLog.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
+import Service from '../../models/admin/service.model.js';
 import {
   NON_CANCELLABLE_JOB_STATUSES,
   releaseEscrowForCancellation,
@@ -146,8 +147,20 @@ export const getAllJobs = async (req, res) => {
         if (customerId) query.customer = customerId;
 
         if (search) {
+            const matchedUsers = await User.find({ name: { $regex: search, $options: 'i' } }).select('_id').lean();
+            const userIds = matchedUsers.map(u => u._id);
+
+            const matchedProviders = await Provider.find({ userId: { $in: userIds } }).select('_id').lean();
+            const providerIds = matchedProviders.map(p => p._id);
+
+            const matchedServices = await Service.find({ name: { $regex: search, $options: 'i' } }).select('_id').lean();
+            const serviceIds = matchedServices.map(s => s._id);
+
             query.$or = [
-                { orderId: { $regex: search, $options: 'i' } }
+                { orderId: { $regex: search, $options: 'i' } },
+                { customer: { $in: userIds } },
+                { provider: { $in: providerIds } },
+                { service: { $in: serviceIds } }
             ];
         }
 

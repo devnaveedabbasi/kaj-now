@@ -1,7 +1,7 @@
 // middleware/auth.js
 import jwt from 'jsonwebtoken';
 import User from '../models/User.model.js';
-import  Provider from '../models/provider/Provider.model.js';
+import Provider from '../models/provider/Provider.model.js';
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -24,7 +24,7 @@ const authMiddleware = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     // Validate decoded has userId
     if (!decoded.userId) {
       return res.status(401).json({
@@ -43,7 +43,7 @@ const authMiddleware = async (req, res, next) => {
     }
 
 
-      const blockedStatuses = ['suspended', 'blocked'];
+    const blockedStatuses = ['suspended', 'blocked'];
     if (blockedStatuses.includes(user.status)) {
       return res.status(401).json({
         success: false,
@@ -66,7 +66,7 @@ const authMiddleware = async (req, res, next) => {
           message: 'Provider profile not found. Please complete your profile.'
         });
       }
-      
+
       if (provider.kycStatus === 'suspended' || provider.kycStatus === 'blocked') {
         return res.status(403).json({
           success: false,
@@ -74,7 +74,7 @@ const authMiddleware = async (req, res, next) => {
         });
       }
 
-      
+
       // Provider specific info attach kar do req mein
       req.provider = provider;
     }
@@ -94,7 +94,7 @@ const authMiddleware = async (req, res, next) => {
         message: 'Invalid token'
       });
     }
-    
+
     console.error('Auth middleware error:', error);
     res.status(401).json({
       success: false,
@@ -111,7 +111,7 @@ const authorize = (...roles) => {
         message: 'Authentication required'
       });
     }
-    
+
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false,
