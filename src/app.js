@@ -47,7 +47,9 @@ const allowedOrigins = [
   "http://103.132.96.120:3000",
   "http://192.168.1.46:3000",
   "http://172.30.100.111:3000",
-  "https://api.tribicx.globaleselect.it"
+  "https://api.tribicx.globaleselect.it",
+  "https://sandbox.sslcommerz.com",
+  "https://securepay.sslcommerz.com"
 ];
 
 
