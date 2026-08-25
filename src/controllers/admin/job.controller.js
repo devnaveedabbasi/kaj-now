@@ -769,6 +769,14 @@ export const assignProvider = async (req, res) => {
         job.rejectionReason = null;
 
         await job.save({ session });
+
+        // Update the payment record if it exists to point to the new provider
+        const payment = await Payment.findOne({ jobId: job._id }).session(session);
+        if (payment) {
+            payment.providerId = provider._id;
+            await payment.save({ session });
+        }
+
         await session.commitTransaction();
 
         if (cancelledProviderUserId) {
