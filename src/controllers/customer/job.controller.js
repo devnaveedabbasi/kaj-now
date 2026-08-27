@@ -42,7 +42,17 @@ export async function bookJob(req, res) {
       schedule,
       paymentMethod,
     } = req.body;
-    const subServiceIds = req.body.subServiceIds || req.body.subserviceIds || [];
+    let subServicesInput = req.body.subServices || req.body.subServiceIds || req.body.subserviceIds || [];
+    if (!Array.isArray(subServicesInput)) {
+      subServicesInput = [subServicesInput];
+    }
+    const subServiceIds = subServicesInput.map(item => {
+      if (!item) return null;
+      if (typeof item === 'object') {
+        return (item._id || item.id || item).toString();
+      }
+      return item.toString();
+    }).filter(Boolean);
 
     console.log(req.body, 'body')
     // ── Supported Methods ────────────────────────────────────────────
@@ -96,9 +106,6 @@ export async function bookJob(req, res) {
       }
     }
 
-    if (subServiceIds && !Array.isArray(subServiceIds)) {
-      throw new ApiError(400, 'subServiceIds must be an array of sub-service IDs');
-    }
     console.log(subServiceIds, 'subserviceIds')
     // ── Fetch Documents ──────────────────────────────────────────────
     const user = await User.findById(userId).session(session);
@@ -189,7 +196,7 @@ export async function bookJob(req, res) {
     let servicePrice;
     let selectedSubServices = []; // UK only; empty for BD
 
-    if (user.region === 'UK') {
+    if (user.region === 'UK' || serviceRequest?.region === 'UK') {
       const basePrice = serviceRequest?.ukService?.price || 0;
       console.log(serviceRequest?.ukService, 'serviceRequest.ukService')
       console.log(basePrice, 'basePrice')
@@ -339,7 +346,7 @@ export async function bookJob(req, res) {
     // ────────────────────────────────────────────────────────────────
     // UK REGION — Stripe Payment Flow
     // ────────────────────────────────────────────────────────────────
-    if (user.region === 'UK') {
+    if (user.region === 'UK' || serviceRequest?.region === 'UK') {
       if (paymentMethod !== 'card') {
         throw new ApiError(400, 'Only card payments are supported in the UK region.');
       }
