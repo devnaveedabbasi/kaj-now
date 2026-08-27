@@ -76,6 +76,14 @@ export function formatServiceDetails(service, providerId, customerRegion, srMap)
     ? serviceRequest.ukService.subServices
     : (service.subServices || []);
 
+  const estimatedTime = (isUK && serviceRequest?.ukService?.estimatedTime)
+    ? serviceRequest.ukService.estimatedTime
+    : (service.estimatedTime || null);
+
+  const availability = (isUK && serviceRequest?.ukService?.availability)
+    ? serviceRequest.ukService.availability
+    : (service.availability || []);
+
   return {
     _id: sId,
     name,
@@ -84,6 +92,8 @@ export function formatServiceDetails(service, providerId, customerRegion, srMap)
     price,
     description,
     averageRating: service.averageRating || 0,
-    subServices
+    subServices,
+    estimatedTime,
+    availability
   };
 }
