@@ -19,6 +19,7 @@ import {
   applyCancellationMetadata,
   releaseEscrowForCancellation,
 } from '../../utils/jobCancellation.js';
+import { getServiceDetailsForJobs, formatServiceDetails } from '../../utils/jobFormatter.js';
 
 async function generateOrderId() {
   const count = await Job.countDocuments();
@@ -245,6 +246,7 @@ export async function bookJob(req, res) {
             provider: provider._id,
             customer: user._id,
             service: serviceId,
+            serviceRequestId: serviceRequest._id,
             amount: servicePrice,
             status: 'pending',
             paymentStatus: 'pending',
@@ -358,6 +360,7 @@ export async function bookJob(req, res) {
             userId: user._id,
             providerId: provider._id,
             serviceId: service._id,
+            serviceRequestId: serviceRequest._id,
             servicePrice,
             platformFee,
             providerAmount,
@@ -452,6 +455,7 @@ export async function bookJob(req, res) {
             provider: provider._id,
             customer: user._id,
             service: serviceId,
+            serviceRequestId: serviceRequest._id,
             amount: servicePrice,
             status: 'pending',
             paymentStatus: 'held_in_escrow',
@@ -533,6 +537,7 @@ export async function bookJob(req, res) {
       userId: user._id,
       providerId: provider._id,
       serviceId: service._id,
+      serviceRequestId: serviceRequest._id,
       servicePrice,
       platformFee,
       providerAmount,
@@ -1152,9 +1157,13 @@ export const getMyOrders = async (req, res) => {
       relatedPayments.forEach(p => paymentsByJobId.set(p.jobId.toString(), p));
     }
 
+    // Bulk-fetch service request details for formatting
+    const srMap = await getServiceDetailsForJobs(orders);
+
     // Format orders
     const formattedOrders = orders.map(order => {
       const payment = paymentsByJobId.get(order._id.toString()) || null;
+      const serviceDetails = formatServiceDetails(order.service, order.provider, req.user?.region || order.customer?.region, srMap);
       return {
         _id: order._id,
         orderId: order.orderId,
@@ -1162,15 +1171,7 @@ export const getMyOrders = async (req, res) => {
         paymentStatus: order.paymentStatus,
         amount: order.amount,
         schedule: order.schedule,
-        service: {
-          _id: order.service?._id,
-          name: order.service?.name,
-          icon: order.service?.icon,
-          serviceImage: order.service?.serviceImage,
-          price: order.service?.price,
-          description: order.service?.description,
-          averageRating: order.service?.averageRating || 0
-        },
+        service: serviceDetails,
         provider: {
           _id: order.provider?._id,
           userId: order.provider?.userId?._id,
@@ -1233,6 +1234,7 @@ export const getMyOrders = async (req, res) => {
 export const getOrderById = async (req, res) => {
   try {
     const { jobId } = req.params;
+    console.log('jobid', jobId)
     const userId = req.user._id;
     console.log('Fetching order details for jobId:', jobId, 'userId:', userId);
     if (!mongoose.Types.ObjectId.isValid(jobId)) {
@@ -1257,6 +1259,10 @@ export const getOrderById = async (req, res) => {
       throw new ApiError(404, 'Order not found');
     }
 
+    // Fetch service request details for formatting
+    const srMap = await getServiceDetailsForJobs(order);
+    const serviceDetails = formatServiceDetails(order.service, order.provider, req.user?.region || order.customer?.region, srMap);
+
     // Get payment details
     const payment = await Payment.findOne({ jobId: order._id }).lean();
 
@@ -1268,15 +1274,7 @@ export const getOrderById = async (req, res) => {
       amount: order.amount,
       schedule: order.schedule,
 
-      service: {
-        _id: order.service?._id,
-        name: order.service?.name,
-        icon: order.service?.icon,
-        serviceImage: order.service?.serviceImage,
-        price: order.service?.price,
-        description: order.service?.description,
-        averageRating: order.service?.averageRating || 0
-      },
+      service: serviceDetails,
       provider: {
         _id: order.provider?._id,
         userId: order.provider?.userId?._id,

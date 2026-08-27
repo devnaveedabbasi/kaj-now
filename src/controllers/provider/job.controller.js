@@ -16,6 +16,7 @@ import {
   releaseEscrowForCancellation,
   markPaymentRefundAutoCompleted,
 } from '../../utils/jobCancellation.js';
+import { getServiceDetailsForJobs, formatServiceDetails } from '../../utils/jobFormatter.js';
 
 // export async function rejectJob(req, res) {
 //   const session = await mongoose.startSession();
@@ -256,49 +257,47 @@ export async function getProviderJobs(req, res) {
       Job.countDocuments(query),
     ]);
 
+    // Bulk-fetch service request details for formatting
+    const srMap = await getServiceDetailsForJobs(jobs);
+
     // Format jobs with provider details
-    const formattedJobs = jobs.map(job => ({
-      _id: job._id,
-      orderId: job.orderId,
-      status: job.status,
-      paymentStatus: job.paymentStatus,
-      amount: job.amount,
-      schedule: job.schedule,
-      paymentMethod: job.paymentMethod,
-      service: {
-        _id: job.service?._id,
-        name: job.service?.name,
-        icon: job.service?.icon,
-        serviceImage: job.service?.serviceImage,
-        price: job.service?.price,
-        description: job.service?.description,
-        averageRating: job.service?.averageRating || 0
-      },
-      customer: {
-        _id: job.customer?._id,
-        name: job.customer?.name,
-        email: job.customer?.email,
-        phone: job.customer?.phone,
-        profilePicture: job.customer?.profilePicture,
-        location: job.customer?.location || null
-      },
-      provider: {
-        _id: job.provider?._id,
-        name: job.provider?.userId?.name,
-        email: job.provider?.userId?.email,
-        phone: job.provider?.userId?.phoneNumber,
-        profilePicture: job.provider?.userId?.profilePicture,
-        location: job.provider?.location || job.provider?.userId?.location
-      },
-      subServices: job.subServices || [],
-      timestamps: {
-        createdAt: job.createdAt,
-        acceptedAt: job.acceptedAt,
-        startedAt: job.startedAt,
-        completedByProviderAt: job.completedByProviderAt,
-        confirmedByUserAt: job.confirmedByUserAt
-      }
-    }));
+    const formattedJobs = jobs.map(job => {
+      const serviceDetails = formatServiceDetails(job.service, job.provider, job.customer?.region, srMap);
+      return {
+        _id: job._id,
+        orderId: job.orderId,
+        status: job.status,
+        paymentStatus: job.paymentStatus,
+        amount: job.amount,
+        schedule: job.schedule,
+        paymentMethod: job.paymentMethod,
+        service: serviceDetails,
+        customer: {
+          _id: job.customer?._id,
+          name: job.customer?.name,
+          email: job.customer?.email,
+          phone: job.customer?.phone,
+          profilePicture: job.customer?.profilePicture,
+          location: job.customer?.location || null
+        },
+        provider: {
+          _id: job.provider?._id,
+          name: job.provider?.userId?.name,
+          email: job.provider?.userId?.email,
+          phone: job.provider?.userId?.phoneNumber,
+          profilePicture: job.provider?.userId?.profilePicture,
+          location: job.provider?.location || job.provider?.userId?.location
+        },
+        subServices: job.subServices || [],
+        timestamps: {
+          createdAt: job.createdAt,
+          acceptedAt: job.acceptedAt,
+          startedAt: job.startedAt,
+          completedByProviderAt: job.completedByProviderAt,
+          confirmedByUserAt: job.confirmedByUserAt
+        }
+      };
+    });
 
     // Get order counts
     const totalOrders = await Job.countDocuments({ provider: provider._id });
@@ -369,6 +368,12 @@ export async function getJobDetails(req, res) {
 
     if (!job) throw new ApiError(404, 'Job not found');
 
+    const srMap = await getServiceDetailsForJobs(job);
+    const serviceDetails = formatServiceDetails(job.service, job.provider, job.customer?.region, srMap);
+    if (serviceDetails) {
+      serviceDetails.reviews = job.service?.reviews || [];
+    }
+
     const payment = await Payment.findOne({ jobId }).lean();
 
     // Format response with all details
@@ -379,16 +384,7 @@ export async function getJobDetails(req, res) {
       paymentStatus: job.paymentStatus,
       amount: job.amount,
       schedule: job.schedule,
-      service: {
-        _id: job.service?._id,
-        name: job.service?.name,
-        icon: job.service?.icon,
-        serviceImage: job.service?.serviceImage,
-        price: job.service?.price,
-        description: job.service?.description,
-        averageRating: job.service?.averageRating || 0,
-        reviews: job.service?.reviews || []
-      },
+      service: serviceDetails,
       customer: {
         _id: job.customer?._id,
         name: job.customer?.name,

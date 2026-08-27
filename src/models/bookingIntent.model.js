@@ -12,6 +12,7 @@ const bookingIntentSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'User' },
   providerId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Provider' },
   serviceId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: 'Service' },
+  serviceRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'ServiceRequest' },
   servicePrice: { type: Number, required: true },
   platformFee: { type: Number, required: true },
   providerAmount: { type: Number, required: true },

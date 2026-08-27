@@ -58,6 +58,7 @@ async function createJobFromIntent(intent, tran_id, session) {
         provider: intent.providerId,
         customer: intent.userId,
         service: intent.serviceId,
+        serviceRequestId: intent.serviceRequestId,
         amount: intent.servicePrice,
         status: 'pending',
         paymentStatus: 'held_in_escrow',
