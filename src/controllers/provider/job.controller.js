@@ -241,8 +241,8 @@ export async function getProviderJobs(req, res) {
     const skip = (page - 1) * limit;
     const [jobs, total] = await Promise.all([
       Job.find(query)
-        .populate('customer', 'name phone email location profilePicture')
-        .populate('service', 'name price icon serviceImage description averageRating') // Service details
+        .populate('customer', 'name phone email location profilePicture region')
+        .populate('service', 'name price icon serviceImage description averageRating region') // Service details
         .populate({
           path: 'provider',
           populate: {
@@ -353,8 +353,8 @@ export async function getJobDetails(req, res) {
           select: 'name email phone profilePicture location'
         }
       })
-      .populate('customer', 'name email phone profilePicture location')
-      .populate('service', 'name price description icon serviceImage averageRating reviews')
+      .populate('customer', 'name email phone profilePicture location region')
+      .populate('service', 'name price description icon serviceImage averageRating reviews region')
       .populate({
         path: 'service',
         populate: {

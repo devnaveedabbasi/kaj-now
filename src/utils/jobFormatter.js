@@ -54,23 +54,23 @@ export function formatServiceDetails(service, providerId, customerRegion, srMap)
   const key = `${sId.toString()}_${pId.toString()}`;
   const serviceRequest = srMap?.get(key) || null;
 
-  const isUK = customerRegion === 'UK' || serviceRequest?.region === 'UK';
+  const isUK = service.region === 'UK' || customerRegion === 'UK' || serviceRequest?.region === 'UK';
 
   const name = (isUK && serviceRequest?.ukService?.title)
     ? serviceRequest.ukService.title
-    : service.name;
+    : (service.name || null);
 
   const serviceImage = (isUK && serviceRequest?.ukService?.serviceImage)
     ? serviceRequest.ukService.serviceImage
-    : service.serviceImage;
+    : (service.serviceImage || null);
 
   const price = (isUK && serviceRequest?.ukService?.price !== undefined)
     ? serviceRequest.ukService.price
-    : service.price;
+    : (service.price || 0);
 
   const description = (isUK && serviceRequest?.ukService?.description)
     ? serviceRequest.ukService.description
-    : service.description;
+    : (service.description || null);
 
   const subServices = (isUK && serviceRequest?.ukService?.subServices)
     ? serviceRequest.ukService.subServices
@@ -87,7 +87,7 @@ export function formatServiceDetails(service, providerId, customerRegion, srMap)
   return {
     _id: sId,
     name,
-    icon: service.icon,
+    icon: service.icon || null,
     serviceImage,
     price,
     description,

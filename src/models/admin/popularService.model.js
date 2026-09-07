@@ -7,6 +7,11 @@ const popularServiceSchema = new mongoose.Schema(
             ref: 'ServiceRequest',
             required: true,
         },
+        region: {
+            type: String,
+            enum: ['UK', 'BD'],
+            default: 'BD'
+        }
     },
     { timestamps: true }
 );

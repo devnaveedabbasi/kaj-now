@@ -1,4 +1,5 @@
 import User from "../../models/User.model.js";
+import bcrypt from "bcryptjs";
 import Provider from "../../models/provider/Provider.model.js";
 import Service from "../../models/admin/service.model.js";
 import Category from "../../models/admin/category.model.js";
@@ -18,6 +19,57 @@ import mongoose from "mongoose";
 import { REGION_CURRENCY } from '../../utils/regionFinance.js';
 
 // ==================== USER MANAGEMENT ====================
+
+// Create a new user manually
+export const createUser = async (req, res) => {
+  try {
+    const { name, email, phone, password, region, role } = req.body;
+
+    if (!name || !email || !phone || !password || !region) {
+      throw new ApiError(400, "All required fields (name, email, phone, password, region) must be provided");
+    }
+
+    const bdPhoneRegex = /^(\+880|880|0)?1[3-9][0-9]{8}$/;
+    const ukPhoneRegex = /^\+44[0-9]{10}$/;
+
+    if (region === "UK" && !ukPhoneRegex.test(phone)) {
+      throw new ApiError(400, "Please enter a valid UK phone number");
+    }
+    
+    if (region === "BD" && !bdPhoneRegex.test(phone)) {
+      throw new ApiError(400, "Please enter a valid BD phone number");
+    }
+
+    const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
+    if (existingUser) {
+      throw new ApiError(400, "User with this email or phone already exists");
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const user = await User.create({
+      name,
+      email,
+      phone,
+      password: hashedPassword,
+      region,
+      role: role || "customer",
+      status: "approved",
+      isEmailVerified: true
+    });
+
+    const userWithoutPassword = await User.findById(user._id).select("-password");
+
+    res.status(201).json(new ApiResponse(201, userWithoutPassword, "User created successfully"));
+  } catch (error) {
+    console.error("Error creating user:", error);
+    if (error instanceof ApiError) {
+      res.status(error.statusCode).json(new ApiResponse(error.statusCode, null, error.message));
+    } else {
+      res.status(500).json(new ApiResponse(500, null, "Internal server error"));
+    }
+  }
+};
 
 // Get all users
 export const getAllUsers = async (req, res) => {

@@ -10,6 +10,7 @@ router.get('/dashboard/stats', asyncHandler(adminController.getAdminDashboardSta
 router.get('/logs', asyncHandler(adminController.getActivityLogs));
 
 // User management
+router.post('/users', asyncHandler(adminController.createUser));
 router.get('/users', asyncHandler(adminController.getAllUsers));
 router.get('/users/stats', asyncHandler(adminController.getUserStats));
 router.get('/users/:userId', asyncHandler(adminController.getUserById));

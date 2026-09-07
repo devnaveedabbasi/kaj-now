@@ -390,10 +390,13 @@ export const togglePopularRequest = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const serviceReq = await ServiceRequest.findById(id);
+        const serviceReq = await ServiceRequest.findById(id).populate('categoryId', 'region');
         if (!serviceReq || serviceReq.status !== 'approved') {
             throw new ApiError(404, 'Approved service request not found');
         }
+
+        const reqRegion = serviceReq.categoryId?.region || serviceReq.region || 'BD';
+        const countQuery = reqRegion === 'UK' ? { region: 'UK' } : { $or: [{ region: 'BD' }, { region: { $exists: false } }] };
 
         const existing = await PopularService.findOne({ serviceRequestId: id });
         let isAdded = false;
@@ -401,11 +404,25 @@ export const togglePopularRequest = async (req, res) => {
         if (existing) {
             await PopularService.deleteOne({ _id: existing._id });
         } else {
-            const count = await PopularService.countDocuments();
+            const countAggregate = await PopularService.aggregate([
+                { $match: countQuery },
+                {
+                    $lookup: {
+                        from: 'servicerequests',
+                        localField: 'serviceRequestId',
+                        foreignField: '_id',
+                        as: 'req'
+                    }
+                },
+                { $unwind: '$req' },
+                { $match: { 'req.status': 'approved' } },
+                { $count: 'total' }
+            ]);
+            const count = countAggregate[0]?.total || 0;
             if (count >= 10) {
-                throw new ApiError(400, 'Maximum limit of 10 popular services reached');
+                throw new ApiError(400, `Maximum limit of 10 popular services reached for ${reqRegion}`);
             }
-            await PopularService.create({ serviceRequestId: id });
+            await PopularService.create({ serviceRequestId: id, region: reqRegion });
             isAdded = true;
         }
 
@@ -427,10 +444,13 @@ export const toggleRecommendedRequest = async (req, res) => {
     try {
         const { id } = req.params;
 
-        const serviceReq = await ServiceRequest.findById(id);
+        const serviceReq = await ServiceRequest.findById(id).populate('categoryId', 'region');
         if (!serviceReq || serviceReq.status !== 'approved') {
             throw new ApiError(404, 'Approved service request not found');
         }
+
+        const reqRegion = serviceReq.categoryId?.region || serviceReq.region || 'BD';
+        const countQuery = reqRegion === 'UK' ? { region: 'UK' } : { $or: [{ region: 'BD' }, { region: { $exists: false } }] };
 
         const existing = await RecommendedService.findOne({ serviceRequestId: id });
         let isAdded = false;
@@ -438,11 +458,25 @@ export const toggleRecommendedRequest = async (req, res) => {
         if (existing) {
             await RecommendedService.deleteOne({ _id: existing._id });
         } else {
-            const count = await RecommendedService.countDocuments();
+            const countAggregate = await RecommendedService.aggregate([
+                { $match: countQuery },
+                {
+                    $lookup: {
+                        from: 'servicerequests',
+                        localField: 'serviceRequestId',
+                        foreignField: '_id',
+                        as: 'req'
+                    }
+                },
+                { $unwind: '$req' },
+                { $match: { 'req.status': 'approved' } },
+                { $count: 'total' }
+            ]);
+            const count = countAggregate[0]?.total || 0;
             if (count >= 10) {
-                throw new ApiError(400, 'Maximum limit of 10 recommended services reached');
+                throw new ApiError(400, `Maximum limit of 10 recommended services reached for ${reqRegion}`);
             }
-            await RecommendedService.create({ serviceRequestId: id });
+            await RecommendedService.create({ serviceRequestId: id, region: reqRegion });
             isAdded = true;
         }
 
