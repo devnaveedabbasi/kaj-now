@@ -146,13 +146,13 @@ export const getServiceById = async (req, res) => {
             return res.status(400).json(new ApiResponse(400, null, 'Invalid service ID format'));
         }
 
-        const service = await ServiceRequest.findOne({
-            serviceId: { $in: [serviceId] },
+        // First try finding by ServiceRequest._id (used by featured services)
+        let service = await ServiceRequest.findOne({
+            _id: serviceId,
             status: 'approved',
         })
             .populate({
                 path: 'serviceId',
-                match: { _id: new mongoose.Types.ObjectId(serviceId) },  // sirf wahi service jo maangi hai
                 select: 'name price icon serviceImage averageRating description reviews subServices'
             })
             .populate({
@@ -165,8 +165,39 @@ export const getServiceById = async (req, res) => {
             })
             .lean();
 
+        // Track which Service template ID to use for targetService lookup
+        let lookupServiceId = null;
+        let isServiceRequestLookup = false;
+
+        if (service && service.serviceId && service.serviceId.length > 0) {
+            // Found by ServiceRequest._id
+            lookupServiceId = service.serviceId[0]._id.toString();
+            isServiceRequestLookup = true;
+        } else {
+            // Fallback: find by Service template _id (old behavior)
+            service = await ServiceRequest.findOne({
+                serviceId: { $in: [serviceId] },
+                status: 'approved',
+            })
+                .populate({
+                    path: 'serviceId',
+                    match: { _id: new mongoose.Types.ObjectId(serviceId) },
+                    select: 'name price icon serviceImage averageRating description reviews subServices'
+                })
+                .populate({
+                    path: 'providerId',
+                    select: 'userId location',
+                    populate: {
+                        path: 'userId',
+                        select: 'name email phone profilePicture'
+                    }
+                })
+                .lean();
+            lookupServiceId = serviceId;
+        }
+
         const jobCount = await Job.countDocuments({
-            service: new mongoose.Types.ObjectId(serviceId),
+            service: new mongoose.Types.ObjectId(isServiceRequestLookup ? lookupServiceId : serviceId),
             status: { $in: ['confirmed_by_admin', 'confirmed_by_user'] }
         }); console.log('Job count for service:', jobCount);
 
@@ -187,10 +218,11 @@ export const getServiceById = async (req, res) => {
             return res.status(404).json(new ApiResponse(404, null, 'Service not found'));
         }
 
+        // For related services, always search by Service template ID
         const relatedServicesRaw = await ServiceRequest.find({
-            serviceId: serviceId,
+            serviceId: isServiceRequestLookup ? lookupServiceId : serviceId,
             status: 'approved',
-            _id: { $ne: service._id } // optional exclude current
+            _id: { $ne: service._id } // exclude current
         })
             .populate({
                 path: 'serviceId',
@@ -206,24 +238,36 @@ export const getServiceById = async (req, res) => {
             })
             .lean();
 
-        const relatedServices = relatedServicesRaw.map(sr => ({
-            ...sr,
-            serviceId: (sr.serviceId || []).map(s => ({
-                ...s,
-                serviceImage: sr.ukService?.serviceImage || s.serviceImage,
-                price: s.price ?? sr.ukService?.price,
-                description: s.description ?? sr.ukService?.description,
-                subServices: sr.ukService?.subServices?.length ? sr.ukService.subServices : (s.subServices || []),
-                estimatedTime: sr.ukService?.estimatedTime ?? s.estimatedTime,
-                availability: sr.ukService?.availability ?? s.availability
-            }))
-        }));
+        const relatedServices = relatedServicesRaw.map(sr => {
+            const template = sr.serviceId && sr.serviceId.length > 0 ? sr.serviceId[0] : {};
+            return {
+                _id: sr._id,
+                serviceId: template._id,
+                name: template.name,
+                icon: template.icon,
+                price: sr.ukService?.price ?? template.price,
+                description: sr.ukService?.description ?? template.description,
+                images: sr.ukService?.serviceImage ? [sr.ukService.serviceImage] : (template.serviceImage ? [template.serviceImage] : []),
+                subServices: sr.ukService?.subServices?.length ? sr.ukService.subServices : (template.subServices || []),
+                estimatedTime: sr.ukService?.estimatedTime ?? template.estimatedTime,
+                availability: sr.ukService?.availability ?? template.availability,
+                averageRating: template.averageRating || 0,
+                provider: {
+                    _id: sr.providerId?._id,
+                    name: sr.providerId?.userId?.name,
+                    email: sr.providerId?.userId?.email,
+                    phone: sr.providerId?.userId?.phone,
+                    profilePicture: sr.providerId?.userId?.profilePicture,
+                    location: sr.providerId?.location
+                }
+            };
+        });
 
         console.log('Related services found:', relatedServices);
         console.log('Service found:', service);
         const targetService = service.serviceId.find(
-            s => s._id.toString() === serviceId
-        );
+            s => s._id.toString() === lookupServiceId
+        ) || service.serviceId[0];
 
         res.status(200).json(
             new ApiResponse(200, {
@@ -662,7 +706,8 @@ export const getAllApprovedServices = async (req, res) => {
             { $limit: limit },
             {
                 $project: {
-                    _id: '$service._id',
+                    _id: '$_id',
+                    serviceId: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
                     price: '$effectivePrice',
@@ -684,7 +729,6 @@ export const getAllApprovedServices = async (req, res) => {
                         phone: '$user.phone',
                         profilePicture: '$user.profilePicture'
                     },
-                    requestId: '$_id',
                     requestedAt: '$requestedAt',
                     approvedAt: '$reviewedAt'
                 }
@@ -832,7 +876,8 @@ export const getApprovedServiceById = async (req, res) => {
             { $unwind: '$user' },
             {
                 $project: {
-                    _id: '$service._id',
+                    _id: '$_id',
+                    serviceId: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
                     price: priceExpr,
@@ -911,7 +956,8 @@ export const getApprovedServiceById = async (req, res) => {
             { $limit: 5 },
             {
                 $project: {
-                    _id: '$service._id',
+                    _id: '$_id',
+                    serviceId: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
                     price: priceExpr,
@@ -1098,7 +1144,8 @@ export const getRecommendedServices = async (req, res) => {
                     }
 
                     return {
-                        _id: req.service._id,
+                        _id: req._id,
+                        serviceId: req.service._id,
                         name: req.service.name,
                         icon: req.service.icon,
                         price: req.ukService?.price ?? req.service.price,
@@ -1310,7 +1357,8 @@ export const getTopRatedServices = async (req, res) => {
 
             {
                 $project: {
-                    _id: "$service._id",
+                    _id: "$_id",
+                    serviceId: "$service._id",
                     name: "$service.name",
                     icon: "$service.icon",
                     price: priceExpr,
@@ -1456,7 +1504,8 @@ export const quickSearch = async (req, res) => {
             // Project the required fields
             {
                 $project: {
-                    _id: '$service._id',
+                    _id: '$_id',
+                    serviceId: '$service._id',
                     name: '$service.name',
                     icon: '$service.icon',
                     price: priceExpr,

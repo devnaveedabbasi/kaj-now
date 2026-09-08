@@ -129,7 +129,8 @@ export const getFeaturedServiceRequests = async (req, res) => {
                                     input: '$services',
                                     as: 's',
                                     in: {
-                                        _id: '$$s._id',
+                                        _id: '$_id',
+                                        serviceId: '$$s._id',
                                         name: '$$s.name',
                                         price: { $ifNull: ['$ukService.price', '$$s.price'] },
                                         icon: '$$s.icon',
