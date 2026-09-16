@@ -418,6 +418,7 @@ export const getAllProviders = async (req, res) => {
       },
       category: provider.Category,
       providerType: provider.providerType,
+      availability: provider.availability,
       documents: {
         // BD Individual
         facePhoto: provider.facePhoto,
@@ -581,11 +582,56 @@ export const getProviderById = async (req, res) => {
     stats.approved = provider.approvedServices?.length ?? 0;
     stats.total = stats.approved + stats.pending + stats.rejected + stats.cancelled;
 
-    const jobs = await Job.find({ provider: provider._id })
+    // Fetch all approved ServiceRequests for this provider to get provider-specific price and description
+    const approvedRequests = await ServiceRequest.find({
+        providerId: provider._id,
+        status: 'approved'
+    })
+    .populate('serviceId', 'name icon averageRating')
+    .lean();
+
+    provider.approvedServices = approvedRequests.map(req => {
+        if (req.isCustomService && req.ukService) {
+            return {
+                _id: req._id,
+                name: req.ukService.title,
+                icon: req.ukService.serviceImage,
+                price: req.ukService.price,
+                description: req.ukService.description,
+                averageRating: 0
+            };
+        } else {
+            const template = (req.serviceId && req.serviceId.length > 0) ? req.serviceId[0] : null;
+            return {
+                _id: req._id,
+                name: template?.name || 'Unknown Service',
+                icon: req.ukService?.serviceImage || template?.icon,
+                price: req.ukService?.price, // Provider's specific price
+                description: req.ukService?.description,
+                averageRating: template?.averageRating || 0
+            };
+        }
+    });
+
+    const jobsRaw = await Job.find({ provider: provider._id })
       .populate('customer', 'name email')
       .populate('service', 'name')
+      .populate('serviceRequestId', 'isCustomService ukService')
       .sort({ createdAt: -1 })
       .lean();
+
+    const jobs = jobsRaw.map(job => {
+        if (!job.service && job.serviceRequestId?.isCustomService && job.serviceRequestId?.ukService) {
+            job.service = {
+                _id: job.serviceRequestId._id,
+                name: job.serviceRequestId.ukService.title,
+                price: job.serviceRequestId.ukService.price,
+                description: job.serviceRequestId.ukService.description,
+                icon: job.serviceRequestId.ukService.serviceImage
+            };
+        }
+        return job;
+    });
 
     res.status(200).json(
       new ApiResponse(200, {

@@ -47,7 +47,6 @@ const serviceRequestSchema = new mongoose.Schema({
             }
         ],
         estimatedTime: { type: String, trim: true },
-        availability: [{ type: String, trim: true }],
     },
 }, { timestamps: true });
 

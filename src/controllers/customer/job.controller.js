@@ -18,8 +18,12 @@ import {
   NON_CANCELLABLE_JOB_STATUSES,
   applyCancellationMetadata,
   releaseEscrowForCancellation,
+  attemptAutomaticStripeRefund,
+  buildCustomerRefundMessage,
+  buildAdminRefundMessage,
 } from '../../utils/jobCancellation.js';
 import { getServiceDetailsForJobs, formatServiceDetails } from '../../utils/jobFormatter.js';
+import { timeZoneForRegion, zonedDateTimeToUtc, formatDateInZone, formatTimeInZone, formatWeekdayInZone } from '../../utils/timezone.js';
 
 async function generateOrderId() {
   const count = await Job.countDocuments();
@@ -79,29 +83,34 @@ export async function bookJob(req, res) {
       throw new ApiError(400, 'Invalid time format. Use HH:MM in 24-hour format');
     }
 
-    const scheduleDateTime = new Date(`${schedule.date}T${schedule.time}:00`);
+    // `schedule.date`/`schedule.time` are plain wall-clock values with no
+    // timezone attached — they mean the customer's own region time (UK or
+    // BD), never the server's. Pin the interpretation to that region
+    // instead of letting `new Date(...)` silently assume the server's OS
+    // timezone (see src/utils/timezone.js for why that's wrong).
+    const customerTimeZone = timeZoneForRegion(req.user?.region);
+    const scheduleDateTime = zonedDateTimeToUtc(schedule.date, schedule.time, customerTimeZone);
     if (isNaN(scheduleDateTime.getTime())) {
       throw new ApiError(400, 'Invalid schedule date or time');
     }
 
     const now = new Date();
-    const todayDateStr = now.toISOString().split('T')[0];
+    const todayDateStr = formatDateInZone(now, customerTimeZone);
     const isToday = schedule.date === todayDateStr;
-    const scheduleMidnight = new Date(schedule.date + 'T00:00:00');
-    const todayMidnight = new Date(todayDateStr + 'T00:00:00');
 
-    if (scheduleMidnight < todayMidnight) {
+    // Plain ISO "YYYY-MM-DD" strings sort/compare correctly as text, so this
+    // needs no Date parsing (and therefore no timezone) at all.
+    if (schedule.date < todayDateStr) {
       throw new ApiError(400, 'Cannot book for a past date');
     }
 
     if (isToday) {
       const twoHoursLater = new Date(now.getTime() + 2 * 60 * 60 * 1000);
       if (scheduleDateTime <= twoHoursLater) {
-        const hh = String(twoHoursLater.getHours()).padStart(2, '0');
-        const mm = String(twoHoursLater.getMinutes()).padStart(2, '0');
+        const earliestAllowed = formatTimeInZone(twoHoursLater, customerTimeZone);
         throw new ApiError(
           400,
-          `For today's booking, time must be at least 2 hours from now. Earliest allowed: ${hh}:${mm}`
+          `For today's booking, time must be at least 2 hours from now. Earliest allowed: ${earliestAllowed}`
         );
       }
     }
@@ -128,18 +137,61 @@ export async function bookJob(req, res) {
     }
 
 
-    const service = await Service.findById(serviceId).session(session);
-    if (!service || !service.isActive) throw new ApiError(404, 'Service not available');
-
-    const serviceRequest = await ServiceRequest.findOne({
-      serviceId,
+    // `serviceId` from the client is normally a real Service._id (template
+    // listing — works the same for BD and UK). A UK provider's own CUSTOM
+    // listing (isCustomService) has no backing Service document at all
+    // though — for those, the customer-facing browse/detail endpoints
+    // expose the ServiceRequest._id itself as "the service id" (see
+    // customer/service.controller.js getServiceById), so that's what
+    // arrives here too. Check for that case first.
+    let service = null;
+    let serviceRequest = await ServiceRequest.findOne({
+      _id: serviceId,
       providerId,
       status: 'approved',
+      isCustomService: true,
     }).session(session);
-    if (!serviceRequest) throw new ApiError(400, 'Provider not found for this service');
-    console.log(serviceRequest, 'serviceRequest')
+
+    if (!serviceRequest) {
+      service = await Service.findById(serviceId).session(session);
+      if (!service || !service.isActive) throw new ApiError(404, 'Service not available');
+
+      serviceRequest = await ServiceRequest.findOne({
+        serviceId,
+        providerId,
+        status: 'approved',
+      }).session(session);
+      if (!serviceRequest) throw new ApiError(400, 'Provider not found for this service');
+    }
+
+    // Single source of truth for display text from here on — works for
+    // both a real Service (template) and a custom listing (ukService only).
+    const serviceName = service?.name || serviceRequest.ukService?.title;
+
     const provider = await Provider.findById(providerId).session(session);
     if (!provider) throw new ApiError(404, 'Provider not found');
+
+    // ── Provider availability check ─────────────────────────────────
+    // The provider's own working days/hours now actually gate booking, not
+    // just inform browsing. A provider who never configured any of this is
+    // NOT blocked (opt-in restriction, same convention as the browse-page
+    // filters) — but in practice every provider has real values here, either
+    // from the schema default or the one-off backfill.
+    const bookingWeekday = formatWeekdayInZone(scheduleDateTime, customerTimeZone);
+    if (provider.availability?.days?.length > 0 && !provider.availability.days.includes(bookingWeekday)) {
+      throw new ApiError(
+        400,
+        `This provider is not available on ${bookingWeekday}. Available days: ${provider.availability.days.join(', ')}`
+      );
+    }
+    if (provider.availability?.startTime && provider.availability?.endTime) {
+      if (schedule.time < provider.availability.startTime || schedule.time > provider.availability.endTime) {
+        throw new ApiError(
+          400,
+          `This provider is only available between ${provider.availability.startTime} and ${provider.availability.endTime}. Please choose a time within this window.`
+        );
+      }
+    }
 
     // ── Schedule conflict check — ALL payment methods ──────────────────
     // Block booking if an active job already exists within ±1 hour of the
@@ -148,7 +200,11 @@ export async function bookJob(req, res) {
     const CONFLICT_WINDOW_MS = 60 * 60 * 1000; // 1 hour in milliseconds
     const existingJob = await Job.findOne({
       customer: userId,
-      service: serviceId,
+      // serviceRequestId (not `service`) is what actually identifies "this
+      // customer already has a booking for this exact provider listing" —
+      // it's always present, unlike `service`, which is null for a custom
+      // UK listing with no backing Service document.
+      serviceRequestId: serviceRequest._id,
       provider: providerId,
       status: { $in: ['pending', 'accepted', 'in_progress'] },
       'schedule.date': {
@@ -196,7 +252,11 @@ export async function bookJob(req, res) {
     let servicePrice;
     let selectedSubServices = []; // UK only; empty for BD
 
-    if (user.region === 'UK' || serviceRequest?.region === 'UK') {
+    // A custom listing is always UK (see requestService Path B) regardless
+    // of what `serviceRequest.region` says — checked explicitly so a null
+    // `service` never falls through to the BD branch below, which assumes
+    // a real Service document.
+    if (serviceRequest.isCustomService || user.region === 'UK' || serviceRequest?.region === 'UK') {
       const basePrice = serviceRequest?.ukService?.price || 0;
       console.log(serviceRequest?.ukService, 'serviceRequest.ukService')
       console.log(basePrice, 'basePrice')
@@ -252,7 +312,7 @@ export async function bookJob(req, res) {
             orderId,
             provider: provider._id,
             customer: user._id,
-            service: serviceId,
+            service: service?._id,
             serviceRequestId: serviceRequest._id,
             amount: servicePrice,
             status: 'pending',
@@ -290,7 +350,7 @@ export async function bookJob(req, res) {
       await createNotifications(
         user._id,
         provider.userId,
-        service.name,
+        serviceName,
         orderId,
         job[0]._id,
         servicePrice,
@@ -332,11 +392,16 @@ export async function bookJob(req, res) {
         Math.floor((new Date(pendingIntent.expiresAt) - Date.now()) / 1000 / 60)
       );
       const pendingTime = pendingIntent.schedule?.time || 'N/A';
-      throw new ApiError(
+      const conflictError = new ApiError(
         409,
         `A payment session is already in progress for this service at ${pendingTime}. ` +
-        `Complete the previous payment or wait ${expiresIn} minute(s) for it to expire.`
+        `Cancel it to book again immediately, or wait ${expiresIn} minute(s) for it to expire.`
       );
+      // Lets the frontend offer an immediate "Cancel & try again" action
+      // instead of forcing the user to wait out the full TTL — call
+      // PATCH /jobs/pending-intent/:tranId/cancel with this tranId, then retry.
+      conflictError.data = { pendingIntentTranId: pendingIntent.tranId, expiresIn };
+      throw conflictError;
     }
 
     const tranId = `${paymentMethod.toUpperCase()}_${userId}_${Date.now()}_${Math.random()
@@ -356,7 +421,9 @@ export async function bookJob(req, res) {
         orderId,
         userId: user._id.toString(),
         providerId: provider._id.toString(),
-        serviceId: service._id.toString(),
+        // `service` is null for a custom listing (no backing Service doc) —
+        // the ServiceRequest._id is always present, custom or not.
+        serviceId: (service?._id || serviceRequest._id).toString(),
       });
 
       await BookingIntent.create(
@@ -366,7 +433,7 @@ export async function bookJob(req, res) {
             orderId,
             userId: user._id,
             providerId: provider._id,
-            serviceId: service._id,
+            serviceId: service?._id,
             serviceRequestId: serviceRequest._id,
             servicePrice,
             platformFee,
@@ -461,7 +528,7 @@ export async function bookJob(req, res) {
             orderId,
             provider: provider._id,
             customer: user._id,
-            service: serviceId,
+            service: service?._id,
             serviceRequestId: serviceRequest._id,
             amount: servicePrice,
             status: 'pending',
@@ -501,7 +568,7 @@ export async function bookJob(req, res) {
       await createNotifications(
         user._id,
         provider.userId,
-        service.name,
+        serviceName,
         orderId,
         job[0]._id,
         servicePrice,
@@ -543,7 +610,7 @@ export async function bookJob(req, res) {
       orderId,
       userId: user._id,
       providerId: provider._id,
-      serviceId: service._id,
+      serviceId: service?._id,
       serviceRequestId: serviceRequest._id,
       servicePrice,
       platformFee,
@@ -579,10 +646,34 @@ export async function bookJob(req, res) {
     console.error('[bookJob] Error:', error);
     return res
       .status(error.statusCode || 500)
-      .json(new ApiResponse(error.statusCode || 500, null, error.message));
+      .json(new ApiResponse(error.statusCode || 500, error.data ?? null, error.message));
   } finally {
     session.endSession();
   }
+}
+
+// Lets a customer void their own abandoned checkout immediately instead of
+// waiting out the 1-hour TTL on BookingIntent — see the 409 thrown in
+// bookJob's conflict check, which hands back the tranId to cancel here.
+// Marking 'cancelled' (rather than deleting) is safe even if the customer
+// still completes payment on the old gateway page afterwards: the success/
+// IPN webhooks in payment.controller.js key off tranId and only skip
+// processing when status is already 'completed', not 'cancelled'.
+export async function cancelPendingIntent(req, res) {
+  const userId = req.user._id;
+  const { tranId } = req.params;
+
+  const intent = await BookingIntent.findOne({ tranId, userId, status: 'pending' });
+  if (!intent) {
+    throw new ApiError(404, 'No pending payment session found for this transaction.');
+  }
+
+  intent.status = 'cancelled';
+  await intent.save();
+
+  return res.status(200).json(
+    new ApiResponse(200, null, 'Payment session cancelled. You can book again now.')
+  );
 }
 
 
@@ -655,7 +746,10 @@ export async function acceptJob(req, res) {
 
     if (!mongoose.Types.ObjectId.isValid(jobId)) throw new ApiError(400, 'Invalid job ID');
 
-    const job = await Job.findById(jobId).populate('service', 'name').session(session);
+    const job = await Job.findById(jobId)
+      .populate('service', 'name')
+      .populate('serviceRequestId', 'ukService.title')
+      .session(session);
     if (!job) throw new ApiError(404, 'Job not found');
 
     if (job.provider.toString() !== providerId.toString()) {
@@ -670,11 +764,13 @@ export async function acceptJob(req, res) {
 
     await session.commitTransaction();
 
+    const serviceName = job.service?.name || job.serviceRequestId?.ukService?.title || 'the service';
+
     // Notify customer
     await createNotification({
       userId: job.customer,
       title: 'Booking Accepted',
-      message: `Your booking for "${job.service?.name || 'the service'}" (Order #${job.orderId}) has been accepted by the provider!`,
+      message: `Your booking for "${serviceName}" (Order #${job.orderId}) has been accepted by the provider!`,
       type: 'job',
       referenceId: job._id,
       metadata: { orderId: job.orderId, jobId: job._id },
@@ -1008,7 +1104,10 @@ export async function rejectCompletion(req, res) {
     if (!mongoose.Types.ObjectId.isValid(jobId)) throw new ApiError(400, 'Invalid job ID');
     if (!reason) throw new ApiError(400, 'Dispute reason is required');
 
-    const job = await Job.findById(jobId).populate('service', 'name').session(session);
+    const job = await Job.findById(jobId)
+      .populate('service', 'name')
+      .populate('serviceRequestId', 'ukService.title')
+      .session(session);
     if (!job) throw new ApiError(404, 'Job not found');
 
     if (job.customer.toString() !== customerId.toString()) {
@@ -1026,6 +1125,8 @@ export async function rejectCompletion(req, res) {
 
     await session.commitTransaction();
 
+    const serviceName = job.service?.name || job.serviceRequestId?.ukService?.title || 'the service';
+
     // ── Notifications ────────────────────────────────────────────────────────
     // Notify admin
     const adminUser = await User.findOne({ role: 'admin' });
@@ -1033,7 +1134,7 @@ export async function rejectCompletion(req, res) {
       await createNotification({
         userId: adminUser._id,
         title: 'New Dispute Raised',
-        message: `A dispute has been raised on Order #${job.orderId} for "${job.service?.name}". Reason: ${reason}`,
+        message: `A dispute has been raised on Order #${job.orderId} for "${serviceName}". Reason: ${reason}`,
         type: 'dispute',
         referenceId: job._id,
         metadata: { orderId: job.orderId, jobId: job._id, reason },
@@ -1170,7 +1271,7 @@ export const getMyOrders = async (req, res) => {
     // Format orders
     const formattedOrders = orders.map(order => {
       const payment = paymentsByJobId.get(order._id.toString()) || null;
-      const serviceDetails = formatServiceDetails(order.service, order.provider, req.user?.region || order.customer?.region, srMap);
+      const serviceDetails = formatServiceDetails(order.service, order.provider, req.user?.region || order.customer?.region, srMap, order.serviceRequestId);
       return {
         _id: order._id,
         orderId: order.orderId,
@@ -1185,7 +1286,8 @@ export const getMyOrders = async (req, res) => {
           name: order.provider?.userId?.name,
           email: order.provider?.userId?.email,
           phone: order.provider?.userId?.phoneNumber,
-          profilePicture: order.provider?.userId?.profilePicture
+          profilePicture: order.provider?.userId?.profilePicture,
+          availability: order.provider?.availability
         },
         timestamps: {
           createdAt: order.createdAt,
@@ -1268,7 +1370,7 @@ export const getOrderById = async (req, res) => {
 
     // Fetch service request details for formatting
     const srMap = await getServiceDetailsForJobs(order);
-    const serviceDetails = formatServiceDetails(order.service, order.provider, req.user?.region || order.customer?.region, srMap);
+    const serviceDetails = formatServiceDetails(order.service, order.provider, req.user?.region || order.customer?.region, srMap, order.serviceRequestId);
 
     // Get payment details
     const payment = await Payment.findOne({ jobId: order._id }).lean();
@@ -1289,7 +1391,8 @@ export const getOrderById = async (req, res) => {
         email: order.provider?.userId?.email,
         phone: order.provider?.userId?.phoneNumber,
         profilePicture: order.provider?.userId?.profilePicture,
-        location: order.provider?.location
+        location: order.provider?.location,
+        availability: order.provider?.availability
       },
       customer: {
         _id: order.customer?._id,
@@ -1363,7 +1466,10 @@ export async function cancelJobByCustomer(req, res) {
       throw new ApiError(400, 'Invalid job ID');
     }
 
-    const job = await Job.findById(jobId).populate('service', 'name').session(session);
+    const job = await Job.findById(jobId)
+      .populate('service', 'name')
+      .populate('serviceRequestId', 'ukService.title')
+      .session(session);
     if (!job) {
       throw new ApiError(404, 'Job not found');
     }
@@ -1393,6 +1499,11 @@ export async function cancelJobByCustomer(req, res) {
 
     await session.commitTransaction();
 
+    // UK card payments only — refunds straight to the customer's card via
+    // Stripe. Must run after commit (real external side effect, never
+    // inside the DB transaction). BD stays on the manual admin queue.
+    await attemptAutomaticStripeRefund(payment);
+
     // ── Activity Log ──────────────────────────────────────────────────
     try {
       await createActivityLog({
@@ -1409,12 +1520,26 @@ export async function cancelJobByCustomer(req, res) {
 
     // ── Notifications ─────────────────────────────────────────────────
     try {
+      const cancelServiceName = job.service?.name || job.serviceRequestId?.ukService?.title || 'the service';
+
+      // Refund status is only meaningful for a paid booking — attemptAutomaticStripeRefund()
+      // has already run by this point, so payment.refundStatus reflects the real outcome.
+      const refundMsg = buildCustomerRefundMessage(payment);
+      await createNotification({
+        userId: customerId,
+        title: 'Booking Cancelled',
+        message: `Your booking (Order #${job.orderId}) for "${cancelServiceName}" has been cancelled.${refundMsg ? ` ${refundMsg}` : ''}`,
+        type: 'job',
+        referenceId: job._id,
+        metadata: { orderId: job.orderId, jobId: job._id, refundStatus: payment?.refundStatus },
+      });
+
       const provider = await Provider.findById(job.provider);
       if (provider?.userId) {
         await createNotification({
           userId: provider.userId,
           title: 'Booking Cancelled by Customer',
-          message: `Order #${job.orderId} for "${job.service?.name || 'the service'}" was cancelled by the customer.`,
+          message: `Order #${job.orderId} for "${cancelServiceName}" was cancelled by the customer.`,
           type: 'job',
           referenceId: job._id,
           metadata: { orderId: job.orderId, jobId: job._id },
@@ -1423,10 +1548,11 @@ export async function cancelJobByCustomer(req, res) {
 
       const adminUser = await User.findOne({ role: 'admin' });
       if (adminUser) {
+        const adminRefundMsg = buildAdminRefundMessage(payment);
         await createNotification({
           userId: adminUser._id,
           title: 'Job Cancelled by Customer',
-          message: `Order #${job.orderId} was cancelled by the customer.${payment?.refundStatus === 'pending' ? ` A refund of ${payment.totalAmount} is pending admin action.` : ''}`,
+          message: `Order #${job.orderId} was cancelled by the customer.${adminRefundMsg ? ` ${adminRefundMsg}` : ''}`,
           type: 'admin',
           referenceId: job._id,
           metadata: { orderId: job.orderId, jobId: job._id, refundStatus: payment?.refundStatus },

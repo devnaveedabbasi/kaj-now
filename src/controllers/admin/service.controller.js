@@ -5,6 +5,7 @@ import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import Review from '../../models/reviews.model.js';
+import Job from '../../models/job.model.js';
 // Helper function to delete old image
 const deleteOldImage = (mediaUrl) => deleteMedia(mediaUrl).catch((error) => console.error('Error deleting S3 image:', error.message));
 
@@ -16,7 +17,7 @@ const cleanupFiles = (files) => {
 // Create service
 export const createService = async (req, res) => {
     try {
-        const { name, price, categoryId,description, region } = req.body;
+        const { name, price, categoryId, description, region } = req.body;
         const userId = req.user._id;
          console.log(req.body)
         const iconFile = req.files?.icon?.[0];
@@ -334,7 +335,7 @@ export const updateService = async (req, res) => {
 
         // Find existing service
         const existingService = await Service.findOne({ _id: id, userId, isDeleted: false });
-        
+
         if (!existingService) {
             cleanupFiles(req.files);
             throw new ApiError(404, 'Service not found');
@@ -596,6 +597,23 @@ export const hardDeleteService = async (req, res) => {
 
         if (!serviceData) {
             throw new ApiError(404, 'Service not found');
+        }
+
+        // Deleting the Service doc orphans `Job.service` for any job that
+        // still references it — the reminder/warning notifications in
+        // jobScheduler.service.js then populate a null service and show
+        // "undefined" for the service name. Block until those jobs reach a
+        // terminal state, same guard already used on the provider side.
+        const blockingJob = await Job.findOne({
+            service: id,
+            status: { $nin: ['confirmed_by_user', 'confirmed_by_admin', 'cancelled', 'rejected_by_provider'] }
+        });
+
+        if (blockingJob) {
+            throw new ApiError(
+                400,
+                'Service cannot be permanently deleted — it has jobs that are still in progress or not completed.'
+            );
         }
 
         // Delete service icon

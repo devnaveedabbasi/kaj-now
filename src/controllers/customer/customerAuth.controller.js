@@ -470,7 +470,7 @@ export const updateProfile = async (req, res) => {
   let uploadedProfileUrl = null;
   try {
     const userId = req.user._id;
-    const { name, email, phone } = req.body;
+    const { name, email, phone, address } = req.body;
     const files = req.files || {};
 
     const user = await User.findById(userId);
@@ -524,18 +524,26 @@ export const updateProfile = async (req, res) => {
       user.phone = normalizedPhone;
     }
 
+    // Address is free text — no coordinates required, unlike /location.
+    // Kept as its own field on the location subdocument so it never wipes
+    // out coordinates/locationName the customer may have already set.
+    if (address !== undefined) {
+      if (!user.location) user.location = {};
+      user.location.address = String(address).trim();
+      user.markModified('location');
+    }
+
     // Update profile picture
+    let oldProfilePicture = null;
     if (files.profilePicture && files.profilePicture[0]) {
-      const oldProfilePicture = user.profilePicture;
+      oldProfilePicture = user.profilePicture;
       uploadedProfileUrl = (await uploadMediaBuffer({ ...files.profilePicture[0], folder: 'media/images/users' })).url;
       user.profilePicture = uploadedProfileUrl;
-      await user.save();
-      uploadedProfileUrl = null;
-      await deleteFile(oldProfilePicture);
-      return res.status(200).json(new ApiResponse(200, { user: { _id: user._id, name: user.name, email: user.email, phone: user.phone, profilePicture: user.profilePicture } }, 'Profile updated successfully'));
     }
 
     await user.save();
+    if (oldProfilePicture) await deleteFile(oldProfilePicture);
+    uploadedProfileUrl = null;
 
     res.status(200).json(
       new ApiResponse(200, {
@@ -544,7 +552,8 @@ export const updateProfile = async (req, res) => {
           name: user.name,
           email: user.email,
           phone: user.phone,
-          profilePicture: user.profilePicture
+          profilePicture: user.profilePicture,
+          location: user.location,
         },
       }, 'Profile updated successfully')
     );

@@ -32,9 +32,12 @@ async function createJobFromIntent(intent, tran_id, session) {
   const CONFLICT_WINDOW_MS = 60 * 60 * 1000;
   const intentScheduleDate = new Date(intent.schedule.date);
 
+  // serviceRequestId (not `service`) identifies "this exact provider
+  // listing" — it's always present, unlike `service`, which is null for a
+  // custom UK listing with no backing Service document.
   const dupJob = await Job.findOne({
     customer: intent.userId,
-    service: intent.serviceId,
+    serviceRequestId: intent.serviceRequestId,
     provider: intent.providerId,
     status: { $in: ['pending', 'accepted', 'in_progress'] },
     'schedule.date': {

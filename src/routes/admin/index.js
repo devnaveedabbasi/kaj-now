@@ -15,6 +15,7 @@ import featuredServiceRoutes from './featuredService.routes.js';
 import contractRoutes from './contract.routes.js';
 import notesRoutes from './note.routes.js';
 import complaintRoutes from './complaint.routes.js';
+import ukPriceRangeRoutes from './ukPriceRange.routes.js';
 const router = Router();
 
 router.use('/auth', adminAuthRoutes);
@@ -32,4 +33,5 @@ router.use('/featured-services', featuredServiceRoutes);
 router.use('/contracts', contractRoutes);
 router.use('/notes', notesRoutes);
 router.use('/complaints', complaintRoutes);
+router.use('/uk-price-range', ukPriceRangeRoutes);
 export default router;

@@ -7,6 +7,7 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 import User from '../../models/User.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import Job from '../../models/job.model.js';
+import { timeZoneForRegion } from '../../utils/timezone.js';
 
 // UK ServiceRequests carry the provider's actual listing under the nested
 // `ukService` subdocument (price/description/serviceImage/subServices) —
@@ -29,7 +30,6 @@ const subServicesExpr = {
     ]
 };
 const estimatedTimeExpr = { $ifNull: ['$ukService.estimatedTime', '$service.estimatedTime'] };
-const availabilityExpr = { $ifNull: ['$ukService.availability', '$service.availability'] };
 
 // export const getAllCategories = async (req, res) => {
 //     try {
@@ -153,11 +153,19 @@ export const getServiceById = async (req, res) => {
         })
             .populate({
                 path: 'serviceId',
-                select: 'name price icon serviceImage averageRating description reviews subServices'
+                select: 'name price icon serviceImage averageRating description reviews subServices',
+                // `reviews` is just an array of Review ObjectIds on Service —
+                // without this nested populate it never actually resolves to
+                // review content, only raw ids.
+                populate: {
+                    path: 'reviews',
+                    select: 'rating comment userId createdAt',
+                    populate: { path: 'userId', select: 'name profilePicture' }
+                }
             })
             .populate({
                 path: 'providerId',
-                select: 'userId location',
+                select: 'userId location availability',
                 populate: {
                     path: 'userId',
                     select: 'name email phone profilePicture'
@@ -169,10 +177,20 @@ export const getServiceById = async (req, res) => {
         let lookupServiceId = null;
         let isServiceRequestLookup = false;
 
-        if (service && service.serviceId && service.serviceId.length > 0) {
+        // A custom UK service (isCustomService) NEVER has anything in
+        // `serviceId` — that's its normal, permanent state, not a failed
+        // populate. Treating an empty array here as "not found" (the old
+        // behavior) sent every custom service straight into the fallback
+        // branch below, which can never match it either (nothing has this
+        // ServiceRequest's own _id inside a `serviceId` array) — so it
+        // always 404'd. Custom services are "found" the moment the first
+        // query matches at all; only template-based results need serviceId.
+        if (service && (service.isCustomService || (service.serviceId && service.serviceId.length > 0))) {
             // Found by ServiceRequest._id
-            lookupServiceId = service.serviceId[0]._id.toString();
             isServiceRequestLookup = true;
+            if (!service.isCustomService) {
+                lookupServiceId = service.serviceId[0]._id.toString();
+            }
         } else {
             // Fallback: find by Service template _id (old behavior)
             service = await ServiceRequest.findOne({
@@ -182,11 +200,16 @@ export const getServiceById = async (req, res) => {
                 .populate({
                     path: 'serviceId',
                     match: { _id: new mongoose.Types.ObjectId(serviceId) },
-                    select: 'name price icon serviceImage averageRating description reviews subServices'
+                    select: 'name price icon serviceImage averageRating description reviews subServices',
+                    populate: {
+                        path: 'reviews',
+                        select: 'rating comment userId createdAt',
+                        populate: { path: 'userId', select: 'name profilePicture' }
+                    }
                 })
                 .populate({
                     path: 'providerId',
-                    select: 'userId location',
+                    select: 'userId location availability',
                     populate: {
                         path: 'userId',
                         select: 'name email phone profilePicture'
@@ -196,10 +219,16 @@ export const getServiceById = async (req, res) => {
             lookupServiceId = serviceId;
         }
 
-        const jobCount = await Job.countDocuments({
-            service: new mongoose.Types.ObjectId(isServiceRequestLookup ? lookupServiceId : serviceId),
-            status: { $in: ['confirmed_by_admin', 'confirmed_by_user'] }
-        }); console.log('Job count for service:', jobCount);
+        // A custom service has no real Service._id (lookupServiceId stays
+        // null) — Job.service always refs a real Service, so there's
+        // nothing to count against; 0 is the correct answer, not a crash.
+        const jobCount = lookupServiceId || !isServiceRequestLookup
+            ? await Job.countDocuments({
+                service: new mongoose.Types.ObjectId(isServiceRequestLookup ? lookupServiceId : serviceId),
+                status: { $in: ['confirmed_by_admin', 'confirmed_by_user'] }
+            })
+            : 0;
+        console.log('Job count for service:', jobCount);
 
         console.log('Service found:', service);
         if (!service) {
@@ -230,7 +259,7 @@ export const getServiceById = async (req, res) => {
             })
             .populate({
                 path: 'providerId',
-                select: 'userId location',
+                select: 'userId location availability',
                 populate: {
                     path: 'userId',
                     select: 'name email phone profilePicture'
@@ -250,7 +279,6 @@ export const getServiceById = async (req, res) => {
                 images: sr.ukService?.serviceImage ? [sr.ukService.serviceImage] : (template.serviceImage ? [template.serviceImage] : []),
                 subServices: sr.ukService?.subServices?.length ? sr.ukService.subServices : (template.subServices || []),
                 estimatedTime: sr.ukService?.estimatedTime ?? template.estimatedTime,
-                availability: sr.ukService?.availability ?? template.availability,
                 averageRating: template.averageRating || 0,
                 provider: {
                     _id: sr.providerId?._id,
@@ -258,16 +286,36 @@ export const getServiceById = async (req, res) => {
                     email: sr.providerId?.userId?.email,
                     phone: sr.providerId?.userId?.phone,
                     profilePicture: sr.providerId?.userId?.profilePicture,
-                    location: sr.providerId?.location
+                    location: sr.providerId?.location,
+                    availability: sr.providerId?.availability
                 }
             };
         });
 
         console.log('Related services found:', relatedServices);
         console.log('Service found:', service);
-        const targetService = service.serviceId.find(
-            s => s._id.toString() === lookupServiceId
-        ) || service.serviceId[0];
+        // A custom UK service (isCustomService, no admin template) has an
+        // empty `serviceId` array — there's no Service doc to find here at
+        // all. Without this branch, `.find(...) || service.serviceId[0]`
+        // both evaluate to undefined and the next block throws trying to
+        // read `.name`/`._id` off it. Build the target from `ukService`
+        // directly instead, same as the provider-side custom-service views.
+        const targetService = (service.serviceId && service.serviceId.length > 0)
+            ? (service.serviceId.find(s => s._id.toString() === lookupServiceId) || service.serviceId[0])
+            : {
+                _id: service._id,
+                name: service.ukService?.title,
+                icon: null,
+                serviceImage: service.ukService?.serviceImage,
+                price: service.ukService?.price,
+                description: service.ukService?.description,
+                // Same default a real Service document gets — no backing
+                // Service doc exists for a custom service to carry a real one.
+                averageRating: 3,
+                reviews: [],
+                subServices: service.ukService?.subServices || [],
+                estimatedTime: service.ukService?.estimatedTime,
+            };
 
         res.status(200).json(
             new ApiResponse(200, {
@@ -285,7 +333,6 @@ export const getServiceById = async (req, res) => {
                     reviews: targetService.reviews || [],
                     subServices: (service.ukService?.subServices?.length ? service.ukService.subServices : targetService.subServices) || [],
                     estimatedTime: service.ukService?.estimatedTime ?? targetService.estimatedTime,
-                    availability: service.ukService?.availability ?? targetService.availability,
                     ordersCount: jobCount || 22,
                     provider: {
                         _id: service.providerId?._id,
@@ -294,6 +341,7 @@ export const getServiceById = async (req, res) => {
                         phone: service.providerId?.userId?.phone,
                         profilePicture: service.providerId?.userId?.profilePicture,
                         location: service.providerId?.location,
+                        availability: service.providerId?.availability,
                     }
                 },
                 relatedServices,
@@ -376,18 +424,14 @@ export const getServicesByCategory = async (req, res) => {
         const { categoryId } = req.params;
         const categoryRegion = req.user?.region;   // e.g. 'UK' or 'BD'
 
-        // ── Current UK weekday ────────────────────────────────────────────────
-        // Always derived from the real UK clock (handles BST/GMT automatically).
-        // Result: 'monday', 'tuesday', ..., 'sunday'  (lowercase)
-        const ukDay = new Intl.DateTimeFormat('en-GB', {
-            weekday: 'long',
-            timeZone: 'Europe/London',
-        }).format(new Date()).toLowerCase();
-
-        // ── DEBUG: log key values so we can verify filter is firing ──────────
-        console.log('[getServicesByCategory] categoryRegion =', JSON.stringify(categoryRegion));
-        console.log('[getServicesByCategory] ukDay =', ukDay);
-        console.log('[getServicesByCategory] isUK =', String(categoryRegion).toUpperCase() === 'UK');
+        // ── Current weekday in the customer's own region ────────────────────
+        // UK uses Europe/London (handles BST/GMT automatically), BD uses
+        // Asia/Dhaka. Result: 'Mon', 'Tue', ..., 'Sun' — matches
+        // Provider.availability.days.
+        const todayShortDay = new Intl.DateTimeFormat('en-GB', {
+            weekday: 'short',
+            timeZone: timeZoneForRegion(categoryRegion),
+        }).format(new Date());
 
         if (!mongoose.Types.ObjectId.isValid(categoryId)) {
             throw new ApiError(400, 'Invalid category ID format');
@@ -472,21 +516,23 @@ export const getServicesByCategory = async (req, res) => {
                 }
             },
 
-            // ── UK: filter by availability day (pre-group) ────────────────────
+            // ── Filter by the provider's own working days (pre-group) ─────────
+            // Applies to both regions — Provider.availability isn't UK-only.
             // Now that getAllCategories queries Category directly, filtering here
             // is safe — categories NEVER disappear regardless of this stage.
-            // MongoDB regex on an array field checks every element automatically.
-            // Empty/missing availability arrays correctly evaluate to no-match.
-            // BD: stage is skipped entirely — BD services have no availability.
-            ...(String(categoryRegion).toUpperCase() === 'UK'
-                ? [{
-                    $match: {
-                        'ukService.availability': {
-                            $regex: new RegExp(`^${ukDay}$`, 'i')
-                        }
-                    }
-                }]
-                : []),
+            // A provider who HAS set availability and isn't working today is
+            // excluded. One who never set it at all is kept (opt-in filter,
+            // not opt-out) — otherwise every provider from before this field
+            // existed would silently vanish from browsing.
+            {
+                $match: {
+                    $or: [
+                        { 'provider.availability.days': todayShortDay },
+                        { 'provider.availability.days': { $exists: false } },
+                        { 'provider.availability.days': { $size: 0 } },
+                    ]
+                }
+            },
 
             // GROUP BY SERVICE
             {
@@ -521,10 +567,6 @@ export const getServicesByCategory = async (req, res) => {
                         $first: estimatedTimeExpr
                     },
 
-                    availability: {
-                        $first: availabilityExpr
-                    },
-
                     averageRating: {
                         $first: '$service.averageRating'
                     },
@@ -537,8 +579,8 @@ export const getServicesByCategory = async (req, res) => {
                             phone: '$providerUser.phone',
                             profilePicture: '$providerUser.profilePicture',
                             location: '$provider.location',
-                            // Per-provider UK listing details
-                            availability: '$ukService.availability',
+                            // Provider's own working days/hours.
+                            availability: '$provider.availability',
                             price: priceExpr,
                             subServices: subServicesExpr,
                             serviceRequestId: '$_id',
@@ -715,7 +757,6 @@ export const getAllApprovedServices = async (req, res) => {
                     images: imagesExpr,
                     subServices: subServicesExpr,
                     estimatedTime: estimatedTimeExpr,
-                    availability: availabilityExpr,
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',
@@ -727,7 +768,8 @@ export const getAllApprovedServices = async (req, res) => {
                         name: '$user.name',
                         email: '$user.email',
                         phone: '$user.phone',
-                        profilePicture: '$user.profilePicture'
+                        profilePicture: '$user.profilePicture',
+                        availability: '$provider.availability'
                     },
                     requestedAt: '$requestedAt',
                     approvedAt: '$reviewedAt'
@@ -896,7 +938,8 @@ export const getApprovedServiceById = async (req, res) => {
                         email: '$user.email',
                         phone: '$user.phone',
                         profilePicture: '$user.profilePicture',
-                        location: '$provider.location'
+                        location: '$provider.location',
+                        availability: '$provider.availability'
                     },
                     requestedAt: '$requestedAt',
                     approvedAt: '$reviewedAt'
@@ -1153,7 +1196,6 @@ export const getRecommendedServices = async (req, res) => {
                         images: req.ukService?.serviceImage ? [req.ukService.serviceImage] : [],
                         subServices: req.ukService?.subServices?.length ? req.ukService.subServices : (req.service.subServices || []),
                         estimatedTime: req.ukService?.estimatedTime ?? req.service.estimatedTime,
-                        availability: req.ukService?.availability ?? req.service.availability,
 
                         averageRating: req.service.averageRating || 0,
                         totalReviews: req.service.reviews?.length || 0,
@@ -1170,6 +1212,7 @@ export const getRecommendedServices = async (req, res) => {
                             email: req.user.email,
                             phone: req.user.phone,
                             profilePicture: req.user.profilePicture,
+                            availability: req.provider.availability,
                         },
 
                         distance,
@@ -1366,7 +1409,6 @@ export const getTopRatedServices = async (req, res) => {
                     images: imagesExpr,
                     subServices: subServicesExpr,
                     estimatedTime: estimatedTimeExpr,
-                    availability: availabilityExpr,
 
                     averageRating: "$rating",
                     totalReviews: "$reviewsCount",
@@ -1383,6 +1425,7 @@ export const getTopRatedServices = async (req, res) => {
                         email: "$user.email",
                         phone: "$user.phone",
                         profilePicture: "$user.profilePicture",
+                        availability: "$provider.availability",
                     },
                 },
             },
@@ -1513,7 +1556,6 @@ export const quickSearch = async (req, res) => {
                     images: imagesExpr,
                     subServices: subServicesExpr,
                     estimatedTime: estimatedTimeExpr,
-                    availability: availabilityExpr,
                     averageRating: '$service.averageRating',
                     category: {
                         _id: '$category._id',
@@ -1526,7 +1568,8 @@ export const quickSearch = async (req, res) => {
                         email: '$user.email',
                         phone: '$user.phone',
                         profilePicture: '$user.profilePicture',
-                        businessName: '$provider.businessName'
+                        businessName: '$provider.businessName',
+                        availability: '$provider.availability'
                     }
                 }
             },

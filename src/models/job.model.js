@@ -20,12 +20,16 @@ const jobSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    // Not required: a custom UK service (isCustomService, provider's own
+    // listing with no admin template) has no backing Service document at
+    // all — `serviceRequestId` below is that job's only reference back to
+    // its listing (ukService.title/price/etc). Template-based jobs (BD, or
+    // UK against an admin template) still set both.
     service: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'Service', 
-      required: true,
+      ref: 'Service',
     },
-    serviceRequestId: {  
+    serviceRequestId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ServiceRequest',
     },

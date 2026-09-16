@@ -15,6 +15,8 @@ import {
   applyCancellationMetadata,
   releaseEscrowForCancellation,
   markPaymentRefundAutoCompleted,
+  attemptAutomaticStripeRefund,
+  buildCustomerRefundMessage,
 } from '../../utils/jobCancellation.js';
 import { getServiceDetailsForJobs, formatServiceDetails } from '../../utils/jobFormatter.js';
 
@@ -143,7 +145,10 @@ export async function cancelJobByProvider(req, res) {
     const provider = await Provider.findOne({ userId }).session(session);
     if (!provider) throw new ApiError(404, 'Provider profile not found');
 
-    const job = await Job.findById(jobId).populate('service', 'name').session(session);
+    const job = await Job.findById(jobId)
+      .populate('service', 'name')
+      .populate('serviceRequestId', 'ukService.title')
+      .session(session);
     if (!job) throw new ApiError(404, 'Job not found');
 
     if (job.provider.toString() !== provider._id.toString()) {
@@ -171,6 +176,11 @@ export async function cancelJobByProvider(req, res) {
 
     await session.commitTransaction();
 
+    // UK card payments only — refunds straight to the customer's card via
+    // Stripe. Must run after commit (real external side effect, never
+    // inside the DB transaction). BD stays on the manual admin queue.
+    await attemptAutomaticStripeRefund(payment);
+
     // ── Activity Log ──────────────────────────────────────────────────
     try {
       await createActivityLog({
@@ -187,13 +197,17 @@ export async function cancelJobByProvider(req, res) {
 
     // ── Notifications ─────────────────────────────────────────────────
     try {
+      const cancelServiceName = job.service?.name || job.serviceRequestId?.ukService?.title || 'the service';
+      // Refund status is only meaningful for a paid booking — attemptAutomaticStripeRefund()
+      // has already run by this point, so payment.refundStatus reflects the real outcome.
+      const refundMsg = buildCustomerRefundMessage(payment);
       await createNotification({
         userId: job.customer,
         title: 'Booking Cancelled by Provider',
-        message: `Order #${job.orderId} for "${job.service?.name || 'the service'}" was cancelled by the provider.`,
+        message: `Order #${job.orderId} for "${cancelServiceName}" was cancelled by the provider.${refundMsg ? ` ${refundMsg}` : ''}`,
         type: 'job',
         referenceId: job._id,
-        metadata: { orderId: job.orderId, jobId: job._id },
+        metadata: { orderId: job.orderId, jobId: job._id, refundStatus: payment?.refundStatus },
       });
 
       const adminUser = await User.findOne({ role: 'admin' });
@@ -262,7 +276,7 @@ export async function getProviderJobs(req, res) {
 
     // Format jobs with provider details
     const formattedJobs = jobs.map(job => {
-      const serviceDetails = formatServiceDetails(job.service, job.provider, job.customer?.region, srMap);
+      const serviceDetails = formatServiceDetails(job.service, job.provider, job.customer?.region, srMap, job.serviceRequestId);
       return {
         _id: job._id,
         orderId: job.orderId,
@@ -286,7 +300,8 @@ export async function getProviderJobs(req, res) {
           email: job.provider?.userId?.email,
           phone: job.provider?.userId?.phoneNumber,
           profilePicture: job.provider?.userId?.profilePicture,
-          location: job.provider?.location || job.provider?.userId?.location
+          location: job.provider?.location || job.provider?.userId?.location,
+          availability: job.provider?.availability
         },
         subServices: job.subServices || [],
         timestamps: {
@@ -369,7 +384,7 @@ export async function getJobDetails(req, res) {
     if (!job) throw new ApiError(404, 'Job not found');
 
     const srMap = await getServiceDetailsForJobs(job);
-    const serviceDetails = formatServiceDetails(job.service, job.provider, job.customer?.region, srMap);
+    const serviceDetails = formatServiceDetails(job.service, job.provider, job.customer?.region, srMap, job.serviceRequestId);
     if (serviceDetails) {
       serviceDetails.reviews = job.service?.reviews || [];
     }
@@ -399,7 +414,8 @@ export async function getJobDetails(req, res) {
         email: job.provider?.userId?.email,
         phone: job.provider?.userId?.phone,
         profilePicture: job.provider?.userId?.profilePicture,
-        location: job.provider?.location || job.provider?.userId?.location
+        location: job.provider?.location || job.provider?.userId?.location,
+        availability: job.provider?.availability
       },
       payment: payment ? {
         _id: payment._id,
@@ -451,6 +467,7 @@ export async function acceptJob(req, res) {
 
     const job = await Job.findById(jobId)
       .populate('service', 'name')
+      .populate('serviceRequestId', 'ukService.title')
       .populate('customer', 'name email')
       .session(session);
 
@@ -488,11 +505,13 @@ export async function acceptJob(req, res) {
       req
     });
 
+    const acceptedServiceName = job.service?.name || job.serviceRequestId?.ukService?.title || 'the service';
+
     // Send notification to customer
     await createNotification({
       userId: job.customer._id,
       title: 'Job Accepted',
-      message: `Your service "${job.service?.name}" (Order #${job.orderId}) has been accepted by the provider.`,
+      message: `Your service "${acceptedServiceName}" (Order #${job.orderId}) has been accepted by the provider.`,
       type: 'job',
       referenceId: job._id,
       metadata: { orderId: job.orderId, jobId: job._id },
@@ -504,7 +523,7 @@ export async function acceptJob(req, res) {
       await createNotification({
         userId: providerUser._id,
         title: 'Job Accepted',
-        message: `You have accepted job #${job.orderId} for "${job.service?.name}". You can now start the job.`,
+        message: `You have accepted job #${job.orderId} for "${acceptedServiceName}". You can now start the job.`,
         type: 'job',
         referenceId: job._id,
         metadata: { orderId: job.orderId, jobId: job._id },
@@ -552,6 +571,7 @@ export async function startJob(req, res) {
 
     const job = await Job.findById(jobId)
       .populate('service', 'name')
+      .populate('serviceRequestId', 'ukService.title')
       .session(session);
 
     if (!job) {
@@ -635,7 +655,7 @@ export async function startJob(req, res) {
     await createNotification({
       userId: job.customer,
       title: 'Job Started',
-      message: `Your service "${job.service?.name}" (Order #${job.orderId}) has been started.`,
+      message: `Your service "${job.service?.name || job.serviceRequestId?.ukService?.title || 'the service'}" (Order #${job.orderId}) has been started.`,
       type: 'job',
       referenceId: job._id,
     });
@@ -672,6 +692,7 @@ export async function markCompletedByProvider(req, res) {
 
     const job = await Job.findById(jobId)
       .populate('service', 'name')
+      .populate('serviceRequestId', 'ukService.title')
       .session(session);
 
     if (!job) {
@@ -708,7 +729,7 @@ export async function markCompletedByProvider(req, res) {
     await createNotification({
       userId: job.customer,
       title: 'Job Completed - Please Confirm',
-      message: `Provider has completed "${job.service?.name}" (Order #${job.orderId}). Please confirm.`,
+      message: `Provider has completed "${job.service?.name || job.serviceRequestId?.ukService?.title || 'the service'}" (Order #${job.orderId}). Please confirm.`,
       type: 'job',
       referenceId: job._id,
     });

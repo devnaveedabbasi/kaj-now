@@ -50,3 +50,28 @@ export async function retrieveStripePaymentIntent(paymentIntentId) {
     throw new Error(`Failed to retrieve Stripe payment intent: ${error.message}`);
   }
 }
+
+/**
+ * Refunds a Stripe PaymentIntent back to the customer's original card.
+ * @param {string} paymentIntentId The Stripe PaymentIntent ID to refund.
+ * @param {number} [amount] Amount to refund in major currency units (e.g. GBP) — omit for a full refund.
+ * @param {string} [reason] One of Stripe's refund reasons: 'duplicate' | 'fraudulent' | 'requested_by_customer'.
+ * @returns {object} The created Refund object.
+ */
+export async function createStripeRefund(paymentIntentId, amount = null, reason = null) {
+  if (!stripe) {
+    throw new Error('Stripe is not configured. Missing STRIPE_SECRET_KEY.');
+  }
+
+  try {
+    const refund = await stripe.refunds.create({
+      payment_intent: paymentIntentId,
+      ...(amount != null && { amount: Math.round(amount * 100) }),
+      ...(reason && { reason }),
+    });
+    return refund;
+  } catch (error) {
+    console.error('[Stripe] createRefund Error:', error.message);
+    throw new Error(`Stripe refund failed: ${error.message}`);
+  }
+}

@@ -81,14 +81,22 @@ class JobSchedulerService {
     try {
       const jobDoc = await Job.findById(job._id)
         .populate('service', 'name')
+        .populate('serviceRequestId', 'ukService.title')
         .populate('provider', 'userId');
 
       if (!jobDoc || jobDoc.status !== 'pending') return;
 
+      // A custom UK service (no backing Service doc) has `service` unset by
+      // design — its real title lives on serviceRequestId.ukService instead.
+      // `service` can also fail to populate if the Service doc was since
+      // deleted (orphaned reference) — fall back rather than literally
+      // printing "undefined" in a message the provider actually reads.
+      const serviceName = jobDoc.service?.name || jobDoc.serviceRequestId?.ukService?.title || 'the service';
+
       await createNotification({
         userId: jobDoc.provider?.userId,
         title: 'Accept Job Request',
-        message: `You have 1 hour to accept Order #${jobDoc.orderId} for "${jobDoc.service?.name}" or it will be automatically cancelled and customer will be refunded.`,
+        message: `You have 1 hour to accept Order #${jobDoc.orderId} for "${serviceName}" or it will be automatically cancelled and customer will be refunded.`,
         type: 'job',
         referenceId: jobDoc._id,
         metadata: { orderId: jobDoc.orderId, warning: true, warningType },
@@ -132,39 +140,47 @@ class JobSchedulerService {
       jobDoc.cancellationReason = jobDoc.rejectionReason;
       await jobDoc.save({ session });
 
-      // We use the same manual refund flow as when an admin cancels a job.
-      // The money stays with the platform until an admin explicitly refunds it.
-      const { releaseEscrowForCancellation } = await import('../utils/jobCancellation.js');
+      // Same refund flow as when an admin cancels a job: UK card payments
+      // get auto-refunded via Stripe below; BD stays on the manual admin queue.
+      const { releaseEscrowForCancellation, attemptAutomaticStripeRefund, buildCustomerRefundMessage, buildAdminRefundMessage } = await import('../utils/jobCancellation.js');
       await releaseEscrowForCancellation(session, payment);
 
       const customerUser = jobDoc.customer;
       const adminUser = await User.findOne({ role: 'admin' }).session(session);
 
       await session.commitTransaction();
-      console.log(`Job cancelled (8h timeout). Refund pending admin action for: ${jobId}`);
+      console.log(`Job cancelled (8h timeout): ${jobId}`);
+
+      // Real external side effect — must run after commit, never inside
+      // the DB transaction. payment.refundStatus reflects the real outcome
+      // (auto-refunded via Stripe for UK card, or still pending) once this returns.
+      await attemptAutomaticStripeRefund(payment);
+      const refundMsg = buildCustomerRefundMessage(payment);
 
       await createNotification({
         userId: customerUser._id,
-        title: 'Job Cancelled - Refund Pending',
-        message: `Your booking (Order #${jobDoc.orderId}) was automatically cancelled because the provider did not accept it within 8 hours. The amount of ${payment.totalAmount} BDT will be refunded to you manually.`,
+        title: 'Job Cancelled',
+        message: `Your booking (Order #${jobDoc.orderId}) was automatically cancelled because the provider did not accept it within 8 hours.${refundMsg ? ` ${refundMsg}` : ''}`,
         type: 'job',
         referenceId: jobDoc._id,
-        metadata: { orderId: jobDoc.orderId, reason: 'provider_timeout_8hours' },
+        metadata: { orderId: jobDoc.orderId, reason: 'provider_timeout_8hours', refundStatus: payment?.refundStatus },
       });
 
       if (adminUser) {
+        const adminRefundMsg = buildAdminRefundMessage(payment);
         await createNotification({
           userId: adminUser._id,
-          title: 'Job Cancelled - Action Required',
-          message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled (provider timeout 8 hours). A refund of ${payment.totalAmount} is pending your manual action.`,
+          title: 'Job Cancelled',
+          message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled (provider timeout 8 hours).${adminRefundMsg ? ` ${adminRefundMsg}` : ''}`,
           type: 'admin',
           referenceId: jobDoc._id,
-          metadata: { 
-            orderId: jobDoc.orderId, 
+          metadata: {
+            orderId: jobDoc.orderId,
             customerId: customerUser._id,
             customerName: customerUser.name,
             reason: 'provider_timeout_8hours',
-            jobId: jobDoc._id
+            jobId: jobDoc._id,
+            refundStatus: payment?.refundStatus
           },
         });
       }
@@ -197,7 +213,7 @@ class JobSchedulerService {
     const activeJobs = await Job.find({
       status: { $in: ['pending', 'accepted'] },
       'schedule.date': { $ne: null }
-    }).populate('service').populate('provider');
+    }).populate('service').populate('provider').populate('serviceRequestId', 'ukService.title');
 
     const now = new Date();
 
@@ -248,14 +264,20 @@ class JobSchedulerService {
 
     console.log(`Sending ${label} reminder for job ${job.orderId}`);
 
-    const msg = key === '0min' ? `Job for ${job.service?.name} starting now!` : `Job starting in ${label}`;
+    // A custom UK service (no backing Service doc) has `service` unset by
+    // design — its real title lives on serviceRequestId.ukService instead.
+    // `service` can also fail to populate if the Service doc was since
+    // deleted (orphaned reference) — fall back rather than literally
+    // printing "undefined" in a message the provider/customer actually reads.
+    const serviceName = job.service?.name || job.serviceRequestId?.ukService?.title || 'your service';
+    const msg = key === '0min' ? `Job for ${serviceName} starting now!` : `Job starting in ${label}`;
 
     try {
       // Notify Provider
       await createNotification({
         userId: job.provider?.userId,
         title: msg,
-        message: `Service: ${job.service?.name} (Order #${job.orderId})`,
+        message: `Service: ${serviceName} (Order #${job.orderId})`,
         type: 'job',
         referenceId: job._id,
         metadata: { orderId: job.orderId, reminderType },
@@ -265,7 +287,7 @@ class JobSchedulerService {
       await createNotification({
         userId: job.customer,
         title: msg,
-        message: `Service: ${job.service?.name} (Order #${job.orderId})`,
+        message: `Service: ${serviceName} (Order #${job.orderId})`,
         type: 'job',
         referenceId: job._id,
         metadata: { orderId: job.orderId, reminderType },
@@ -308,39 +330,47 @@ class JobSchedulerService {
       jobDoc.cancellationReason = jobDoc.rejectionReason;
       await jobDoc.save({ session });
 
-      // We use the same manual refund flow as when an admin cancels a job.
-      // The money stays with the platform until an admin explicitly refunds it.
-      const { releaseEscrowForCancellation } = await import('../utils/jobCancellation.js');
+      // Same refund flow as when an admin cancels a job: UK card payments
+      // get auto-refunded via Stripe below; BD stays on the manual admin queue.
+      const { releaseEscrowForCancellation, attemptAutomaticStripeRefund, buildCustomerRefundMessage, buildAdminRefundMessage } = await import('../utils/jobCancellation.js');
       await releaseEscrowForCancellation(session, payment);
 
       await session.commitTransaction();
-      console.log(`Job cancelled (timeout). Refund pending admin action for: ${jobId}`);
+      console.log(`Job cancelled (timeout): ${jobId}`);
+
+      // Real external side effect — must run after commit, never inside
+      // the DB transaction. payment.refundStatus reflects the real outcome
+      // (auto-refunded via Stripe for UK card, or still pending) once this returns.
+      await attemptAutomaticStripeRefund(payment);
+      const refundMsg = buildCustomerRefundMessage(payment);
 
       // Notifications
       const customerUser = await User.findById(jobDoc.customer._id).session(session);
       await createNotification({
         userId: customerUser._id,
-        title: 'Job Cancelled - Refund Pending',
-        message: `Your booking Order #${jobDoc.orderId} was cancelled. Provider did not start on time. The amount of ${payment.totalAmount} BDT will be refunded to you manually.`,
+        title: 'Job Cancelled',
+        message: `Your booking Order #${jobDoc.orderId} was cancelled. Provider did not start on time.${refundMsg ? ` ${refundMsg}` : ''}`,
         type: 'job',
         referenceId: jobDoc._id,
-        metadata: { orderId: jobDoc.orderId, reason: 'provider_no_show_5mins' },
+        metadata: { orderId: jobDoc.orderId, reason: 'provider_no_show_5mins', refundStatus: payment?.refundStatus },
       });
 
       const adminUser = await User.findOne({ role: 'admin' }).session(session);
       if (adminUser) {
+        const adminRefundMsg = buildAdminRefundMessage(payment);
         await createNotification({
           userId: adminUser._id,
-          title: 'Job Cancelled - Action Required',
-          message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled (provider did not start). A refund of ${payment.totalAmount} is pending your manual action.`,
+          title: 'Job Cancelled',
+          message: `Order #${jobDoc.orderId} from customer "${customerUser.name}" was auto-cancelled (provider did not start).${adminRefundMsg ? ` ${adminRefundMsg}` : ''}`,
           type: 'admin',
           referenceId: jobDoc._id,
-          metadata: { 
-            orderId: jobDoc.orderId, 
+          metadata: {
+            orderId: jobDoc.orderId,
             customerId: customerUser._id,
             customerName: customerUser.name,
             reason: 'provider_no_show_5mins',
-            jobId: jobDoc._id
+            jobId: jobDoc._id,
+            refundStatus: payment?.refundStatus
           },
         });
       }

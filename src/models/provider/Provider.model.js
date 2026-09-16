@@ -23,6 +23,22 @@ const providerSchema = new mongoose.Schema(
     },
     dob: { type: Date },
 
+    // Provider's general working availability — set during KYC, editable
+    // later from update profile. One shared time range applied across the
+    // selected days (e.g. Mon/Tue/Wed, 1pm to 9pm) rather than per-day hours.
+    // Defaults to every day, standard business hours, so a provider who
+    // never touches this still has a sensible, real value instead of a
+    // blank one — they can narrow it down later from their profile.
+    availability: {
+      days: {
+        type: [String],
+        enum: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+        default: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      },
+      startTime: { type: String, trim: true, default: '09:00' },
+      endTime: { type: String, trim: true, default: '18:00' },
+    },
+
     Category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Category',
@@ -106,16 +122,22 @@ const providerSchema = new mongoose.Schema(
 );
 
 // Method to increment service order count
+// `serviceId` is undefined for a custom UK service (no backing Service
+// document to key the per-template breakdown against) — still count it
+// toward totalOrdersCompleted, just skip the per-service map entry.
 providerSchema.methods.incrementServiceOrderCount = async function (serviceId) {
-  const currentCount = this.serviceOrdersCount.get(serviceId.toString()) || 0;
-  this.serviceOrdersCount.set(serviceId.toString(), currentCount + 1);
+  if (serviceId) {
+    const currentCount = this.serviceOrdersCount.get(serviceId.toString()) || 0;
+    this.serviceOrdersCount.set(serviceId.toString(), currentCount + 1);
+  }
   this.totalOrdersCompleted += 1;
   await this.save();
-  return this.serviceOrdersCount.get(serviceId.toString());
+  return serviceId ? this.serviceOrdersCount.get(serviceId.toString()) : undefined;
 };
 
 // Method to get service order count
 providerSchema.methods.getServiceOrderCount = function (serviceId) {
+  if (!serviceId) return 0;
   return this.serviceOrdersCount.get(serviceId.toString()) || 0;
 };
 

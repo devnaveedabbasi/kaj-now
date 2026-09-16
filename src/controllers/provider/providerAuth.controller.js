@@ -22,6 +22,46 @@ const ukPhoneRegex = /^\+44[0-9]{10}$/;
 
 const deleteFile = (mediaUrl) => deleteMedia(mediaUrl).catch((error) => console.error('Error deleting S3 media:', error.message));
 
+const VALID_AVAILABILITY_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+// Shared by completeProfile (KYC) and updateProfile — parses the working
+// availability fields (multipart form fields always arrive as strings) and
+// returns the object to assign to provider.availability, or undefined if
+// none of the three fields were sent (so callers can leave it untouched).
+function parseAvailability({ availabilityDays, availabilityStartTime, availabilityEndTime }) {
+  if (availabilityDays === undefined && availabilityStartTime === undefined && availabilityEndTime === undefined) {
+    return undefined;
+  }
+
+  let days = [];
+  if (availabilityDays !== undefined) {
+    if (typeof availabilityDays === 'string') {
+      // Accepts a JSON array ("[\"Mon\",\"Tue\"]"), a plain comma-separated
+      // list ("Mon,Tue,Wed"), or a single day ("Mon").
+      try {
+        const parsed = JSON.parse(availabilityDays);
+        days = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        days = availabilityDays.split(',').map((d) => d.trim()).filter(Boolean);
+      }
+    } else {
+      days = Array.isArray(availabilityDays) ? availabilityDays : [availabilityDays];
+    }
+
+    for (const day of days) {
+      if (!VALID_AVAILABILITY_DAYS.includes(day)) {
+        throw new ApiError(400, `Invalid availability day: ${day}. Must be one of ${VALID_AVAILABILITY_DAYS.join(', ')}`);
+      }
+    }
+  }
+
+  return {
+    ...(availabilityDays !== undefined && { days }),
+    ...(availabilityStartTime !== undefined && { startTime: String(availabilityStartTime).trim() }),
+    ...(availabilityEndTime !== undefined && { endTime: String(availabilityEndTime).trim() }),
+  };
+}
+
 function publicUserDoc(user) {
   const u = user.toObject ? user.toObject() : { ...user };
   delete u.password;
@@ -440,7 +480,12 @@ export const completeProfile = async (req, res) => {
     companyName,
     companyNumber,
     directorId,
+    availabilityDays,
+    availabilityStartTime,
+    availabilityEndTime,
   } = req.body;
+
+  const availability = parseAvailability({ availabilityDays, availabilityStartTime, availabilityEndTime });
 
   const files = req.files || {};
 
@@ -617,6 +662,14 @@ if (!isUK) {
     }
   }
 
+  if (availability) {
+    provider.availability = {
+      days: availability.days ?? provider.availability?.days ?? [],
+      startTime: availability.startTime ?? provider.availability?.startTime ?? '',
+      endTime: availability.endTime ?? provider.availability?.endTime ?? '',
+    };
+  }
+
   provider.isKycCompleted = true;
   provider.kycStatus = "pending";
 
@@ -678,6 +731,7 @@ export async function me(req, res) {
         isKycCompleted: provider.isKycCompleted,
         kycStatus: provider.kycStatus,
         location: provider.location,
+        availability: provider.availability,
       },
       'User profile retrieved successfully.'
     )
@@ -689,8 +743,9 @@ export const updateProfile = async (req, res) => {
   let uploadedProfileUrl = null;
   try {
     const userId = req.user._id;
-    const { name, email, phone, permanentAddress, dob, gender, location } = req.body;
+    const { name, email, phone, permanentAddress, dob, gender, location, availabilityDays, availabilityStartTime, availabilityEndTime } = req.body;
     const files = req.files || {};
+    const availability = parseAvailability({ availabilityDays, availabilityStartTime, availabilityEndTime });
 
     // Find user and provider
     const user = await User.findById(userId);
@@ -790,6 +845,14 @@ export const updateProfile = async (req, res) => {
       user.location = parsedLocation;
     }
 
+    if (availability) {
+      provider.availability = {
+        days: availability.days ?? provider.availability?.days ?? [],
+        startTime: availability.startTime ?? provider.availability?.startTime ?? '',
+        endTime: availability.endTime ?? provider.availability?.endTime ?? '',
+      };
+    }
+
     await user.save();
     await provider.save();
     if (user.$locals.oldProfilePicture) await deleteFile(user.$locals.oldProfilePicture);
@@ -808,7 +871,8 @@ export const updateProfile = async (req, res) => {
           gender: provider.gender,
           dob: provider.dob,
           permanentAddress: provider.permanentAddress,
-          location: provider.location
+          location: provider.location,
+          availability: provider.availability
         }
       }, 'Profile updated successfully')
     );

@@ -115,7 +115,7 @@ export const getServiceRequestById = async (req, res) => {
     const request = await ServiceRequest.findById(id)
         .populate({
             path: 'providerId',
-            select: 'userId',
+            select: 'userId availability',
             populate: {
                 path: 'userId',
                 select: 'name email profilePicture'
@@ -238,32 +238,129 @@ export const rejectServiceRequest = async (req, res) => {
     );
 };
 
-// Get all approved/active service assignments (from approved requests)
+// Get all approved/active service assignments (from approved requests) —
+// this is the actual "live catalog" of what providers are offering, not
+// the approval queue. Template-based AND custom UK listings both show up
+// here; custom ones have no `serviceId` at all, so every display field
+// below falls back to `ukService` the same way the customer- and
+// provider-facing controllers already do.
 export const getAllServiceAssignments = async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const { search, region, type, sortBy = 'reviewedAt', sortOrder = 'desc' } = req.query;
 
-    const [assignments, totalCount] = await Promise.all([
-        ServiceRequest.find({ status: 'approved' })
+    let query = { status: 'approved' };
+
+    const regionCategoryIds = await categoryIdsForRegion(region);
+    if (regionCategoryIds) query.categoryId = { $in: regionCategoryIds };
+
+    if (type === 'custom') query.isCustomService = true;
+    if (type === 'template') query.isCustomService = { $ne: true };
+
+    if (search) {
+        const [matchingUsers, matchingServices] = await Promise.all([
+            User.find({
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { email: { $regex: search, $options: 'i' } }
+                ]
+            }).select('_id'),
+            Service.find({
+                name: { $regex: search, $options: 'i' }
+            }).select('_id')
+        ]);
+
+        const userIds = matchingUsers.map(u => u._id);
+        const matchingProviders = await Provider.find({ userId: { $in: userIds } }).select('_id');
+        const providerIds = matchingProviders.map(p => p._id);
+        const serviceIds = matchingServices.map(s => s._id);
+
+        query.$or = [
+            { providerId: { $in: providerIds } },
+            { serviceId: { $in: serviceIds } },
+            // Custom listings have no serviceId to match on Service.name —
+            // search their own proposed title directly instead.
+            { 'ukService.title': { $regex: search, $options: 'i' } },
+        ];
+    }
+
+    let sortQuery = {};
+    sortQuery[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    const [rawAssignments, totalCount] = await Promise.all([
+        ServiceRequest.find(query)
             .populate({
                 path: 'providerId',
-                select: 'userId',
+                select: 'userId availability',
                 populate: {
                     path: 'userId',
-                    select: 'name email'
+                    select: 'name email profilePicture'
                 }
             })
-            .populate('serviceId', 'name icon serviceImage price')
-            .populate('categoryId', 'name')
+            .populate('serviceId', 'name icon serviceImage price description subServices')
+            .populate('categoryId', 'name icon region')
             .populate('reviewedByAdmin', 'name email')
-            .sort({ reviewedAt: -1 })
+            .sort(sortQuery)
+            .skip(skip)
+            .limit(limit)
             .lean(),
-        ServiceRequest.countDocuments({ status: 'approved' })
+        ServiceRequest.countDocuments(query)
     ]);
 
+    // Normalize template vs custom into one consistent display shape so the
+    // dashboard doesn't need to branch on isCustomService itself.
+    const assignments = rawAssignments.map((assignment) => {
+        const template = Array.isArray(assignment.serviceId) ? assignment.serviceId[0] : assignment.serviceId;
+        const uk = assignment.ukService || {};
+        // Every non-custom request was created against a real Service
+        // template — if none populated, that admin Service doc has since
+        // been hard-deleted. (Can't check serviceId.length here: Mongoose
+        // silently drops an array ref entry that fails to resolve, rather
+        // than leaving null, so the populated array looks empty either way.)
+        // There's no name left to recover — it was never stored anywhere
+        // but on that now-gone doc — so say so plainly instead of a bare,
+        // confusing "N/A".
+        const templateDeleted = !assignment.isCustomService && !template;
+        const categoryName = assignment.categoryId?.name;
+
+        let name;
+        if (template?.name) name = template.name;
+        else if (uk.title) name = uk.title;
+        else if (templateDeleted) name = categoryName ? `${categoryName} (template deleted)` : 'Template deleted';
+        else name = 'N/A';
+
+        return {
+            _id: assignment._id,
+            isCustomService: !!assignment.isCustomService,
+            templateDeleted,
+            name,
+            icon: template?.icon || null,
+            serviceImage: uk.serviceImage || template?.serviceImage || null,
+            price: uk.price ?? template?.price ?? null,
+            description: uk.description || template?.description || null,
+            subServices: (uk.subServices?.length ? uk.subServices : template?.subServices) || [],
+            provider: assignment.providerId,
+            category: assignment.categoryId,
+            reviewedByAdmin: assignment.reviewedByAdmin,
+            reviewedAt: assignment.reviewedAt,
+            requestedAt: assignment.requestedAt,
+        };
+    });
+
+    const totalPages = Math.ceil(totalCount / limit);
 
     res.status(200).json(
         new ApiResponse(200, {
             assignments,
-
+            pagination: {
+                currentPage: page,
+                totalPages,
+                totalItems: totalCount,
+                itemsPerPage: limit,
+                hasNextPage: page < totalPages,
+                hasPrevPage: page > 1
+            }
         }, 'Service assignments retrieved successfully')
     );
 };

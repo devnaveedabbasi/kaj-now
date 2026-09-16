@@ -115,7 +115,9 @@ export const requestWithdrawal = async (req, res) => {
         await createNotification({
           userId: admin._id,
           title: 'New Withdrawal Request',
-          message: `Provider ${provider.name} requested withdrawal of ${amount}`,
+          // `provider` is a Provider doc, which has no `name` field — that
+          // lives on the linked User (req.user, already the full document).
+          message: `Provider ${req.user.name} requested withdrawal of ${amount}`,
           type: 'withdrawal',
           referenceId: withdrawal._id,
           metadata: {

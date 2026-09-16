@@ -14,6 +14,8 @@ import {
   NON_CANCELLABLE_JOB_STATUSES,
   releaseEscrowForCancellation,
   markPaymentRefundCompleted,
+  attemptAutomaticStripeRefund,
+  buildCustomerRefundMessage,
 } from '../../utils/jobCancellation.js';
 const ACTIVE_JOB_STATUSES = ['pending', 'accepted', 'in_progress'];
 
@@ -170,7 +172,7 @@ export const getAllJobs = async (req, res) => {
             query.customer = { $in: regionCustomers.map(u => u._id) };
         }
 
-        const [jobs, totalCount] = await Promise.all([
+        const [jobsRaw, totalCount] = await Promise.all([
             Job.find(query)
                 .populate('customer', 'name email')
                 .populate({
@@ -178,11 +180,23 @@ export const getAllJobs = async (req, res) => {
                     populate: { path: 'userId', select: 'name email' }
                 })
                 .populate('service', 'name')
+                .populate('serviceRequestId', 'isCustomService ukService')
                 .sort({ createdAt: -1 })
                 .skip(skip)
-                .limit(limit),
+                .limit(limit)
+                .lean(),
             Job.countDocuments(query)
         ]);
+
+        const jobs = jobsRaw.map(job => {
+             if (!job.service && job.serviceRequestId?.isCustomService && job.serviceRequestId?.ukService) {
+                 job.service = {
+                     _id: job.serviceRequestId._id,
+                     name: job.serviceRequestId.ukService.title,
+                 };
+             }
+             return job;
+        });
 
         const totalPages = Math.ceil(totalCount / limit);
 
@@ -215,77 +229,124 @@ export const getAvailableProviders = async (req, res) => {
         const job = await Job.findById(jobId)
             .populate('service', 'name price icon description')
             .populate('customer', 'name email phoneNumber')
+            .populate('serviceRequestId') // Required for custom services
             .lean();
 
         if (!job) throw new ApiError(404, 'Job not found');
-        if (!job.service) throw new ApiError(400, 'Job service is missing');
 
-        const serviceId = job.service._id;
+        let availableProviders = [];
 
-        // Step 2: Providers jo is service ko approvedServices mein rakhte hain
-        // aur jinki KYC approved hai aur user account bhi approved hai
-        const providers = await Provider.find({
-            approvedServices: serviceId,
-            kycStatus: 'approved',
-        })
-            .populate({
-                path: 'userId',
-                select: 'name email phoneNumber profilePicture status',
-                match: { status: 'approved' }, // sirf active users
+        // Check if Custom Service
+        if (!job.service && job.serviceRequestId?.isCustomService && job.serviceRequestId?.ukService) {
+            job.service = {
+                _id: job.serviceRequestId._id,
+                name: job.serviceRequestId.ukService.title,
+                price: job.serviceRequestId.ukService.price,
+                description: job.serviceRequestId.ukService.description,
+            };
+
+            // Only the owner of the custom service can be the available provider
+            const provider = await Provider.findOne({
+                _id: job.serviceRequestId.providerId,
+                kycStatus: 'approved',
             })
-            .lean();
+                .populate({
+                    path: 'userId',
+                    select: 'name email phoneNumber profilePicture status',
+                    match: { status: 'approved' },
+                })
+                .lean();
 
-        // Step 3: userId null wale filter out karo (jo match nahi hue)
-        const activeProviders = providers.filter((p) => p.userId !== null);
+            if (provider && provider.userId) {
+                // Check schedule conflict
+                const scheduleDate = job.schedule?.date;
+                const scheduleTime = job.schedule?.time;
+                let isAvailable = true;
 
-        // Step 4: ServiceRequest model se double check — provider ka service
-        // request approved hona chahiye is serviceId ke liye
-        const approvedRequests = await ServiceRequest.find({
-            providerId: { $in: activeProviders.map((p) => p._id) },
-            serviceId: serviceId,
-            status: 'approved',
-        }).lean();
+                if (scheduleDate && scheduleTime) {
+                    const busy = await hasProviderConflict(provider._id, scheduleDate, scheduleTime, null, job._id);
+                    isAvailable = !busy;
+                }
 
-        const approvedProviderIds = new Set(
-            approvedRequests.map((r) => r.providerId.toString())
-        );
+                if (isAvailable) {
+                    availableProviders.push({
+                        _id: provider._id,
+                        userId: provider.userId,
+                        location: provider.location || null,
+                        gender: provider.gender || '',
+                        kycStatus: provider.kycStatus,
+                        approvedServices: provider.approvedServices || [],
+                        availability: provider.availability || null,
+                    });
+                }
+            }
+        } else {
+            if (!job.service) throw new ApiError(400, 'Job service is missing');
+            const serviceId = job.service._id;
 
-        const verifiedProviders = activeProviders.filter((p) =>
-            approvedProviderIds.has(p._id.toString())
-        );
+            // Step 2: Providers jo is service ko approvedServices mein rakhte hain
+            const providers = await Provider.find({
+                approvedServices: serviceId,
+                kycStatus: 'approved',
+            })
+                .populate({
+                    path: 'userId',
+                    select: 'name email phoneNumber profilePicture status',
+                    match: { status: 'approved' },
+                })
+                .lean();
 
-        // Step 5: Schedule conflict check — koi active job nahi honi chahiye
-        // same time slot mein
-        const scheduleDate = job.schedule?.date;
-        const scheduleTime = job.schedule?.time;
+            // Step 3: userId null wale filter out karo
+            const activeProviders = providers.filter((p) => p.userId !== null);
 
-        if (!scheduleDate || !scheduleTime) {
-            throw new ApiError(400, 'Job schedule is missing');
+            // Step 4: ServiceRequest model se double check
+            const approvedRequests = await ServiceRequest.find({
+                providerId: { $in: activeProviders.map((p) => p._id) },
+                serviceId: serviceId,
+                status: 'approved',
+            }).lean();
+
+            const approvedProviderIds = new Set(
+                approvedRequests.map((r) => r.providerId.toString())
+            );
+
+            const verifiedProviders = activeProviders.filter((p) =>
+                approvedProviderIds.has(p._id.toString())
+            );
+
+            // Step 5: Schedule conflict check
+            const scheduleDate = job.schedule?.date;
+            const scheduleTime = job.schedule?.time;
+
+            if (!scheduleDate || !scheduleTime) {
+                throw new ApiError(400, 'Job schedule is missing');
+            }
+
+            const availabilityResults = await Promise.all(
+                verifiedProviders.map(async (provider) => {
+                    const busy = await hasProviderConflict(
+                        provider._id,
+                        scheduleDate,
+                        scheduleTime,
+                        null,
+                        job._id
+                    );
+                    return { provider, isAvailable: !busy };
+                })
+            );
+
+            availableProviders = availabilityResults
+                .filter((item) => item.isAvailable)
+                .map(({ provider }) => ({
+                    _id: provider._id,
+                    userId: provider.userId,
+                    location: provider.location || null,
+                    gender: provider.gender || '',
+                    kycStatus: provider.kycStatus,
+                    approvedServices: provider.approvedServices || [],
+                    availability: provider.availability || null,
+                }));
         }
-
-        const availabilityResults = await Promise.all(
-            verifiedProviders.map(async (provider) => {
-                const busy = await hasProviderConflict(
-                    provider._id,
-                    scheduleDate,
-                    scheduleTime,
-                    null,       // session nahi chahiye yahan
-                    job._id     // current job exclude karo
-                );
-                return { provider, isAvailable: !busy };
-            })
-        );
-
-        const availableProviders = availabilityResults
-            .filter((item) => item.isAvailable)
-            .map(({ provider }) => ({
-                _id: provider._id,
-                userId: provider.userId,
-                location: provider.location || null,
-                gender: provider.gender || '',
-                kycStatus: provider.kycStatus,
-                approvedServices: provider.approvedServices || [],
-            }));
 
         return res.status(200).json(
             new ApiResponse(200, {
@@ -328,10 +389,24 @@ export const getJobById = async (req, res) => {
                 populate: { path: 'userId', select: 'name email phoneNumber profilePicture' }
             })
             .populate('service', 'name price icon description')
-            .populate('serviceRequestId');
+            .populate('serviceRequestId')
+            .lean();
 
         if (!job) {
             throw new ApiError(404, 'Job not found');
+        }
+
+        // Map custom service details if applicable
+        if (!job.service && job.serviceRequestId?.isCustomService && job.serviceRequestId?.ukService) {
+            job.service = {
+                _id: job.serviceRequestId._id,
+                name: job.serviceRequestId.ukService.title,
+                price: job.serviceRequestId.ukService.price,
+                description: job.serviceRequestId.ukService.description,
+                icon: job.serviceRequestId.ukService.serviceImage,
+                serviceImage: job.serviceRequestId.ukService.serviceImage,
+                subServices: job.serviceRequestId.ukService.subServices || [],
+            };
         }
 
         res.status(200).json(
@@ -653,6 +728,11 @@ export const cancelJob = async (req, res) => {
 
         await session.commitTransaction();
 
+        // UK card payments only — refunds straight to the customer's card
+        // via Stripe. Must run after commit (real external side effect,
+        // never inside the DB transaction). BD stays on the manual queue.
+        await attemptAutomaticStripeRefund(payment);
+
         // Notify provider about cancellation
         if (providerUserId) {
             await createNotification({
@@ -668,13 +748,17 @@ export const cancelJob = async (req, res) => {
         // Notify customer about cancellation
         const customerUserId = getUserIdValue(job.customer);
         if (customerUserId) {
+            // Refund status is only meaningful for a paid booking —
+            // attemptAutomaticStripeRefund() has already run by this point,
+            // so payment.refundStatus reflects the real outcome.
+            const refundMsg = buildCustomerRefundMessage(payment);
             await createNotification({
                 userId: customerUserId,
                 title: 'Job Cancelled',
-                message: `Your booking ${job.orderId ? `#${job.orderId}` : ''} has been cancelled by admin.`,
+                message: `Your booking ${job.orderId ? `#${job.orderId}` : ''} has been cancelled by admin.${refundMsg ? ` ${refundMsg}` : ''}`,
                 type: 'job',
                 referenceId: job._id,
-                metadata: { action: 'job_cancelled', orderId: job.orderId }
+                metadata: { action: 'job_cancelled', orderId: job.orderId, refundStatus: payment?.refundStatus }
             });
         }
 

@@ -4,6 +4,7 @@ import RecommendedService from '../../models/admin/recommendedService.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
 import { ApiResponse } from '../../utils/apiResponse.js';
+import { timeZoneForRegion } from '../../utils/timezone.js';
 
 // GET /featured-requests
 // Returns the popular and recommended service requests fully populated
@@ -15,11 +16,12 @@ export const getFeaturedServiceRequests = async (req, res) => {
             ? { 'userArr.region': 'UK' }
             : { 'userArr.region': { $nin: ['UK'] } };
 
-        // Compute current day of week in UK timezone
-        const ukDay = new Intl.DateTimeFormat('en-GB', {
-            weekday: 'long',
-            timeZone: 'Europe/London',
-        }).format(new Date()).toLowerCase();
+        // Compute current day of week in the admin's own region — matches
+        // Provider.availability.days ('Mon'..'Sun').
+        const todayShortDay = new Intl.DateTimeFormat('en-GB', {
+            weekday: 'short',
+            timeZone: timeZoneForRegion(userRegion),
+        }).format(new Date());
 
         const [popularDocs, recommendedDocs] = await Promise.all([
             PopularService.find().lean(),
@@ -46,15 +48,6 @@ export const getFeaturedServiceRequests = async (req, res) => {
                     status: 'approved'
                 }
             },
-            ...(isUK
-                ? [{
-                    $match: {
-                        'ukService.availability': {
-                            $regex: new RegExp(`^${ukDay}$`, 'i')
-                        }
-                    }
-                }]
-                : []),
             {
                 $lookup: {
                     from: 'services',
@@ -81,6 +74,22 @@ export const getFeaturedServiceRequests = async (req, res) => {
                 }
             },
             { $unwind: { path: '$providerArr', preserveNullAndEmptyArrays: true } },
+            // ── Only show providers actually working today ─────────────────
+            // Applies to both regions. Filters on the provider's own working
+            // days, needs providerArr, so this must come after the provider
+            // lookup/unwind above. A provider who never set their
+            // availability is kept (opt-in filter, not opt-out) — otherwise
+            // every provider from before this field existed would silently
+            // vanish from the featured picks.
+            {
+                $match: {
+                    $or: [
+                        { 'providerArr.availability.days': todayShortDay },
+                        { 'providerArr.availability.days': { $exists: false } },
+                        { 'providerArr.availability.days': { $size: 0 } },
+                    ]
+                }
+            },
             {
                 $lookup: {
                     from: 'users',
@@ -105,7 +114,8 @@ export const getFeaturedServiceRequests = async (req, res) => {
                         name: '$userArr.name',
                         email: '$userArr.email',
                         profilePicture: '$userArr.profilePicture',
-                        location: '$providerArr.location'
+                        location: '$providerArr.location',
+                        availability: '$providerArr.availability'
                     },
                     services: {
                         $cond: [
@@ -117,11 +127,13 @@ export const getFeaturedServiceRequests = async (req, res) => {
                                     price: '$ukService.price',
                                     icon: { $ifNull: ['$ukService.icon', '$categoryArr.icon'] },
                                     serviceImage: { $ifNull: ['$ukService.serviceImage', null] },
-                                    averageRating: 0,
+                                    // Same default a real Service document
+                                    // gets — no backing Service doc exists
+                                    // for a custom service to carry a real one.
+                                    averageRating: 3,
                                     description: '$ukService.description',
                                     subServices: { $ifNull: ['$ukService.subServices', []] },
                                     estimatedTime: '$ukService.estimatedTime',
-                                    availability: '$ukService.availability'
                                 }
                             ],
                             {
@@ -145,7 +157,6 @@ export const getFeaturedServiceRequests = async (req, res) => {
                                             ]
                                         },
                                         estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
-                                        availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
                                     }
                                 }
                             }
@@ -319,7 +330,6 @@ export const getAllEligibleRequests = async (req, res) => {
                                 description: '$ukService.description',
                                 subServices: { $ifNull: ['$ukService.subServices', []] },
                                 estimatedTime: '$ukService.estimatedTime',
-                                availability: '$ukService.availability'
                             }
                         ],
                         {
@@ -341,7 +351,6 @@ export const getAllEligibleRequests = async (req, res) => {
                                         ]
                                     },
                                     estimatedTime: { $ifNull: ['$ukService.estimatedTime', '$$s.estimatedTime'] },
-                                    availability: { $ifNull: ['$ukService.availability', '$$s.availability'] }
                                 }
                             }
                         }

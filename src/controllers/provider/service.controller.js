@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Service from '../../models/admin/service.model.js';
 import ServiceRequest from '../../models/admin/serviceRequest.model.js';
+import UkPriceRange from '../../models/admin/ukPriceRange.model.js';
 import Category from '../../models/admin/category.model.js';
 import Provider from '../../models/provider/Provider.model.js';
 import { ApiError } from '../../utils/errorHandler.js';
@@ -8,6 +9,19 @@ import { ApiResponse } from '../../utils/apiResponse.js';
 import { uploadMediaBuffer, deleteMedia } from '../../service/s3Media.service.js';
 import Job from '../../models/job.model.js';
 import User from '../../models/User.model.js';
+
+// Every UK service a provider adds or edits — template-based or custom —
+// must fall within the single, admin-managed UK price range. There is no
+// per-service range; this is the one check point for all of it.
+const assertPriceWithinUkRange = async (price) => {
+    const range = await UkPriceRange.findOne({ region: 'UK' });
+    if (!range) {
+        throw new ApiError(400, 'Admin has not set a price range for UK services yet');
+    }
+    if (Number(price) < range.minPrice || Number(price) > range.maxPrice) {
+        throw new ApiError(400, `Price must be between ${range.minPrice} and ${range.maxPrice}`);
+    }
+};
 
 export const getAllCategories = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
@@ -213,7 +227,6 @@ export const requestService = async (req, res) => {
             price,
             subServices,
             estimatedTime,
-            availability,
         } = req.body;
 
         // Multipart form fields always arrive as strings.
@@ -235,21 +248,6 @@ export const requestService = async (req, res) => {
             }
         }
 
-        // `availability` is a list of days/slots — accept either a JSON
-        // array string or the array itself (repeated form field).
-        let parsedAvailability = [];
-        if (availability) {
-            try {
-                parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
-            } catch {
-                // Not JSON — treat as a single value.
-                parsedAvailability = [availability];
-            }
-            if (!Array.isArray(parsedAvailability)) {
-                parsedAvailability = [parsedAvailability];
-            }
-        }
-
         // ── Path B: fully custom service, no admin template at all ────────
         // Provider supplies everything themselves: title, cover photo,
         // price, description. Category still comes from the admin's list.
@@ -266,6 +264,7 @@ export const requestService = async (req, res) => {
             if (Number(price) < 0) {
                 throw new ApiError(400, 'Price cannot be negative');
             }
+            await assertPriceWithinUkRange(price);
             if (!serviceImageFile) {
                 throw new ApiError(400, 'Service image is required for a custom service');
             }
@@ -284,6 +283,10 @@ export const requestService = async (req, res) => {
                 providerId: provider._id,
                 categoryId,
                 isCustomService: true,
+                // This path is gated to userRegion === 'UK' above — always UK.
+                // Without this, the schema default silently left it 'BD',
+                // which broke anything filtering ServiceRequests by region.
+                region: 'UK',
                 ukService: {
                     title,
                     serviceImage: (await uploadMediaBuffer({ ...serviceImageFile, folder: 'media/images/service-requests' })).url,
@@ -291,7 +294,6 @@ export const requestService = async (req, res) => {
                     description,
                     subServices: parsedSubServices,
                     ...(estimatedTime && { estimatedTime }),
-                    ...(parsedAvailability.length > 0 && { availability: parsedAvailability }),
                 },
             });
 
@@ -352,6 +354,7 @@ export const requestService = async (req, res) => {
             if (!serviceImageFile) {
                 throw new ApiError(400, 'Service image is required for this service request');
             }
+            await assertPriceWithinUkRange(price);
         }
 
         if (provider.approvedServices && provider.approvedServices.length > 0) {
@@ -398,7 +401,6 @@ export const requestService = async (req, res) => {
                         description,
                         subServices: parsedSubServices,
                         ...(estimatedTime && { estimatedTime }),
-                        ...(parsedAvailability.length > 0 && { availability: parsedAvailability }),
                     };
                 }
 
@@ -470,7 +472,10 @@ export const getMyServices = async (req, res) => {
                     price: uk?.price,
                     description: uk?.description,
                     subServices: uk?.subServices || [],
-                    averageRating: 0,
+                    // Custom services have no backing Service doc to carry a
+                    // real average, so start at the same default a normal
+                    // Service document gets — not 0.
+                    averageRating: 3,
                     isCustomService: true,
                     status: request.status,
                     requestId: request._id,
@@ -490,7 +495,6 @@ export const getMyServices = async (req, res) => {
                 description: uk?.description || service.description,
                 subServices: uk?.subServices?.length ? uk.subServices : (service.subServices || []),
                 estimatedTime: uk?.estimatedTime ?? service.estimatedTime,
-                availability: uk?.availability ?? service.availability,
                 averageRating: service.averageRating || 0,
                 isCustomService: request.isCustomService || false,
                 status: request.status,           // pending / approved / rejected
@@ -539,7 +543,7 @@ export const getServiceById = async (req, res) => {
             serviceId: serviceId,
             providerId: provider._id
         })
-            .populate('providerId', 'userId businessName businessPhone businessEmail location')
+            .populate('providerId', 'userId businessName businessPhone businessEmail location availability')
             .populate('serviceId', 'name price icon serviceImage description categoryId averageRating')
             .populate('categoryId', 'name icon')
             .lean();
@@ -554,7 +558,7 @@ export const getServiceById = async (req, res) => {
                 providerId: provider._id,
                 isCustomService: true
             })
-                .populate('providerId', 'userId businessName businessPhone businessEmail location')
+                .populate('providerId', 'userId businessName businessPhone businessEmail location availability')
                 .populate('categoryId', 'name icon')
                 .lean();
 
@@ -587,10 +591,11 @@ export const getServiceById = async (req, res) => {
                 icon: uk.icon || null,
                 serviceImage: uk.serviceImage || null,
                 price: uk.price,
-                averageRating: 0,
+                // Same default a real Service document gets — no backing
+                // Service doc exists for a custom service to carry a real one.
+                averageRating: 3,
                 subServices: uk.subServices || [],
                 estimatedTime: uk.estimatedTime,
-                availability: uk.availability || []
             };
             // Custom service ka koi Service doc nahi — agar reviews
             // ServiceRequest._id pe store hote hain to ye chalega,
@@ -612,7 +617,6 @@ export const getServiceById = async (req, res) => {
                     serviceImage: uk.serviceImage || foundService.serviceImage,
                     subServices: uk.subServices?.length ? uk.subServices : (foundService.subServices || []),
                     estimatedTime: uk.estimatedTime ?? foundService.estimatedTime,
-                    availability: uk.availability ?? foundService.availability
                 };
             }
             reviewServiceId = targetService?._id;
@@ -661,7 +665,6 @@ export const getServiceById = async (req, res) => {
 
             subServices: targetService?.subServices || [],
             estimatedTime: targetService?.estimatedTime || null,
-            availability: targetService?.availability || [],
 
             // Provider (service owner)
             provider: {
@@ -671,6 +674,7 @@ export const getServiceById = async (req, res) => {
                 phone: providerUser?.phoneNumber,
                 profilePicture: providerUser?.profilePicture,
                 location: serviceRequest.providerId?.location,
+                availability: serviceRequest.providerId?.availability,
             },
 
             // Category
@@ -758,7 +762,6 @@ export const editService = async (req, res) => {
             description,
             subServices,
             estimatedTime,
-            availability,
             customTitle
         } = req.body;
 
@@ -771,25 +774,29 @@ export const editService = async (req, res) => {
             }
         }
 
-        let parsedAvailability = serviceRequest.ukService?.availability || [];
-        if (availability) {
-            try {
-                parsedAvailability = typeof availability === 'string' ? JSON.parse(availability) : availability;
-            } catch (e) {
-                throw new ApiError(400, 'Invalid availability format');
-            }
-        }
-
         // Update fields
         if (!serviceRequest.ukService) {
             serviceRequest.ukService = {};
+        }
+
+        // Every UK listing (custom services are always UK — see requestService
+        // Path B) stays bound to the single global UK price range. BD has no
+        // such rule.
+        if (price !== undefined) {
+            let isUkFlow = serviceRequest.isCustomService;
+            if (!isUkFlow && serviceRequest.serviceId?.length > 0) {
+                const template = await Service.findById(serviceRequest.serviceId[0]);
+                isUkFlow = template?.region === 'UK';
+            }
+            if (isUkFlow) {
+                await assertPriceWithinUkRange(price);
+            }
         }
 
         if (price !== undefined) serviceRequest.ukService.price = Number(price);
         if (description !== undefined) serviceRequest.ukService.description = description;
         if (subServices !== undefined) serviceRequest.ukService.subServices = parsedSubServices;
         if (estimatedTime !== undefined) serviceRequest.ukService.estimatedTime = estimatedTime;
-        if (availability !== undefined) serviceRequest.ukService.availability = parsedAvailability;
 
         // For custom services, they might update the title
         if (serviceRequest.isCustomService && customTitle) {

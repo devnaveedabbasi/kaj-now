@@ -45,7 +45,7 @@ const allowedOrigins = [
   "http://localhost:3001",
   "http://localhost:5000",
   "http://103.132.96.120:3000",
-  "http://192.168.1.46:3000",
+  "http://192.168.56.1:3001",
   "http://172.30.100.111:3000",
   "https://api.tribicx.globaleselect.it",
   "https://sandbox.sslcommerz.com",

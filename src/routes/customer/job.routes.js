@@ -4,6 +4,7 @@ import { asyncHandler } from '../../utils/asyncHandler.js';
 const router = Router();
 
 router.post('/book', asyncHandler(jobController.bookJob));
+router.patch('/pending-intent/:tranId/cancel', asyncHandler(jobController.cancelPendingIntent));
 router.get('/my-orders', asyncHandler(jobController.getMyOrders));
 router.get('/my-orders/:jobId', asyncHandler(jobController.getOrderById));
 
