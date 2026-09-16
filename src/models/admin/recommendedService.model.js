@@ -7,6 +7,11 @@ const recommendedServiceSchema = new mongoose.Schema(
             ref: 'ServiceRequest',
             required: true,
         },
+        // See popularService.model.js — same per-sub-service distinction.
+        serviceId: {
+            type: mongoose.Schema.Types.ObjectId,
+            default: null,
+        },
         region: {
             type: String,
             enum: ['UK', 'BD'],
@@ -16,7 +21,7 @@ const recommendedServiceSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-recommendedServiceSchema.index({ serviceRequestId: 1 }, { unique: true });
+recommendedServiceSchema.index({ serviceRequestId: 1, serviceId: 1 }, { unique: true });
 
 const RecommendedService = mongoose.model('RecommendedService', recommendedServiceSchema);
 

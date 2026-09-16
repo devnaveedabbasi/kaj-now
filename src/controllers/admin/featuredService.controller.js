@@ -10,8 +10,17 @@ import { timeZoneForRegion } from '../../utils/timezone.js';
 // Returns the popular and recommended service requests fully populated
 export const getFeaturedServiceRequests = async (req, res) => {
     try {
-        const userRegion = req.user?.region || 'BD';
-        const isUK = String(userRegion).toUpperCase() === 'UK';
+        // The admin dashboard calls this same endpoint for BOTH /uk/featured
+        // and /bd/featured, explicitly passing ?region=. The single shared
+        // admin account has no `region` of its own (req.user.region is
+        // undefined for admins) — without honoring the query param, this
+        // silently always fell back to 'BD' regardless of which dashboard
+        // page called it, so the UK page never actually saw UK data.
+        // Customers never send this param, so req.user.region (their own
+        // region) still applies for the customer-facing /featured route.
+        const queryRegion = String(req.query.region || '').toUpperCase();
+        const userRegion = ['UK', 'BD'].includes(queryRegion) ? queryRegion : (req.user?.region || 'BD');
+        const isUK = userRegion === 'UK';
         const regionFilter = isUK
             ? { 'userArr.region': 'UK' }
             : { 'userArr.region': { $nin: ['UK'] } };
@@ -171,19 +180,27 @@ export const getFeaturedServiceRequests = async (req, res) => {
         // Use a Map for O(1) lookup by ServiceRequest._id (never gets overwritten in projection)
         const srMap = new Map(serviceRequests.map(s => [s._id.toString(), s]));
 
-        const popular = popularDocs
+        // A PopularService/RecommendedService doc can target one specific
+        // sub-service inside a bundled request (doc.serviceId set) or the
+        // request as a single unit (doc.serviceId null — custom services,
+        // or legacy single-service requests). When it targets one
+        // sub-service, narrow the enriched request's `services` array down
+        // to just that one instead of returning the whole bundle.
+        const buildFeaturedList = (docs) => docs
             .map(doc => {
                 const enriched = srMap.get(doc.serviceRequestId.toString());
-                return enriched ? { featuredId: doc._id, ...enriched } : null;
+                if (!enriched) return null;
+                let services = enriched.services;
+                if (doc.serviceId) {
+                    services = services.filter(s => s.serviceId && s.serviceId.toString() === doc.serviceId.toString());
+                    if (services.length === 0) return null;
+                }
+                return { featuredId: doc._id, ...enriched, services, serviceId: doc.serviceId ? doc.serviceId.toString() : null };
             })
             .filter(Boolean);
 
-        const recommended = recommendedDocs
-            .map(doc => {
-                const enriched = srMap.get(doc.serviceRequestId.toString());
-                return enriched ? { featuredId: doc._id, ...enriched } : null;
-            })
-            .filter(Boolean);
+        const popular = buildFeaturedList(popularDocs);
+        const recommended = buildFeaturedList(recommendedDocs);
 
        
         res.status(200).json(
@@ -405,10 +422,20 @@ export const togglePopularRequest = async (req, res) => {
             throw new ApiError(404, 'Approved service request not found');
         }
 
+        // Which sub-service inside the bundle this toggle targets. When the
+        // caller doesn't specify one (e.g. the UK dashboard, which shows one
+        // row per request), default to the first real service in the
+        // bundle — matches how a single-service request already behaved.
+        // Custom UK services have no serviceId array at all, so they stay null.
+        let resolvedServiceId = req.body?.serviceId || null;
+        if (!resolvedServiceId && !serviceReq.isCustomService && serviceReq.serviceId?.length) {
+            resolvedServiceId = serviceReq.serviceId[0].toString();
+        }
+
         const reqRegion = serviceReq.categoryId?.region || serviceReq.region || 'BD';
         const countQuery = reqRegion === 'UK' ? { region: 'UK' } : { $or: [{ region: 'BD' }, { region: { $exists: false } }] };
 
-        const existing = await PopularService.findOne({ serviceRequestId: id });
+        const existing = await PopularService.findOne({ serviceRequestId: id, serviceId: resolvedServiceId });
         let isAdded = false;
 
         if (existing) {
@@ -432,12 +459,12 @@ export const togglePopularRequest = async (req, res) => {
             if (count >= 10) {
                 throw new ApiError(400, `Maximum limit of 10 popular services reached for ${reqRegion}`);
             }
-            await PopularService.create({ serviceRequestId: id, region: reqRegion });
+            await PopularService.create({ serviceRequestId: id, serviceId: resolvedServiceId, region: reqRegion });
             isAdded = true;
         }
 
         res.status(200).json(
-            new ApiResponse(200, { serviceRequestId: id, isAdded }, `Service request ${isAdded ? 'added to' : 'removed from'} popular services`)
+            new ApiResponse(200, { serviceRequestId: id, serviceId: resolvedServiceId, isAdded }, `Service request ${isAdded ? 'added to' : 'removed from'} popular services`)
         );
     } catch (error) {
         if (error instanceof ApiError) {
@@ -459,10 +486,16 @@ export const toggleRecommendedRequest = async (req, res) => {
             throw new ApiError(404, 'Approved service request not found');
         }
 
+        // See togglePopularRequest — same per-sub-service resolution.
+        let resolvedServiceId = req.body?.serviceId || null;
+        if (!resolvedServiceId && !serviceReq.isCustomService && serviceReq.serviceId?.length) {
+            resolvedServiceId = serviceReq.serviceId[0].toString();
+        }
+
         const reqRegion = serviceReq.categoryId?.region || serviceReq.region || 'BD';
         const countQuery = reqRegion === 'UK' ? { region: 'UK' } : { $or: [{ region: 'BD' }, { region: { $exists: false } }] };
 
-        const existing = await RecommendedService.findOne({ serviceRequestId: id });
+        const existing = await RecommendedService.findOne({ serviceRequestId: id, serviceId: resolvedServiceId });
         let isAdded = false;
 
         if (existing) {
@@ -486,12 +519,12 @@ export const toggleRecommendedRequest = async (req, res) => {
             if (count >= 10) {
                 throw new ApiError(400, `Maximum limit of 10 recommended services reached for ${reqRegion}`);
             }
-            await RecommendedService.create({ serviceRequestId: id, region: reqRegion });
+            await RecommendedService.create({ serviceRequestId: id, serviceId: resolvedServiceId, region: reqRegion });
             isAdded = true;
         }
 
         res.status(200).json(
-            new ApiResponse(200, { serviceRequestId: id, isAdded }, `Service request ${isAdded ? 'added to' : 'removed from'} recommended services`)
+            new ApiResponse(200, { serviceRequestId: id, serviceId: resolvedServiceId, isAdded }, `Service request ${isAdded ? 'added to' : 'removed from'} recommended services`)
         );
     } catch (error) {
         if (error instanceof ApiError) {
